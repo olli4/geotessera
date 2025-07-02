@@ -55,10 +55,24 @@ def visualize_command(args):
     if args.topojson:
         print(f"Analyzing TopoJSON file: {args.topojson}")
         normalize = not args.no_normalize
-        output_path = tessera.visualize_topojson_with_tiles(
-            args.topojson, args.output, bands=args.bands, normalize=normalize
-        )
-        print(f"Created TopoJSON tile visualization: {output_path}")
+        
+        # Update output filename extension based on format
+        if args.format == 'tiff' and not args.output.endswith('.tiff'):
+            output_path = args.output.rsplit('.', 1)[0] + '.tiff'
+        else:
+            output_path = args.output
+        
+        # Choose visualization method based on format
+        if args.format == 'tiff':
+            output_path = tessera.visualize_topojson_as_tiff(
+                args.topojson, output_path, bands=args.bands, normalize=normalize
+            )
+            print(f"Created high-resolution GeoTIFF: {output_path}")
+        else:
+            output_path = tessera.visualize_topojson_with_tiles(
+                args.topojson, output_path, bands=args.bands, normalize=normalize
+            )
+            print(f"Created TopoJSON tile visualization: {output_path}")
         
         # Also print the tiles that were found
         tiles = tessera.get_tiles_for_topojson(args.topojson)
@@ -153,6 +167,7 @@ Examples:
     viz_parser.add_argument("--bands", type=int, nargs=3, default=[0, 1, 2], help="Three band indices to visualize as RGB")
     viz_parser.add_argument("--no-normalize", action="store_true", help="Skip normalization of band values")
     viz_parser.add_argument("--topojson", type=str, help="TopoJSON file to overlay tiles for")
+    viz_parser.add_argument("--format", type=str, choices=['png', 'tiff'], default='png', help="Output format (default: png). TIFF format produces clean high-res output without legends")
     viz_parser.set_defaults(func=visualize_command)
     
     args = parser.parse_args()

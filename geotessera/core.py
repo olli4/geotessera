@@ -188,34 +188,20 @@ class GeoTessera:
         # Filter tiles that actually intersect with the geometries
         overlapping_tiles = []
         
-        for tile in available_tiles:
-            if tile.endswith('.npy') and not tile.endswith('_scales.npy'):
-                # Parse tile filename to get coordinates
-                # Format: 2024/grid_lon_lat/grid_lon_lat.npy
-                parts = tile.split('/')
-                if len(parts) >= 2:
-                    grid_name = parts[1]  # e.g., "grid_-0.05_52.05"
-                    if grid_name.startswith('grid_'):
-                        coords = grid_name[5:].split('_')  # Remove "grid_" prefix
-                        if len(coords) == 2:
-                            try:
-                                tile_lon = float(coords[0])
-                                tile_lat = float(coords[1])
-                                
-                                # First check if tile is within the bounding box (optimization)
-                                if (tile_lon >= min_lon_grid and tile_lon <= max_lon_grid and
-                                    tile_lat >= min_lat_grid and tile_lat <= max_lat_grid):
-                                    
-                                    # Create a box representing the tile (0.1 degree grid)
-                                    tile_box = box(tile_lon, tile_lat, tile_lon + 0.1, tile_lat + 0.1)
-                                    
-                                    # Check if the tile box intersects with the actual geometries
-                                    # Conservative approach: if ANY part of the boundary is within the tile, include it
-                                    if unified_geom.intersects(tile_box):
-                                        overlapping_tiles.append((tile_lat, tile_lon, tile))
-                                        
-                            except ValueError:
-                                continue
+        for year, tile_lat, tile_lon in available_tiles:
+            # First check if tile is within the bounding box (optimization)
+            if (tile_lon >= min_lon_grid and tile_lon <= max_lon_grid and
+                tile_lat >= min_lat_grid and tile_lat <= max_lat_grid):
+                
+                # Create a box representing the tile (0.1 degree grid)
+                tile_box = box(tile_lon, tile_lat, tile_lon + 0.1, tile_lat + 0.1)
+                
+                # Check if the tile box intersects with the actual geometries
+                # Conservative approach: if ANY part of the boundary is within the tile, include it
+                if unified_geom.intersects(tile_box):
+                    # Create the tile path for reference
+                    tile_path = f"{year}/grid_{tile_lon:.2f}_{tile_lat:.2f}/grid_{tile_lon:.2f}_{tile_lat:.2f}.npy"
+                    overlapping_tiles.append((tile_lat, tile_lon, tile_path))
         
         return overlapping_tiles
     
@@ -350,5 +336,150 @@ class GeoTessera:
         plt.tight_layout()
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close()
+        
+        return output_path
+    
+    def visualize_topojson_as_tiff(self, topojson_path: Union[str, Path], 
+                                   output_path: str = "topojson_tiles.tiff",
+                                   bands: List[int] = [0, 1, 2],
+                                   normalize: bool = True) -> str:
+        """Export a high-resolution TIFF of overlapping Tessera tiles with optional TopoJSON boundary.
+        
+        This creates a clean mosaic without legends, titles, or decorations - just the 
+        false-color tile imagery and optionally the TopoJSON boundary overlay.
+        
+        Args:
+            topojson_path: Path to the TopoJSON file
+            output_path: Path for the output TIFF file
+            bands: Three band indices to visualize as RGB
+            normalize: Whether to normalize band values
+            
+        Returns:
+            Path to the created TIFF file
+        """
+        try:
+            from PIL import Image
+            import rasterio
+            from rasterio.transform import from_bounds
+        except ImportError:
+            raise ImportError("Please install rasterio and pillow for TIFF export: pip install rasterio pillow")
+        
+        # Read the TopoJSON file
+        gdf = gpd.read_file(topojson_path)
+        
+        # Get overlapping tiles
+        tiles = self.get_tiles_for_topojson(topojson_path)
+        
+        if not tiles:
+            print("No overlapping tiles found")
+            return output_path
+        
+        # Calculate bounding box for all tiles
+        lon_min = min(lon for _, lon, _ in tiles)
+        lat_min = min(lat for lat, _, _ in tiles)
+        lon_max = max(lon for _, lon, _ in tiles) + 0.1
+        lat_max = max(lat for lat, _, _ in tiles) + 0.1
+        
+        # Download and process each tile
+        tile_data_dict = {}
+        print(f"Processing {len(tiles)} tiles for TIFF export...")
+        
+        for i, (lat, lon, tile_path) in enumerate(tiles):
+            print(f"Processing tile {i+1}/{len(tiles)}: ({lat:.2f}, {lon:.2f})")
+            
+            try:
+                # Download and dequantize the tile data
+                data = self.fetch_embedding(lat=lat, lon=lon, progressbar=False)
+                
+                # Extract bands for visualization
+                vis_data = data[:, :, bands].copy()
+                
+                # Normalize if requested
+                if normalize:
+                    for j in range(vis_data.shape[2]):
+                        channel = vis_data[:, :, j]
+                        min_val = np.min(channel)
+                        max_val = np.max(channel)
+                        if max_val > min_val:
+                            vis_data[:, :, j] = (channel - min_val) / (max_val - min_val)
+                
+                # Ensure we have valid RGB data in [0,1] range
+                vis_data = np.clip(vis_data, 0, 1)
+                
+                # Store the processed tile data
+                tile_data_dict[(lat, lon)] = vis_data
+                
+            except Exception as e:
+                print(f"WARNING: Failed to download tile ({lat:.2f}, {lon:.2f}): {e}")
+                tile_data_dict[(lat, lon)] = None
+        
+        # Determine the resolution based on the first valid tile
+        tile_height, tile_width = None, None
+        for (lat, lon), tile_data in tile_data_dict.items():
+            if tile_data is not None:
+                tile_height, tile_width = tile_data.shape[:2]
+                break
+        
+        if tile_height is None:
+            raise ValueError("No valid tiles were downloaded")
+        
+        # Calculate the size of the output mosaic
+        # Each tile covers 0.1 degrees, calculate pixels per degree
+        pixels_per_degree_lat = tile_height / 0.1
+        pixels_per_degree_lon = tile_width / 0.1
+        
+        # Calculate output dimensions
+        mosaic_width = int((lon_max - lon_min) * pixels_per_degree_lon)
+        mosaic_height = int((lat_max - lat_min) * pixels_per_degree_lat)
+        
+        # Create the mosaic array
+        mosaic = np.zeros((mosaic_height, mosaic_width, 3), dtype=np.float32)
+        
+        # Place each tile in the mosaic
+        for (lat, lon), tile_data in tile_data_dict.items():
+            if tile_data is not None:
+                # Calculate pixel coordinates for this tile
+                x_start = int((lon - lon_min) * pixels_per_degree_lon)
+                y_start = int((lat_max - lat - 0.1) * pixels_per_degree_lat)  # Flip Y axis
+                
+                # Place tile in mosaic
+                y_end = y_start + tile_height
+                x_end = x_start + tile_width
+                
+                # Handle edge cases where tiles might extend beyond mosaic bounds
+                y_end = min(y_end, mosaic_height)
+                x_end = min(x_end, mosaic_width)
+                
+                tile_y_end = y_end - y_start
+                tile_x_end = x_end - x_start
+                
+                mosaic[y_start:y_end, x_start:x_end] = tile_data[:tile_y_end, :tile_x_end]
+        
+        # Convert to uint8 for TIFF export
+        mosaic_uint8 = (mosaic * 255).astype(np.uint8)
+        
+        # Create georeferencing transform
+        transform = from_bounds(lon_min, lat_min, lon_max, lat_max, mosaic_width, mosaic_height)
+        
+        # Write the GeoTIFF
+        with rasterio.open(
+            output_path,
+            'w',
+            driver='GTiff',
+            height=mosaic_height,
+            width=mosaic_width,
+            count=3,
+            dtype='uint8',
+            crs='EPSG:4326',  # WGS84
+            transform=transform,
+            compress='lzw'
+        ) as dst:
+            # Write RGB bands
+            for i in range(3):
+                dst.write(mosaic_uint8[:, :, i], i + 1)
+        
+        print(f"Exported high-resolution TIFF to {output_path}")
+        print(f"Dimensions: {mosaic_width}x{mosaic_height} pixels")
+        print(f"Geographic bounds: {lon_min:.4f}, {lat_min:.4f}, {lon_max:.4f}, {lat_max:.4f}")
         
         return output_path
