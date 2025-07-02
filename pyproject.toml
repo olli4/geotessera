@@ -7,13 +7,12 @@ requires-python = ">=3.11"
 dependencies = [
     "pooch",
     "tqdm>=4.67.1",
-]
-
-[project.optional-dependencies]
-visualize = [
     "numpy",
     "matplotlib",
 ]
+
+[project.optional-dependencies]
+visualize = []
 
 [project.scripts]
 geotessera = "geotessera.cli:main"
