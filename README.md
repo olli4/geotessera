@@ -50,12 +50,8 @@ from geotessera import GeoTessera
 # Initialize client
 tessera = GeoTessera(version="v1")
 
-# Download embedding for specific coordinates
-embedding_path = tessera.get_embedding_path(lat=52.05, lon=0.15, year=2024)
-
-# Load the embedding data
-import numpy as np
-embedding = np.load(embedding_path)
+# Download and get dequantized embedding for specific coordinates
+embedding = tessera.get_embedding(lat=52.05, lon=0.15, year=2024)
 print(f"Embedding shape: {embedding.shape}")  # (height, width, 128)
 ```
 

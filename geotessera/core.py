@@ -47,8 +47,11 @@ class GeoTessera:
             self._pooch.load_registry(registry_file)
     
     def fetch_embedding(self, lat: float, lon: float, year: int = 2024, 
-                       progressbar: bool = True) -> str:
-        """Fetch embedding file for a specific location.
+                       progressbar: bool = True) -> np.ndarray:
+        """Fetch and dequantize embedding for a specific location.
+        
+        This method fetches both the quantized embedding and its scales,
+        then performs dequantization by multiplying them together.
         
         Args:
             lat: Latitude coordinate
@@ -57,16 +60,30 @@ class GeoTessera:
             progressbar: Show download progress bar
             
         Returns:
-            Path to the downloaded file
+            Dequantized embedding array with shape (height, width, channels)
         """
         # Format coordinates to match file naming convention
         grid_name = f"grid_{lon:.2f}_{lat:.2f}"
-        file_path = f"{year}/{grid_name}/{grid_name}.npy"
         
-        return self._pooch.fetch(file_path, progressbar=progressbar)
+        # Fetch both the main embedding and scales files
+        embedding_path = f"{year}/{grid_name}/{grid_name}.npy"
+        scales_path = f"{year}/{grid_name}/{grid_name}_scales.npy"
+        
+        embedding_file = self._pooch.fetch(embedding_path, progressbar=progressbar)
+        scales_file = self._pooch.fetch(scales_path, progressbar=progressbar)
+        
+        # Load both files
+        embedding = np.load(embedding_file)  # shape: (height, width, channels)
+        scales = np.load(scales_file)        # shape: (height, width)
+        
+        # Dequantize by multiplying embedding by scales across all channels
+        # Broadcasting scales from (height, width) to (height, width, channels)
+        dequantized = embedding.astype(np.float32) * scales[:, :, np.newaxis]
+        
+        return dequantized
     
-    def get_embedding_path(self, lat: float, lon: float, year: int = 2024) -> str:
-        """Get the local file path for an embedding after downloading.
+    def get_embedding(self, lat: float, lon: float, year: int = 2024) -> np.ndarray:
+        """Get the dequantized embedding for a specific location.
         
         Args:
             lat: Latitude coordinate
@@ -74,7 +91,7 @@ class GeoTessera:
             year: Year of the embedding (default: 2024)
             
         Returns:
-            Path to the embedding file
+            Dequantized embedding array with shape (height, width, channels)
         """
         return self.fetch_embedding(lat, lon, year, progressbar=True)
     
@@ -95,22 +112,28 @@ class GeoTessera:
         return dict(self._pooch.registry)
     
     def get_tiles_for_topojson(self, topojson_path: Union[str, Path]) -> List[Tuple[float, float, str]]:
-        """Get all Tessera tiles that overlap with a TopoJSON file.
+        """Get all Tessera tiles that intersect with a TopoJSON file geometries.
         
         Args:
             topojson_path: Path to the TopoJSON file
             
         Returns:
-            List of tuples containing (lat, lon, tile_path) for overlapping tiles
+            List of tuples containing (lat, lon, tile_path) for intersecting tiles
         """
+        from shapely.geometry import box
+        
         # Read the TopoJSON file
         gdf = gpd.read_file(topojson_path)
         
-        # Get the bounds of all geometries
+        # Create a unified geometry (union of all features)
+        # This handles the convex hull of all shapes properly
+        unified_geom = gdf.unary_union
+        
+        # Get the bounds to limit our search area
         bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
         min_lon, min_lat, max_lon, max_lat = bounds
         
-        # Round to 0.1 degree grid (Tessera grid resolution)
+        # Round to 0.1 degree grid (Tessera grid resolution) to get search bounds
         min_lon_grid = np.floor(min_lon * 10) / 10
         max_lon_grid = np.ceil(max_lon * 10) / 10
         min_lat_grid = np.floor(min_lat * 10) / 10
@@ -119,15 +142,16 @@ class GeoTessera:
         # Get all available tiles
         available_tiles = self.list_available_embeddings()
         
-        # Filter tiles that overlap with the TopoJSON bounds
+        # Filter tiles that actually intersect with the geometries
         overlapping_tiles = []
+        
         for tile in available_tiles:
             if tile.endswith('.npy') and not tile.endswith('_scales.npy'):
                 # Parse tile filename to get coordinates
                 # Format: 2024/grid_lon_lat/grid_lon_lat.npy
                 parts = tile.split('/')
                 if len(parts) >= 2:
-                    grid_name = parts[1]  # e.g., "grid_-0.05_10.05"
+                    grid_name = parts[1]  # e.g., "grid_-0.05_52.05"
                     if grid_name.startswith('grid_'):
                         coords = grid_name[5:].split('_')  # Remove "grid_" prefix
                         if len(coords) == 2:
@@ -135,10 +159,18 @@ class GeoTessera:
                                 tile_lon = float(coords[0])
                                 tile_lat = float(coords[1])
                                 
-                                # Check if tile overlaps with bounds
+                                # First check if tile is within the bounding box (optimization)
                                 if (tile_lon >= min_lon_grid and tile_lon <= max_lon_grid and
                                     tile_lat >= min_lat_grid and tile_lat <= max_lat_grid):
-                                    overlapping_tiles.append((tile_lat, tile_lon, tile))
+                                    
+                                    # Create a box representing the tile (0.1 degree grid)
+                                    tile_box = box(tile_lon, tile_lat, tile_lon + 0.1, tile_lat + 0.1)
+                                    
+                                    # Check if the tile box intersects with the actual geometries
+                                    # Conservative approach: if ANY part of the boundary is within the tile, include it
+                                    if unified_geom.intersects(tile_box):
+                                        overlapping_tiles.append((tile_lat, tile_lon, tile))
+                                        
                             except ValueError:
                                 continue
         
@@ -189,13 +221,11 @@ class GeoTessera:
             print(f"Processing tile {i+1}/{len(tiles)}: ({lat:.2f}, {lon:.2f})")
             
             try:
-                # Download the tile data using named arguments to avoid confusion
-                embedding_path = self.fetch_embedding(lat=lat, lon=lon, progressbar=False)
-                data = np.load(embedding_path, mmap_mode='r')
+                # Download and dequantize the tile data using named arguments to avoid confusion
+                data = self.fetch_embedding(lat=lat, lon=lon, progressbar=False)
                 
-                # Extract bands for visualization (same logic as regular visualize)
+                # Extract bands for visualization (data is already float32 after dequantization)
                 vis_data = data[:, :, bands].copy()
-                vis_data = vis_data.astype(np.float32)
                 
                 # Normalize if requested
                 if normalize:
@@ -213,7 +243,7 @@ class GeoTessera:
                 tile_data_dict[(lat, lon)] = vis_data
                 
             except Exception as e:
-                print(f"Warning: Could not process tile ({lat:.2f}, {lon:.2f}): {e}")
+                print(f"ERROR: Failed to download tile ({lat:.2f}, {lon:.2f}): {e}")
                 tile_data_dict[(lat, lon)] = None
         
         # Create the composite image
@@ -241,6 +271,15 @@ class GeoTessera:
                 rect = Rectangle((lon, lat), 0.1, 0.1, 
                                linewidth=0.5, edgecolor='white', facecolor='none', alpha=0.9)
                 ax.add_patch(rect)
+            else:
+                # For failed tiles, show a light gray placeholder with red border
+                rect = Rectangle((lon, lat), 0.1, 0.1, 
+                               linewidth=2, edgecolor='red', facecolor='lightgray', alpha=0.3)
+                ax.add_patch(rect)
+                
+                # Add "N/A" text to indicate missing data
+                ax.text(lon + 0.05, lat + 0.05, 'N/A', 
+                       ha='center', va='center', fontsize=8, color='red', weight='bold')
         
         # Plot the geometries from TopoJSON on top
         gdf.plot(ax=ax, alpha=0.3, edgecolor='black', facecolor='none', linewidth=2)

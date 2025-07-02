@@ -13,9 +13,9 @@ def download_command(args):
     """Handle the download command."""
     tessera = GeoTessera(version=args.version)
     
-    print(f"Downloading embedding for coordinates ({args.lat}, {args.lon})...")
-    path = tessera.get_embedding_path(args.lat, args.lon, args.year)
-    print(f"Downloaded to: {path}")
+    print(f"Downloading and processing embedding for coordinates ({args.lat}, {args.lon})...")
+    embedding = tessera.get_embedding(args.lat, args.lon, args.year)
+    print(f"Processed embedding shape: {embedding.shape}, dtype: {embedding.dtype}")
 
 
 def list_command(args):
@@ -73,17 +73,13 @@ def visualize_command(args):
     
     # Regular embedding visualization
     print(f"Fetching embedding for ({args.lat}, {args.lon})...")
-    embedding_path = tessera.get_embedding_path(args.lat, args.lon, args.year)
-    
-    print(f"Loading embedding from {embedding_path}...")
-    data = np.load(embedding_path, mmap_mode='r')
+    data = tessera.get_embedding(args.lat, args.lon, args.year)
     
     print(f"Embedding shape: {data.shape}")
     print(f"Data type: {data.dtype}")
     
-    # Extract bands for visualization
+    # Extract bands for visualization (data is already float32 after dequantization)
     vis_data = data[:, :, list(args.bands)].copy()
-    vis_data = vis_data.astype(np.float32)
     
     # Normalize if requested
     if not args.no_normalize:
