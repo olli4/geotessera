@@ -22,17 +22,18 @@ def list_command(args):
     """Handle the list command."""
     tessera = GeoTessera(version=args.version)
     
-    embeddings = tessera.list_available_embeddings()
+    embeddings = list(tessera.list_available_embeddings())
     print(f"Available embeddings ({len(embeddings)} total):")
     
     if args.limit:
         embeddings = embeddings[:args.limit]
     
-    for embedding in embeddings:
-        print(f"  - {embedding}")
+    for year, lat, lon in embeddings:
+        print(f"  - Year {year}: ({lat:.2f}, {lon:.2f})")
     
-    if args.limit and args.limit < len(tessera.list_available_embeddings()):
-        print(f"  ... and {len(tessera.list_available_embeddings()) - args.limit} more")
+    total_count = tessera.count_available_embeddings()
+    if args.limit and args.limit < total_count:
+        print(f"  ... and {total_count - args.limit} more")
 
 
 def info_command(args):
@@ -43,7 +44,7 @@ def info_command(args):
     print(f"Version: {tessera.version}")
     print(f"Base URL: {tessera._pooch.base_url}")
     print(f"Cache directory: {tessera._pooch.path}")
-    print(f"Total embeddings: {len(tessera.list_available_embeddings())}")
+    print(f"Total embeddings: {tessera.count_available_embeddings()}")
 
 
 def visualize_command(args):

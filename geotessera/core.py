@@ -1,7 +1,7 @@
 """Core GeoTessera functionality for accessing geospatial embeddings."""
 import os
 from pathlib import Path
-from typing import Optional, Union, List, Dict, Tuple
+from typing import Optional, Union, List, Dict, Tuple, Iterator
 import importlib.resources
 import pooch
 import geopandas as gpd
@@ -29,6 +29,7 @@ class GeoTessera:
         self.version = version
         self._cache_dir = cache_dir
         self._pooch = None
+        self._available_embeddings = []
         self._initialize_pooch()
     
     def _initialize_pooch(self):
@@ -45,6 +46,9 @@ class GeoTessera:
         # Load the registry file
         with importlib.resources.open_text("geotessera", "registry_2024.txt") as registry_file:
             self._pooch.load_registry(registry_file)
+        
+        # Parse and cache available embeddings
+        self._parse_available_embeddings()
     
     def fetch_embedding(self, lat: float, lon: float, year: int = 2024, 
                        progressbar: bool = True) -> np.ndarray:
@@ -95,13 +99,52 @@ class GeoTessera:
         """
         return self.fetch_embedding(lat, lon, year, progressbar=True)
     
-    def list_available_embeddings(self) -> List[str]:
-        """List all available embeddings in the registry.
+    def _parse_available_embeddings(self):
+        """Parse registry to extract available embeddings as (year, lat, lon) tuples."""
+        embeddings = []
+        
+        for file_path in self._pooch.registry.keys():
+            # Only process .npy files that are not scale files
+            if file_path.endswith('.npy') and not file_path.endswith('_scales.npy'):
+                # Parse file path: e.g., "2024/grid_0.15_52.05/grid_0.15_52.05.npy"
+                parts = file_path.split('/')
+                if len(parts) >= 3:
+                    year_str = parts[0]
+                    grid_name = parts[1]  # e.g., "grid_0.15_52.05"
+                    
+                    try:
+                        year = int(year_str)
+                        
+                        # Extract coordinates from grid name
+                        if grid_name.startswith('grid_'):
+                            coords = grid_name[5:].split('_')  # Remove "grid_" prefix
+                            if len(coords) == 2:
+                                lon = float(coords[0])
+                                lat = float(coords[1])
+                                embeddings.append((year, lat, lon))
+                                
+                    except (ValueError, IndexError):
+                        continue
+        
+        # Sort by year, then lat, then lon for consistent ordering
+        embeddings.sort(key=lambda x: (x[0], x[1], x[2]))
+        self._available_embeddings = embeddings
+    
+    def list_available_embeddings(self) -> Iterator[Tuple[int, float, float]]:
+        """List all available embeddings as (year, lat, lon) tuples.
         
         Returns:
-            List of available embedding files
+            Iterator of tuples containing (year, latitude, longitude) for each available embedding
         """
-        return list(self._pooch.registry.keys())
+        return iter(self._available_embeddings)
+    
+    def count_available_embeddings(self) -> int:
+        """Get the total number of available embeddings.
+        
+        Returns:
+            Total count of available embeddings
+        """
+        return len(self._available_embeddings)
     
     def get_registry_info(self) -> Dict[str, str]:
         """Get information about all files in the registry.
