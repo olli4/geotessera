@@ -1,5 +1,5 @@
 [project]
-name = "tessera"
+name = "geotessera"
 version = "0.1.0"
 description = "Python library interface to the Tessera geofoundation model embeddings"
 readme = "README.md"
@@ -16,11 +16,11 @@ visualize = [
 ]
 
 [project.scripts]
-geotessera = "tessera.cli:main"
+geotessera = "geotessera.cli:main"
 
 [build-system]
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.package-data]
-tessera = ["registry_2024.txt"]
+geotessera = ["registry_2024.txt"]

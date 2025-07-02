@@ -1,4 +1,4 @@
-"""Core Tessera functionality for accessing geospatial embeddings."""
+"""Core GeoTessera functionality for accessing geospatial embeddings."""
 import os
 from pathlib import Path
 from typing import Optional, Union, List, Dict
@@ -6,19 +6,19 @@ import importlib.resources
 import pooch
 
 
-class Tessera:
-    """Main class for accessing Tessera geospatial embeddings.
+class GeoTessera:
+    """Main class for accessing GeoTessera geospatial embeddings.
     
     This class provides methods to fetch and load geospatial embeddings
-    from the Tessera dataset.
+    from the GeoTessera dataset.
     
     Attributes:
-        version: Version of the Tessera dataset to use (default: "v1")
+        version: Version of the GeoTessera dataset to use (default: "v1")
         cache_dir: Directory to cache downloaded files
     """
     
     def __init__(self, version: str = "v1", cache_dir: Optional[Union[str, Path]] = None):
-        """Initialize Tessera client.
+        """Initialize GeoTessera client.
         
         Args:
             version: Version of the dataset to use
@@ -31,7 +31,7 @@ class Tessera:
     
     def _initialize_pooch(self):
         """Initialize the Pooch downloader with registry."""
-        cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("tessera")
+        cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
         
         self._pooch = pooch.create(
             path=cache_path,
@@ -41,7 +41,7 @@ class Tessera:
         )
         
         # Load the registry file
-        with importlib.resources.open_text("tessera", "registry_2024.txt") as registry_file:
+        with importlib.resources.open_text("geotessera", "registry_2024.txt") as registry_file:
             self._pooch.load_registry(registry_file)
     
     def fetch_embedding(self, lat: float, lon: float, year: int = 2024, 

@@ -5,13 +5,13 @@ import pooch
 def main():
   version="v1"
   POOCH = pooch.create(
-    path=pooch.os_cache("tessera"),
+    path=pooch.os_cache("geotessera"),
     base_url="https://dl-1.tessera.wiki/{version}/global_0.1_degree_representation/",
     version=version,
     registry=None,
   )
 
-  with importlib.resources.open_text("tessera", "registry_2024.txt") as registry_file:
+  with importlib.resources.open_text("geotessera", "registry_2024.txt") as registry_file:
     POOCH.load_registry(registry_file)
 
   fname=POOCH.fetch(
