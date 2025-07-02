@@ -50,6 +50,28 @@ def visualize_command(args):
     """Handle the visualize command."""
     tessera = GeoTessera(version=args.version)
     
+    # If TopoJSON file is provided, visualize tiles for that region
+    if args.topojson:
+        print(f"Analyzing TopoJSON file: {args.topojson}")
+        normalize = not args.no_normalize
+        output_path = tessera.visualize_topojson_with_tiles(
+            args.topojson, args.output, bands=args.bands, normalize=normalize
+        )
+        print(f"Created TopoJSON tile visualization: {output_path}")
+        
+        # Also print the tiles that were found
+        tiles = tessera.get_tiles_for_topojson(args.topojson)
+        print(f"\nFound {len(tiles)} overlapping tiles:")
+        for lat, lon, tile_path in tiles:
+            print(f"  - Tile at ({lat:.2f}, {lon:.2f}): {tile_path}")
+        return
+    
+    # Check that lat/lon are provided for regular visualization
+    if args.lat is None or args.lon is None:
+        print("Error: --lat and --lon are required unless --topojson is used")
+        return
+    
+    # Regular embedding visualization
     print(f"Fetching embedding for ({args.lat}, {args.lon})...")
     embedding_path = tessera.get_embedding_path(args.lat, args.lon, args.year)
     
@@ -127,12 +149,13 @@ Examples:
     
     # Visualize command
     viz_parser = subparsers.add_parser("visualize", help="Visualize GeoTessera embeddings")
-    viz_parser.add_argument("--lat", type=float, required=True, help="Latitude coordinate")
-    viz_parser.add_argument("--lon", type=float, required=True, help="Longitude coordinate")
+    viz_parser.add_argument("--lat", type=float, help="Latitude coordinate (required unless --topojson is used)")
+    viz_parser.add_argument("--lon", type=float, help="Longitude coordinate (required unless --topojson is used)")
     viz_parser.add_argument("--year", type=int, default=2024, help="Year of embedding (default: 2024)")
     viz_parser.add_argument("--output", type=str, default="geotessera_vis.png", help="Output file path")
     viz_parser.add_argument("--bands", type=int, nargs=3, default=[0, 1, 2], help="Three band indices to visualize as RGB")
     viz_parser.add_argument("--no-normalize", action="store_true", help="Skip normalization of band values")
+    viz_parser.add_argument("--topojson", type=str, help="TopoJSON file to overlay tiles for")
     viz_parser.set_defaults(func=visualize_command)
     
     args = parser.parse_args()
