@@ -28,17 +28,19 @@ Use `uvx` to run the CLI without installation:
 
 ```bash
 # Download embedding for Cambridge, UK
-uvx geotessera download --lat 52.05 --lon 0.15
+uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera download --lat 52.05 --lon 0.15
 
 # List available embeddings
-uvx geotessera list --limit 10
+uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera list --limit 10
 
 # Show dataset information
-uvx geotessera info
+uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera info
 
 # Visualize embedding as RGB composite
-uvx geotessera visualize --lat 52.05 --lon 0.15 --output cambridge.png
+uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera visualize --lat 52.05 --lon 0.15 --output cambridge.png
 ```
+
+If you have the repository checked out, then use `--from .` instead.
 
 ### Python API
 
