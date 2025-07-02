@@ -1,3 +1,4 @@
-from .main import main
+from .core import Tessera
 
-__all__ = ["main"]
+__version__ = "0.1.0"
+__all__ = ["Tessera"]

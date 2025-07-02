@@ -3,12 +3,24 @@ name = "tessera"
 version = "0.1.0"
 description = "Python library interface to the Tessera geofoundation model embeddings"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
-    "numpy",
     "pooch",
     "tqdm>=4.67.1",
 ]
+
+[project.optional-dependencies]
+visualize = [
+    "numpy",
+    "matplotlib",
+]
+
+[project.scripts]
+geotessera = "tessera.cli:main"
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools.package-data]
 tessera = ["registry_2024.txt"]
