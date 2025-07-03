@@ -8,7 +8,7 @@ GeoTessera provides access to geospatial embeddings from the [Tessera foundation
 
 ## Data Coverage
 
-![My Real-time Map](map.png)?timestamp=1751556810
+![My Real-time Map](map.png)
 
 ## Features
 
