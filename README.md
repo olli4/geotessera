@@ -6,6 +6,10 @@ Python library interface to the Tessera geofoundation model embeddings.
 
 GeoTessera provides access to geospatial embeddings from the [Tessera foundation model](https://github.com/ucam-eo/tessera), which processes Sentinel-1 and Sentinel-2 satellite imagery to generate 128-channel representation maps at 10m resolution. The embeddings compress a full year of temporal-spectral features into useful representations for geospatial analysis tasks.
 
+## Data Coverage
+
+![My Real-time Map](map.png)
+
 ## Features
 
 - Download geospatial embeddings for specific coordinates
