@@ -34,12 +34,13 @@ jobs:
       - name: Generate map
         run: python generate_map.py
 
-      # Step 5: Update README with a cache-busting query
+      # Step 5: Update README with a cache-busting query (Robust version)
       - name: Update README
         run: |
-          # Use sed to find the markdown image link and append a timestamp
+          # This command finds the image link and replaces its query string.
+          # It's more robust and avoids back-reference errors.
           timestamp=$(date +%s)
-          sed -i "s|(!\[My Real-time Map\](map.png))[?a-zA-Z0-9=]*|\1?timestamp=${timestamp}|g" README.md
+          sed -i "s|!\[My Real-time Map\](map.png).*|![My Real-time Map](map.png)?timestamp=${timestamp}|g" README.md
 
       # Step 6: Commit the updated map and README file
       - name: Commit and push if it changed
