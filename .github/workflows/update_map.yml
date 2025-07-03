@@ -1,12 +1,12 @@
 # .github/workflows/update_map.yml
-name: Update Map Every Hour
+name: Update Map Every 12 Hours
 
 on:
   workflow_dispatch: # Allow manual trigger
   schedule:
     # Cron syntax, '0 * * * *' means run at the 0th minute of every hour
     # https://crontab.guru/every-hour
-    - cron: '0 * * * *'
+    - cron: '0 */12 * * *'
 
 jobs:
   build-and-commit:
