@@ -1,17 +1,19 @@
 # .github/workflows/update_map.yml
-name: Update Map Every 12 Hours
+name: Update Map Every Hour
 
 on:
   workflow_dispatch: # Allow manual trigger
   schedule:
-    # Cron syntax, '0 */12 * * *' means run every 12 hours (at 00:00 and 12:00 UTC)
-    - cron: '0 */12 * * *'
+    # Cron syntax, '0 * * * *' means run at the 0th minute of every hour
+    # https://crontab.guru/every-hour
+    - cron: '0 * * * *'
 
 jobs:
   build-and-commit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest # Use the latest Ubuntu virtual machine environment
+
     permissions:
-      contents: write # Grant write permissions
+      contents: write
 
     steps:
       # Step 1: Check out your repository code
@@ -22,7 +24,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.10' # Specify Python version
 
       # Step 3: Install Python dependencies
       - name: Install dependencies
@@ -34,20 +36,13 @@ jobs:
       - name: Generate map
         run: python generate_map.py
 
-      # Step 5: Update README with a cache-busting query (Robust version)
-      - name: Update README
-        run: |
-          # This command finds the image link and replaces its query string.
-          # It's more robust and avoids back-reference errors.
-          timestamp=$(date +%s)
-          sed -i "s|!\[My Real-time Map\](map.png).*|![My Real-time Map](map.png)?timestamp=${timestamp}|g" README.md
-
-      # Step 6: Commit the updated map and README file
+      # Step 5: Commit the updated map file
+      # We use an existing action to simplify the commit operation
       - name: Commit and push if it changed
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: 'CI: Auto-update map and README'
-          file_pattern: 'map.png README.md' 
-          commit_user_name: 'GitHub Actions Bot'
-          commit_user_email: 'actions@github.com'
+          commit_message: 'CI: Auto-update map.png' # Commit message
+          file_pattern: 'map.png' # Monitor changes to map.png file only
+          commit_user_name: 'GitHub Actions Bot' # Committer name
+          commit_user_email: 'actions@github.com' # Committer email
           commit_author: 'GitHub Actions Bot <actions@github.com>'
