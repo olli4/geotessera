@@ -1,0 +1,44 @@
+# .github/workflows/update_map.yml
+name: Update Map Every Hour
+
+on:
+  workflow_dispatch: # Allow manual trigger
+  schedule:
+    # Cron syntax, '0 * * * *' means run at the 0th minute of every hour
+    # https://crontab.guru/every-hour
+    - cron: '0 * * * *'
+
+jobs:
+  build-and-commit:
+    runs-on: ubuntu-latest # Use the latest Ubuntu virtual machine environment
+    steps:
+      # Step 1: Check out your repository code
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Python environment
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10' # Specify Python version
+
+      # Step 3: Install Python dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install matplotlib pandas geopandas
+
+      # Step 4: Run your Python script to generate the map
+      - name: Generate map
+        run: python generate_map.py
+
+      # Step 5: Commit the updated map file
+      # We use an existing action to simplify the commit operation
+      - name: Commit and push if it changed
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'CI: Auto-update map.png' # Commit message
+          file_pattern: 'map.png' # Monitor changes to map.png file only
+          commit_user_name: 'GitHub Actions Bot' # Committer name
+          commit_user_email: 'actions@github.com' # Committer email
+          commit_author: 'GitHub Actions Bot <actions@github.com>'
