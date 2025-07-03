@@ -11,6 +11,11 @@ on:
 jobs:
   build-and-commit:
     runs-on: ubuntu-latest # Use the latest Ubuntu virtual machine environment
+    
+    # 关键改动：添加此部分以授予工作流写入权限
+    permissions:
+      contents: write
+
     steps:
       # Step 1: Check out your repository code
       - name: Check out repo
