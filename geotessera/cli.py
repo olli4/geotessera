@@ -3,9 +3,6 @@ import argparse
 import sys
 from pathlib import Path
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
-import matplotlib.pyplot as plt
 from .core import GeoTessera
 
 
@@ -56,23 +53,17 @@ def visualize_command(args):
         print(f"Analyzing TopoJSON file: {args.topojson}")
         normalize = not args.no_normalize
         
-        # Update output filename extension based on format
-        if args.format == 'tiff' and not args.output.endswith('.tiff'):
+        # Update output filename extension to .tiff if needed
+        if not args.output.endswith('.tiff'):
             output_path = args.output.rsplit('.', 1)[0] + '.tiff'
         else:
             output_path = args.output
         
-        # Choose visualization method based on format
-        if args.format == 'tiff':
-            output_path = tessera.visualize_topojson_as_tiff(
-                args.topojson, output_path, bands=args.bands, normalize=normalize
-            )
-            print(f"Created high-resolution GeoTIFF: {output_path}")
-        else:
-            output_path = tessera.visualize_topojson_with_tiles(
-                args.topojson, output_path, bands=args.bands, normalize=normalize
-            )
-            print(f"Created TopoJSON tile visualization: {output_path}")
+        # Export as GeoTIFF
+        output_path = tessera.visualize_topojson_as_tiff(
+            args.topojson, output_path, bands=args.bands, normalize=normalize
+        )
+        print(f"Created high-resolution GeoTIFF: {output_path}")
         
         # Also print the tiles that were found
         tiles = tessera.get_tiles_for_topojson(args.topojson)
@@ -86,35 +77,22 @@ def visualize_command(args):
         print("Error: --lat and --lon are required unless --topojson is used")
         return
     
-    # Regular embedding visualization
+    # Regular embedding visualization - now exports as TIFF
     print(f"Fetching embedding for ({args.lat}, {args.lon})...")
-    data = tessera.get_embedding(args.lat, args.lon, args.year)
     
-    print(f"Embedding shape: {data.shape}")
-    print(f"Data type: {data.dtype}")
+    # Update output filename extension to .tiff if needed
+    if not args.output.endswith('.tiff'):
+        output_path = args.output.rsplit('.', 1)[0] + '.tiff'
+    else:
+        output_path = args.output
     
-    # Extract bands for visualization (data is already float32 after dequantization)
-    vis_data = data[:, :, list(args.bands)].copy()
-    
-    # Normalize if requested
-    if not args.no_normalize:
-        print("Normalizing bands...")
-        for i in range(vis_data.shape[2]):
-            channel = vis_data[:, :, i]
-            min_val = np.min(channel)
-            max_val = np.max(channel)
-            if max_val > min_val:
-                vis_data[:, :, i] = (channel - min_val) / (max_val - min_val)
-    
-    # Create visualization
-    plt.figure(figsize=(10, 10))
-    plt.imshow(vis_data)
-    plt.title(f'GeoTessera Embedding\nLocation: ({args.lat}, {args.lon})\nBands: {args.bands}')
-    plt.axis('off')
-    
-    # Save
-    plt.savefig(args.output, bbox_inches='tight', dpi=300)
-    print(f"Saved visualization to {args.output}")
+    # Export as GeoTIFF
+    normalize = not args.no_normalize
+    output_path = tessera.export_single_tile_as_tiff(
+        args.lat, args.lon, output_path, 
+        year=args.year, bands=args.bands, normalize=normalize
+    )
+    print(f"Saved GeoTIFF to {output_path}")
 
 
 def main():
@@ -133,8 +111,8 @@ Examples:
   # Get information about the dataset
   geotessera info
   
-  # Visualize an embedding
-  geotessera visualize --lat 52.05 --lon 0.15 --output output.png
+  # Export an embedding as GeoTIFF
+  geotessera visualize --lat 52.05 --lon 0.15 --output output.tiff
         """
     )
     
@@ -159,15 +137,14 @@ Examples:
     info_parser.set_defaults(func=info_command)
     
     # Visualize command
-    viz_parser = subparsers.add_parser("visualize", help="Visualize GeoTessera embeddings")
+    viz_parser = subparsers.add_parser("visualize", help="Export GeoTessera embeddings as high-resolution GeoTIFF")
     viz_parser.add_argument("--lat", type=float, help="Latitude coordinate (required unless --topojson is used)")
     viz_parser.add_argument("--lon", type=float, help="Longitude coordinate (required unless --topojson is used)")
     viz_parser.add_argument("--year", type=int, default=2024, help="Year of embedding (default: 2024)")
-    viz_parser.add_argument("--output", type=str, default="geotessera_vis.png", help="Output file path")
-    viz_parser.add_argument("--bands", type=int, nargs=3, default=[0, 1, 2], help="Three band indices to visualize as RGB")
+    viz_parser.add_argument("--output", type=str, default="geotessera_tiles.tiff", help="Output GeoTIFF file path")
+    viz_parser.add_argument("--bands", type=int, nargs=3, default=[0, 1, 2], help="Three band indices to export as RGB")
     viz_parser.add_argument("--no-normalize", action="store_true", help="Skip normalization of band values")
-    viz_parser.add_argument("--topojson", type=str, help="TopoJSON file to overlay tiles for")
-    viz_parser.add_argument("--format", type=str, choices=['png', 'tiff'], default='png', help="Output format (default: png). TIFF format produces clean high-res output without legends")
+    viz_parser.add_argument("--topojson", type=str, help="TopoJSON file to export overlapping tiles for")
     viz_parser.set_defaults(func=visualize_command)
     
     args = parser.parse_args()

@@ -8,7 +8,6 @@ dependencies = [
     "pooch",
     "tqdm>=4.67.1",
     "numpy",
-    "matplotlib",
     "geopandas",
 ]
 
