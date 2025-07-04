@@ -11,6 +11,7 @@ dependencies = [
     "geopandas",
     "pandas",
     "matplotlib",
+    "rasterio"
 ]
 
 [project.scripts]

@@ -29,13 +29,16 @@ class GeoTessera:
         self.version = version
         self._cache_dir = cache_dir
         self._pooch = None
+        self._landmask_pooch = None
         self._available_embeddings = []
+        self._available_landmasks = []
         self._initialize_pooch()
     
     def _initialize_pooch(self):
         """Initialize the Pooch downloader with registry."""
         cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
         
+        # Initialize main pooch for numpy embeddings
         self._pooch = pooch.create(
             path=cache_path,
             base_url=f"https://dl-1.tessera.wiki/{self.version}/global_0.1_degree_representation/",
@@ -43,12 +46,49 @@ class GeoTessera:
             registry=None,
         )
         
-        # Load the registry file
+        # Load the registry file for numpy embeddings
         with importlib.resources.open_text("geotessera", "registry_2024.txt") as registry_file:
             self._pooch.load_registry(registry_file)
         
+        # Initialize land mask pooch for internal land/water mask files
+        self._landmask_pooch = pooch.create(
+            path=cache_path,
+            base_url=f"https://dl-1.tessera.wiki/{self.version}/global_0.1_degree_tiff_all/",
+            version=self.version,
+            registry=None,
+        )
+        
+        # Load land mask registry dynamically
+        self._load_landmask_registry()
+        
         # Parse and cache available embeddings
         self._parse_available_embeddings()
+        self._parse_available_landmasks()
+    
+    def _load_landmask_registry(self):
+        """Load the land mask registry file dynamically from the server.
+        
+        Note: These are internal land/water mask files used for coordinate
+        alignment during numpy array merging operations, not user-facing TIFFs.
+        """
+        try:
+            cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
+            
+            # Use pooch.retrieve to get the registry file without known hash
+            registry_file = pooch.retrieve(
+                url=f"https://dl-1.tessera.wiki/{self.version}/global_0.1_degree_tiff_all/registry.txt",
+                known_hash=None,
+                fname="landmask_registry.txt",
+                path=cache_path,
+                progressbar=True
+            )
+            
+            # Load the registry into the land mask pooch
+            self._landmask_pooch.load_registry(registry_file)
+            
+        except Exception as e:
+            print(f"Warning: Could not load land mask registry: {e}")
+            # Continue without land mask support if registry loading fails
     
     def fetch_embedding(self, lat: float, lon: float, year: int = 2024, 
                        progressbar: bool = True) -> np.ndarray:
@@ -99,6 +139,48 @@ class GeoTessera:
         """
         return self.fetch_embedding(lat, lon, year, progressbar=True)
     
+    def _fetch_landmask(self, lat: float, lon: float, progressbar: bool = True) -> str:
+        """Fetch internal land mask file for a specific location.
+        
+        Note: This is an internal method for fetching land/water mask files
+        used during numpy array merging operations. These are not user-facing TIFFs.
+        
+        Args:
+            lat: Latitude coordinate
+            lon: Longitude coordinate
+            progressbar: Show download progress bar
+            
+        Returns:
+            Path to the downloaded land mask file
+        """
+        if not self._landmask_pooch:
+            raise RuntimeError("Land mask registry not loaded. Check initialization.")
+        
+        # Format coordinates to match file naming convention
+        landmask_filename = f"grid_{lon:.2f}_{lat:.2f}.tiff"
+        
+        return self._landmask_pooch.fetch(landmask_filename, progressbar=progressbar)
+    
+    def _list_available_landmasks(self) -> Iterator[Tuple[float, float]]:
+        """List all available internal land mask files as (lat, lon) tuples.
+        
+        Note: These are internal land/water mask files, not user-facing TIFFs.
+        
+        Returns:
+            Iterator of tuples containing (latitude, longitude) for each available land mask
+        """
+        return iter(self._available_landmasks)
+    
+    def _count_available_landmasks(self) -> int:
+        """Get the total number of available internal land mask files.
+        
+        Note: These are internal land/water mask files, not user-facing TIFFs.
+        
+        Returns:
+            Total count of available land mask files
+        """
+        return len(self._available_landmasks)
+    
     def _parse_available_embeddings(self):
         """Parse registry to extract available embeddings as (year, lat, lon) tuples."""
         embeddings = []
@@ -129,6 +211,32 @@ class GeoTessera:
         # Sort by year, then lat, then lon for consistent ordering
         embeddings.sort(key=lambda x: (x[0], x[1], x[2]))
         self._available_embeddings = embeddings
+    
+    def _parse_available_landmasks(self):
+        """Parse land mask registry to extract available land mask files as (lat, lon) tuples."""
+        landmasks = []
+        
+        if not self._landmask_pooch or not self._landmask_pooch.registry:
+            return
+        
+        for file_path in self._landmask_pooch.registry.keys():
+            # Parse file path: e.g., "grid_0.15_52.05.tiff"
+            if file_path.endswith('.tiff'):
+                # Extract coordinates from filename
+                filename = Path(file_path).name
+                if filename.startswith('grid_'):
+                    coords = filename[5:-5].split('_')  # Remove "grid_" prefix and ".tiff" suffix
+                    if len(coords) == 2:
+                        try:
+                            lon = float(coords[0])
+                            lat = float(coords[1])
+                            landmasks.append((lat, lon))
+                        except ValueError:
+                            continue
+        
+        # Sort by lat, then lon for consistent ordering
+        landmasks.sort(key=lambda x: (x[0], x[1]))
+        self._available_landmasks = landmasks
     
     def list_available_embeddings(self) -> Iterator[Tuple[int, float, float]]:
         """List all available embeddings as (year, lat, lon) tuples.
@@ -438,3 +546,349 @@ class GeoTessera:
         print(f"Geographic bounds: {lon_min:.4f}, {lat_min:.4f}, {lon_max:.4f}, {lat_max:.4f}")
         
         return output_path
+    
+    def merge_landmasks_for_region(self, bounds: Tuple[float, float, float, float], 
+                              output_path: str, target_crs: str = "EPSG:4326") -> str:
+        """Merge multiple internal land mask tiles for a region without coordinate skew.
+        
+        Note: This method uses internal land/water mask files for coordinate alignment
+        during numpy array merging operations. The output is a binary land/water mask.
+        
+        This method uses proper coordinate reprojection to avoid skew issues
+        when merging tiles from different UTM zones.
+        
+        Args:
+            bounds: Tuple of (min_lon, min_lat, max_lon, max_lat) in WGS84
+            output_path: Path for the output merged TIFF file
+            target_crs: Target coordinate reference system (default: EPSG:4326)
+            
+        Returns:
+            Path to the created merged TIFF file
+        """
+        try:
+            import rasterio
+            from rasterio.warp import calculate_default_transform, reproject
+            from rasterio.enums import Resampling
+            from rasterio.merge import merge
+            from rasterio.transform import from_bounds
+            import tempfile
+            import shutil
+        except ImportError:
+            raise ImportError("Please install rasterio for TIFF merging: pip install rasterio")
+        
+        min_lon, min_lat, max_lon, max_lat = bounds
+        
+        # Find all land mask tiles that intersect with the bounds
+        tiles_to_merge = []
+        for lat, lon in self._list_available_landmasks():
+            # Check if tile intersects with bounds (0.1 degree grid)
+            tile_min_lon, tile_min_lat = lon, lat
+            tile_max_lon, tile_max_lat = lon + 0.1, lat + 0.1
+            
+            if (tile_min_lon < max_lon and tile_max_lon > min_lon and
+                tile_min_lat < max_lat and tile_max_lat > min_lat):
+                tiles_to_merge.append((lat, lon))
+        
+        if not tiles_to_merge:
+            raise ValueError("No land mask tiles found for the specified region")
+        
+        print(f"Found {len(tiles_to_merge)} land mask tiles to merge")
+        
+        # Download all required land mask tiles
+        tile_paths = []
+        for lat, lon in tiles_to_merge:
+            try:
+                tile_path = self._fetch_landmask(lat, lon, progressbar=True)
+                tile_paths.append(tile_path)
+            except Exception as e:
+                print(f"Warning: Could not fetch land mask tile ({lat}, {lon}): {e}")
+                continue
+        
+        if not tile_paths:
+            raise ValueError("No land mask tiles could be downloaded")
+        
+        # Create temporary directory for reprojected tiles
+        temp_dir = tempfile.mkdtemp(prefix="geotessera_merge_")
+        
+        try:
+            # Reproject all tiles to target CRS if needed
+            reprojected_paths = []
+            
+            for i, tile_path in enumerate(tile_paths):
+                with rasterio.open(tile_path) as src:
+                    if str(src.crs) != target_crs:
+                        # Reproject to target CRS
+                        reprojected_path = Path(temp_dir) / f"reprojected_{i}.tiff"
+                        
+                        # Calculate transform and dimensions for reprojection
+                        transform, width, height = calculate_default_transform(
+                            src.crs, target_crs, src.width, src.height, *src.bounds
+                        )
+                        
+                        # Create reprojected raster
+                        with rasterio.open(
+                            reprojected_path,
+                            'w',
+                            driver='GTiff',
+                            height=height,
+                            width=width,
+                            count=src.count,
+                            dtype=src.dtypes[0],
+                            crs=target_crs,
+                            transform=transform,
+                            compress='lzw'
+                        ) as dst:
+                            for band_idx in range(1, src.count + 1):
+                                reproject(
+                                    source=rasterio.band(src, band_idx),
+                                    destination=rasterio.band(dst, band_idx),
+                                    src_transform=src.transform,
+                                    src_crs=src.crs,
+                                    dst_transform=transform,
+                                    dst_crs=target_crs,
+                                    resampling=Resampling.nearest
+                                )
+                        
+                        reprojected_paths.append(str(reprojected_path))
+                    else:
+                        reprojected_paths.append(tile_path)
+            
+            # Merge all reprojected tiles
+            with rasterio.open(reprojected_paths[0]) as src:
+                merged_array, merged_transform = merge([
+                    rasterio.open(path) for path in reprojected_paths
+                ])
+                
+                # Check if this appears to be a land/water mask (binary values)
+                is_binary_mask = (merged_array.min() >= 0 and merged_array.max() <= 1 and 
+                                 merged_array.dtype in ['uint8', 'int8'])
+                
+                if is_binary_mask:
+                    print("Detected binary land/water mask - converting to visible format")
+                    # Convert binary mask to visible grayscale (0->0, 1->255)
+                    display_array = (merged_array * 255).astype('uint8')
+                else:
+                    display_array = merged_array
+                
+                # Write merged result
+                with rasterio.open(
+                    output_path,
+                    'w',
+                    driver='GTiff',
+                    height=display_array.shape[1],
+                    width=display_array.shape[2],
+                    count=display_array.shape[0],
+                    dtype=display_array.dtype,
+                    crs=target_crs,
+                    transform=merged_transform,
+                    compress='lzw'
+                ) as dst:
+                    dst.write(display_array)
+                
+            print(f"Merged land mask saved to: {output_path}")
+            return output_path
+            
+        finally:
+            # Clean up temporary files
+            shutil.rmtree(temp_dir)
+    
+    def merge_embeddings_for_region(self, bounds: Tuple[float, float, float, float], 
+                                   output_path: str, target_crs: str = "EPSG:4326",
+                                   bands: List[int] = [0, 1, 2], normalize: bool = True,
+                                   year: int = 2024) -> str:
+        """Merge multiple numpy embeddings for a region with proper coordinate alignment.
+        
+        This method follows the tessera-util approach: uses land mask TIFF files to get 
+        proper coordinate transforms, creates temporary georeferenced TIFF files from 
+        numpy embeddings, then merges them using rasterio.merge for perfect alignment.
+        
+        Args:
+            bounds: Tuple of (min_lon, min_lat, max_lon, max_lat) in WGS84
+            output_path: Path for the output merged TIFF file
+            target_crs: Target coordinate reference system (default: EPSG:4326)
+            bands: List of band indices to use for RGB visualization (default: [0,1,2])
+            normalize: Whether to normalize band values (default: True)
+            year: Year of embeddings to use (default: 2024)
+            
+        Returns:
+            Path to the created merged TIFF file
+        """
+        try:
+            import rasterio
+            from rasterio.warp import calculate_default_transform, reproject
+            from rasterio.enums import Resampling
+            from rasterio.merge import merge
+            import tempfile
+            import shutil
+        except ImportError:
+            raise ImportError("Please install rasterio for embedding merging: pip install rasterio")
+        
+        min_lon, min_lat, max_lon, max_lat = bounds
+        
+        # Find all embedding tiles that intersect with the bounds
+        tiles_to_merge = []
+        for emb_year, lat, lon in self.list_available_embeddings():
+            if emb_year != year:
+                continue
+                
+            # Check if tile intersects with bounds (0.1 degree grid)
+            tile_min_lon, tile_min_lat = lon, lat
+            tile_max_lon, tile_max_lat = lon + 0.1, lat + 0.1
+            
+            if (tile_min_lon < max_lon and tile_max_lon > min_lon and
+                tile_min_lat < max_lat and tile_max_lat > min_lat):
+                tiles_to_merge.append((lat, lon))
+        
+        if not tiles_to_merge:
+            raise ValueError(f"No embedding tiles found for the specified region in year {year}")
+        
+        print(f"Found {len(tiles_to_merge)} embedding tiles to merge for year {year}")
+        
+        # Create temporary directory for georeferenced TIFF files
+        temp_dir = tempfile.mkdtemp(prefix="geotessera_embed_merge_")
+        
+        try:
+            # Step 1: Create properly georeferenced temporary TIFF files
+            temp_tiff_paths = []
+            
+            for lat, lon in tiles_to_merge:
+                try:
+                    # Get the numpy embedding
+                    embedding = self.fetch_embedding(lat, lon, year, progressbar=True)
+                    
+                    # Get the corresponding land mask TIFF for coordinate information
+                    landmask_path = self._fetch_landmask(lat, lon, progressbar=False)
+                    
+                    # Read coordinate information from the land mask TIFF
+                    with rasterio.open(landmask_path) as landmask_src:
+                        src_transform = landmask_src.transform
+                        src_crs = landmask_src.crs
+                        src_bounds = landmask_src.bounds
+                        src_height, src_width = landmask_src.height, landmask_src.width
+                    
+                    # Extract and process the specified bands
+                    if len(bands) == 3:
+                        vis_data = embedding[:, :, bands].copy()
+                    else:
+                        raise ValueError("Exactly 3 bands must be specified for RGB visualization")
+                    
+                    # Normalize if requested
+                    if normalize:
+                        for i in range(3):
+                            channel = vis_data[:, :, i]
+                            min_val = np.min(channel)
+                            max_val = np.max(channel)
+                            if max_val > min_val:
+                                vis_data[:, :, i] = (channel - min_val) / (max_val - min_val)
+                    
+                    # Ensure we have valid RGB data in [0,1] range and convert to uint8
+                    vis_data = np.clip(vis_data, 0, 1)
+                    vis_data_uint8 = (vis_data * 255).astype(np.uint8)
+                    
+                    # Create temporary georeferenced TIFF file
+                    temp_tiff_path = Path(temp_dir) / f"embed_{lat:.2f}_{lon:.2f}.tiff"
+                    
+                    # Handle potential coordinate system differences and reprojection
+                    if str(src_crs) != str(target_crs):
+                        # Calculate transform for reprojection
+                        dst_transform, dst_width, dst_height = calculate_default_transform(
+                            src_crs, target_crs, src_width, src_height,
+                            left=src_bounds.left, bottom=src_bounds.bottom,
+                            right=src_bounds.right, top=src_bounds.top
+                        )
+                        
+                        # Create reprojected array
+                        dst_data = np.zeros((dst_height, dst_width, 3), dtype=np.uint8)
+                        
+                        # Reproject each band
+                        for i in range(3):
+                            reproject(
+                                source=vis_data_uint8[:, :, i],
+                                destination=dst_data[:, :, i],
+                                src_transform=src_transform,
+                                src_crs=src_crs,
+                                dst_transform=dst_transform,
+                                dst_crs=target_crs,
+                                resampling=Resampling.bilinear  # Use bilinear for smoother results
+                            )
+                        
+                        # Use reprojected data
+                        final_data = dst_data
+                        final_transform = dst_transform
+                        final_crs = target_crs
+                        final_height, final_width = dst_height, dst_width
+                    else:
+                        # Use original coordinate system
+                        final_data = vis_data_uint8
+                        final_transform = src_transform
+                        final_crs = src_crs
+                        final_height, final_width = vis_data_uint8.shape[:2]
+                    
+                    # Write georeferenced TIFF file
+                    with rasterio.open(
+                        temp_tiff_path,
+                        'w',
+                        driver='GTiff',
+                        height=final_height,
+                        width=final_width,
+                        count=3,
+                        dtype='uint8',
+                        crs=final_crs,
+                        transform=final_transform,
+                        compress='lzw',
+                        tiled=True,
+                        blockxsize=256,
+                        blockysize=256
+                    ) as dst:
+                        for i in range(3):
+                            dst.write(final_data[:, :, i], i + 1)
+                    
+                    temp_tiff_paths.append(str(temp_tiff_path))
+                    
+                except Exception as e:
+                    print(f"Warning: Could not process embedding tile ({lat}, {lon}): {e}")
+                    continue
+            
+            if not temp_tiff_paths:
+                raise ValueError("No embedding tiles could be processed")
+            
+            print(f"Created {len(temp_tiff_paths)} temporary georeferenced TIFF files")
+            
+            # Step 2: Use rasterio.merge to properly merge the georeferenced TIFF files
+            print("Merging georeferenced TIFF files...")
+            
+            # Open all TIFF files for merging
+            src_files = [rasterio.open(path) for path in temp_tiff_paths]
+            
+            try:
+                # Merge the files
+                merged_array, merged_transform = merge(src_files, method='first')
+                
+                # Write the merged result
+                with rasterio.open(
+                    output_path,
+                    'w',
+                    driver='GTiff',
+                    height=merged_array.shape[1],
+                    width=merged_array.shape[2],
+                    count=merged_array.shape[0],
+                    dtype=merged_array.dtype,
+                    crs=target_crs,
+                    transform=merged_transform,
+                    compress='lzw'
+                ) as dst:
+                    dst.write(merged_array)
+                
+                print(f"Merged embedding visualization saved to: {output_path}")
+                print(f"Dimensions: {merged_array.shape[2]}x{merged_array.shape[1]} pixels")
+                
+                return output_path
+                
+            finally:
+                # Close all source files
+                for src in src_files:
+                    src.close()
+            
+        finally:
+            # Clean up temporary files
+            shutil.rmtree(temp_dir)

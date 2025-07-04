@@ -2,7 +2,6 @@
 import argparse
 import sys
 from pathlib import Path
-import numpy as np
 import pandas as pd
 import geopandas
 import matplotlib.pyplot as plt
@@ -10,17 +9,8 @@ import datetime
 from .core import GeoTessera
 
 
-def download_command(args):
-    """Handle the download command."""
-    tessera = GeoTessera(version=args.version)
-    
-    print(f"Downloading and processing embedding for coordinates ({args.lat}, {args.lon})...")
-    embedding = tessera.get_embedding(args.lat, args.lon, args.year)
-    print(f"Processed embedding shape: {embedding.shape}, dtype: {embedding.dtype}")
-
-
-def list_command(args):
-    """Handle the list command."""
+def list_embeddings_command(args):
+    """Handle the list-embeddings command."""
     tessera = GeoTessera(version=args.version)
     
     embeddings = list(tessera.list_available_embeddings())
@@ -46,23 +36,29 @@ def info_command(args):
     print(f"Base URL: {tessera._pooch.base_url}")
     print(f"Cache directory: {tessera._pooch.path}")
     print(f"Total embeddings: {tessera.count_available_embeddings()}")
+    print(f"Internal land masks: {tessera._count_available_landmasks()}")
+    print(f"Land mask Base URL: {tessera._landmask_pooch.base_url if tessera._landmask_pooch else 'Not loaded'}")
 
 
 def map_command(args):
-    """Handle the map command to generate a world map with all available grid points."""
+    """Handle the map command to generate a world map with all available embedding grid points."""
     tessera = GeoTessera(version=args.version)
     
-    print("Generating coverage map from registry data...")
+    print("Generating coverage map from embedding registry data...")
     
     # Get all available embeddings from the library
     embeddings = list(tessera.list_available_embeddings())
     
-    # Extract unique coordinates (lat, lon)
+    if not embeddings:
+        print("No embeddings available. Check registry loading.")
+        return
+    
+    # Extract unique coordinates (lat, lon) from embeddings
     coordinates = set()
     for year, lat, lon in embeddings:
         coordinates.add((lat, lon))
     
-    print(f"Found {len(coordinates)} unique grid points")
+    print(f"Found {len(coordinates)} unique embedding grid points")
     
     # Convert to DataFrame
     coords_list = list(coordinates)
@@ -92,11 +88,11 @@ def map_command(args):
     world.plot(ax=ax, color='lightgray', edgecolor='black', linewidth=0.5)
     
     # Plot grid points on the map with smaller markers
-    gdf.plot(ax=ax, marker='o', color='red', markersize=2, alpha=0.8, label='Available')
+    gdf.plot(ax=ax, marker='o', color='red', markersize=2, alpha=0.8, label='Available Embeddings')
     
     # Add a title with the current time and grid count
     current_time_utc = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
-    ax.set_title(f'GeoTessera Grid Coverage Map\nTotal Grid Points: {len(df)}\nLast Updated: {current_time_utc}',
+    ax.set_title(f'GeoTessera Embedding Coverage Map\nTotal Embedding Grid Points: {len(df)}\nLast Updated: {current_time_utc}',
                  fontdict={'fontsize': '18', 'fontweight': 'bold'})
     
     # Add legend
@@ -113,84 +109,104 @@ def map_command(args):
     plt.tight_layout()
     output_path = args.output
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    print(f"Map saved to {output_path} with {len(df)} grid points!")
+    print(f"Map saved to {output_path} with {len(df)} embedding grid points!")
     
     # Close the plot to free memory
     plt.close()
 
 
-def visualize_command(args):
-    """Handle the visualize command."""
+def merge_command(args):
+    """Handle the merge command to merge land mask tiles for a region."""
     tessera = GeoTessera(version=args.version)
     
-    # If TopoJSON file is provided, visualize tiles for that region
-    if args.topojson:
-        print(f"Analyzing TopoJSON file: {args.topojson}")
-        normalize = not args.no_normalize
-        
-        # Update output filename extension to .tiff if needed
-        if not args.output.endswith('.tiff'):
-            output_path = args.output.rsplit('.', 1)[0] + '.tiff'
-        else:
-            output_path = args.output
-        
-        # Export as GeoTIFF
-        output_path = tessera.visualize_topojson_as_tiff(
-            args.topojson, output_path, bands=args.bands, normalize=normalize
+    # Parse bounds
+    bounds = (args.min_lon, args.min_lat, args.max_lon, args.max_lat)
+    
+    print(f"Merging land mask tiles for region: {bounds}")
+    print(f"Target CRS: {args.target_crs}")
+    print("Note: This creates a binary land/water mask for coordinate alignment.")
+    
+    # Merge land mask tiles
+    try:
+        output_path = tessera.merge_landmasks_for_region(
+            bounds=bounds,
+            output_path=args.output,
+            target_crs=args.target_crs
         )
-        print(f"Created high-resolution GeoTIFF: {output_path}")
+        print(f"Successfully merged land mask to: {output_path}")
+    except Exception as e:
+        print(f"Error merging land mask tiles: {e}")
+        sys.exit(1)
+
+
+def visualize_command(args):
+    """Handle the visualize command using TopoJSON files."""
+    tessera = GeoTessera(version=args.version)
+    
+    if not args.topojson:
+        print("Error: --topojson is required for visualization")
+        sys.exit(1)
+    
+    print(f"Analyzing TopoJSON file: {args.topojson}")
+    
+    # Read the TopoJSON to get bounds
+    try:
+        import geopandas as gpd
+        gdf = gpd.read_file(args.topojson)
+        bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
+        min_lon, min_lat, max_lon, max_lat = bounds
         
-        # Also print the tiles that were found
-        tiles = tessera.get_tiles_for_topojson(args.topojson)
-        print(f"\nFound {len(tiles)} overlapping tiles:")
-        for lat, lon, tile_path in tiles:
-            print(f"  - Tile at ({lat:.2f}, {lon:.2f}): {tile_path}")
-        return
-    
-    # Check that lat/lon are provided for regular visualization
-    if args.lat is None or args.lon is None:
-        print("Error: --lat and --lon are required unless --topojson is used")
-        return
-    
-    # Regular embedding visualization - now exports as TIFF
-    print(f"Fetching embedding for ({args.lat}, {args.lon})...")
-    
-    # Update output filename extension to .tiff if needed
-    if not args.output.endswith('.tiff'):
-        output_path = args.output.rsplit('.', 1)[0] + '.tiff'
-    else:
-        output_path = args.output
-    
-    # Export as GeoTIFF
-    normalize = not args.no_normalize
-    output_path = tessera.export_single_tile_as_tiff(
-        args.lat, args.lon, output_path, 
-        year=args.year, bands=args.bands, normalize=normalize
-    )
-    print(f"Saved GeoTIFF to {output_path}")
+        print(f"TopoJSON bounds: ({min_lon:.4f}, {min_lat:.4f}, {max_lon:.4f}, {max_lat:.4f})")
+        
+        # Merge embedding tiles for this region
+        normalize = not args.no_normalize
+        output_path = tessera.merge_embeddings_for_region(
+            bounds=(min_lon, min_lat, max_lon, max_lat),
+            output_path=args.output,
+            target_crs=args.target_crs,
+            bands=args.bands,
+            normalize=normalize,
+            year=args.year
+        )
+        
+        print(f"Created merged embedding visualization for TopoJSON region: {output_path}")
+        
+    except Exception as e:
+        print(f"Error processing TopoJSON file: {e}")
+        sys.exit(1)
 
 
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="GeoTessera - Access and visualize geospatial embeddings",
+        description="GeoTessera - Access geospatial embeddings and create land masks for alignment",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Download an embedding for specific coordinates
-  geotessera download --lat 52.05 --lon 0.15
-  
   # List available embeddings
-  geotessera list --limit 10
+  geotessera list-embeddings --limit 10
   
   # Get information about the dataset
   geotessera info
   
-  # Generate a world map showing all available grid points
+  # Generate a world map showing all available embedding grid points
   geotessera map --output coverage_map.png
   
-  # Export an embedding as GeoTIFF
-  geotessera visualize --lat 52.05 --lon 0.15 --output output.tiff
+  # Create a false-color visualization from embeddings for a region
+  geotessera visualize --topojson region.geojson --output region_viz.tiff --bands 0 1 2
+  
+  # Create a land mask for coordinate alignment (internal use)
+  geotessera merge --min-lon 0.0 --min-lat 52.0 --max-lon 1.0 --max-lat 53.0 --output landmask.tiff
+
+Valid Target CRS Values:
+  EPSG:4326     - WGS84 Geographic (lat/lon) - good for global/large areas
+  EPSG:326XX    - UTM Northern Hemisphere (XX = zone 01-60, e.g., EPSG:32630)
+  EPSG:327XX    - UTM Southern Hemisphere (XX = zone 01-60, e.g., EPSG:32730)  
+  EPSG:3995     - Arctic Polar Stereographic (for areas north of 70°N)
+  EPSG:3031     - Antarctic Polar Stereographic (for areas south of 70°S)
+
+Note: The 'visualize' command creates false-color visualizations from numpy embeddings.
+The 'merge' command creates binary land/water masks for internal coordinate alignment.
         """
     )
     
@@ -198,36 +214,43 @@ Examples:
     
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
     
-    # Download command
-    download_parser = subparsers.add_parser("download", help="Download an embedding")
-    download_parser.add_argument("--lat", type=float, required=True, help="Latitude coordinate")
-    download_parser.add_argument("--lon", type=float, required=True, help="Longitude coordinate")
-    download_parser.add_argument("--year", type=int, default=2024, help="Year of embedding (default: 2024)")
-    download_parser.set_defaults(func=download_command)
-    
-    # List command
-    list_parser = subparsers.add_parser("list", help="List available embeddings")
+    # List embeddings command
+    list_parser = subparsers.add_parser("list-embeddings", help="List available embeddings")
     list_parser.add_argument("--limit", type=int, help="Limit number of results shown")
-    list_parser.set_defaults(func=list_command)
+    list_parser.set_defaults(func=list_embeddings_command)
     
     # Info command
     info_parser = subparsers.add_parser("info", help="Show dataset information")
     info_parser.set_defaults(func=info_command)
     
     # Map command
-    map_parser = subparsers.add_parser("map", help="Generate a world map showing all available grid points")
-    map_parser.add_argument("--output", type=str, default="map.png", help="Output map file path (default: map.png)")
+    map_parser = subparsers.add_parser("map", help="Generate a world map showing all available embedding grid points")
+    map_parser.add_argument("--output", type=str, default="embedding_coverage_map.png", help="Output map file path (default: embedding_coverage_map.png)")
     map_parser.set_defaults(func=map_command)
     
-    # Visualize command
-    viz_parser = subparsers.add_parser("visualize", help="Export GeoTessera embeddings as high-resolution GeoTIFF")
-    viz_parser.add_argument("--lat", type=float, help="Latitude coordinate (required unless --topojson is used)")
-    viz_parser.add_argument("--lon", type=float, help="Longitude coordinate (required unless --topojson is used)")
-    viz_parser.add_argument("--year", type=int, default=2024, help="Year of embedding (default: 2024)")
-    viz_parser.add_argument("--output", type=str, default="geotessera_tiles.tiff", help="Output GeoTIFF file path")
-    viz_parser.add_argument("--bands", type=int, nargs=3, default=[0, 1, 2], help="Three band indices to export as RGB")
-    viz_parser.add_argument("--no-normalize", action="store_true", help="Skip normalization of band values")
-    viz_parser.add_argument("--topojson", type=str, help="TopoJSON file to export overlapping tiles for")
+    # Merge command (internal land mask creation)
+    merge_parser = subparsers.add_parser("merge", help="Create binary land mask for a region (internal coordinate alignment)")
+    merge_parser.add_argument("--min-lon", type=float, required=True, help="Minimum longitude")
+    merge_parser.add_argument("--min-lat", type=float, required=True, help="Minimum latitude")
+    merge_parser.add_argument("--max-lon", type=float, required=True, help="Maximum longitude")
+    merge_parser.add_argument("--max-lat", type=float, required=True, help="Maximum latitude")
+    merge_parser.add_argument("--output", type=str, default="landmask.tiff", help="Output land mask file path")
+    merge_parser.add_argument("--target-crs", type=str, default="EPSG:4326", 
+                             help="Target CRS (default: EPSG:4326). See help for valid values.")
+    merge_parser.set_defaults(func=merge_command)
+    
+    # Visualize command (embedding visualization)
+    viz_parser = subparsers.add_parser("visualize", help="Create false-color visualization from embeddings for a TopoJSON/GeoJSON region")
+    viz_parser.add_argument("--topojson", type=str, required=True, help="TopoJSON/GeoJSON file to visualize embeddings for")
+    viz_parser.add_argument("--output", type=str, default="region_visualization.tiff", help="Output visualization file path")
+    viz_parser.add_argument("--target-crs", type=str, default="EPSG:4326", 
+                           help="Target CRS (default: EPSG:4326). See help for valid values.")
+    viz_parser.add_argument("--bands", type=int, nargs=3, default=[0, 1, 2], 
+                           help="Three band indices to use for RGB visualization (default: 0 1 2)")
+    viz_parser.add_argument("--no-normalize", action="store_true", 
+                           help="Skip normalization of band values")
+    viz_parser.add_argument("--year", type=int, default=2024, 
+                           help="Year of embeddings to visualize (default: 2024)")
     viz_parser.set_defaults(func=visualize_command)
     
     args = parser.parse_args()
