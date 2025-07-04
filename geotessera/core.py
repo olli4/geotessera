@@ -50,7 +50,10 @@ class GeoTessera:
         with importlib.resources.open_text("geotessera", "registry_2024.txt") as registry_file:
             self._pooch.load_registry(registry_file)
         
-        # Initialize land mask pooch for internal land/water mask files
+        # Initialize land mask pooch for landmask GeoTIFF files
+        # These TIFFs serve dual purposes:
+        # 1. Binary land/water distinction (pixel values 0=water, 1=land)
+        # 2. Coordinate reference system metadata for proper georeferencing
         self._landmask_pooch = pooch.create(
             path=cache_path,
             base_url=f"https://dl-1.tessera.wiki/{self.version}/global_0.1_degree_tiff_all/",
@@ -66,10 +69,14 @@ class GeoTessera:
         self._parse_available_landmasks()
     
     def _load_landmask_registry(self):
-        """Load the land mask registry file dynamically from the server.
+        """Load the landmask registry file dynamically from the server.
         
-        Note: These are internal land/water mask files used for coordinate
-        alignment during numpy array merging operations, not user-facing TIFFs.
+        The landmask TIFFs serve dual purposes:
+        1. Binary land/water distinction (0=water, 1=land pixel values)
+        2. Coordinate reference system metadata for proper georeferencing
+        
+        These files are used for coordinate alignment during array merging operations
+        and provide the optimal projection information for each tile.
         """
         try:
             cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
@@ -140,10 +147,11 @@ class GeoTessera:
         return self.fetch_embedding(lat, lon, year, progressbar=True)
     
     def _fetch_landmask(self, lat: float, lon: float, progressbar: bool = True) -> str:
-        """Fetch internal land mask file for a specific location.
+        """Fetch landmask GeoTIFF file for a specific location.
         
-        Note: This is an internal method for fetching land/water mask files
-        used during numpy array merging operations. These are not user-facing TIFFs.
+        The landmask TIFFs serve dual purposes:
+        1. Binary land/water distinction (0=water, 1=land pixel values)
+        2. Coordinate reference system metadata for proper georeferencing
         
         Args:
             lat: Latitude coordinate
@@ -151,7 +159,7 @@ class GeoTessera:
             progressbar: Show download progress bar
             
         Returns:
-            Path to the downloaded land mask file
+            Path to the downloaded landmask GeoTIFF file
         """
         if not self._landmask_pooch:
             raise RuntimeError("Land mask registry not loaded. Check initialization.")
@@ -162,22 +170,22 @@ class GeoTessera:
         return self._landmask_pooch.fetch(landmask_filename, progressbar=progressbar)
     
     def _list_available_landmasks(self) -> Iterator[Tuple[float, float]]:
-        """List all available internal land mask files as (lat, lon) tuples.
+        """List all available landmask GeoTIFF files as (lat, lon) tuples.
         
-        Note: These are internal land/water mask files, not user-facing TIFFs.
+        The landmask TIFFs contain binary land/water data and optimal projection metadata.
         
         Returns:
-            Iterator of tuples containing (latitude, longitude) for each available land mask
+            Iterator of tuples containing (latitude, longitude) for each available landmask
         """
         return iter(self._available_landmasks)
     
     def _count_available_landmasks(self) -> int:
-        """Get the total number of available internal land mask files.
+        """Get the total number of available landmask GeoTIFF files.
         
-        Note: These are internal land/water mask files, not user-facing TIFFs.
+        The landmask TIFFs contain binary land/water data and optimal projection metadata.
         
         Returns:
-            Total count of available land mask files
+            Total count of available landmask files
         """
         return len(self._available_landmasks)
     
@@ -549,12 +557,14 @@ class GeoTessera:
     
     def merge_landmasks_for_region(self, bounds: Tuple[float, float, float, float], 
                               output_path: str, target_crs: str = "EPSG:4326") -> str:
-        """Merge multiple internal land mask tiles for a region without coordinate skew.
+        """Merge multiple landmask GeoTIFF tiles for a region without coordinate skew.
         
-        Note: This method uses internal land/water mask files for coordinate alignment
-        during numpy array merging operations. The output is a binary land/water mask.
+        The landmask TIFFs serve dual purposes:
+        1. Binary land/water distinction (0=water, 1=land pixel values)
+        2. Coordinate reference system metadata for proper georeferencing
         
-        This method uses proper coordinate reprojection to avoid skew issues
+        This method uses the optimal projection information from each tile's GeoTIFF
+        metadata to perform proper coordinate reprojection and avoid skew issues
         when merging tiles from different UTM zones.
         
         Args:
@@ -563,7 +573,7 @@ class GeoTessera:
             target_crs: Target coordinate reference system (default: EPSG:4326)
             
         Returns:
-            Path to the created merged TIFF file
+            Path to the created merged binary land/water mask TIFF file
         """
         try:
             import rasterio
@@ -756,10 +766,11 @@ class GeoTessera:
                     # Get the numpy embedding
                     embedding = self.fetch_embedding(lat, lon, year, progressbar=True)
                     
-                    # Get the corresponding land mask TIFF for coordinate information
+                    # Get the corresponding landmask GeoTIFF for coordinate information
+                    # The landmask TIFF provides the optimal projection metadata for this tile
                     landmask_path = self._fetch_landmask(lat, lon, progressbar=False)
                     
-                    # Read coordinate information from the land mask TIFF
+                    # Read coordinate information from the landmask GeoTIFF metadata
                     with rasterio.open(landmask_path) as landmask_src:
                         src_transform = landmask_src.transform
                         src_crs = landmask_src.crs
