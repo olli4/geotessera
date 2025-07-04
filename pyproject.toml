@@ -8,12 +8,12 @@ dependencies = [
     "pooch",
     "tqdm>=4.67.1",
     "numpy",
-    "matplotlib",
     "geopandas",
+    "pandas",
+    "matplotlib",
+    "rasterio",
+    "sphinx>=8.2.3",
 ]
-
-[project.optional-dependencies]
-visualize = []
 
 [project.scripts]
 geotessera = "geotessera.cli:main"
@@ -26,4 +26,4 @@ build-backend = "setuptools.build_meta"
 include = ["geotessera*"]
 
 [tool.setuptools.package-data]
-geotessera = ["registry_2024.txt"]
+geotessera = ["registry_2017.txt", "registry_2018.txt", "registry_2019.txt", "registry_2020.txt", "registry_2021.txt", "registry_2022.txt", "registry_2023.txt", "registry_2024.txt"]

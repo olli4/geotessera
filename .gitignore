@@ -23,3 +23,6 @@ share/python-wheels/
 *.egg
 MANIFEST
 geotessera_vis.png
+.claude
+.venv
+build/

@@ -20,23 +20,15 @@ jobs:
       - name: Check out repo
         uses: actions/checkout@v4
 
-      # Step 2: Set up Python environment
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10' # Specify Python version
+      # Step 2: Set up uv environment
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
 
-      # Step 3: Install Python dependencies
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install numpy matplotlib pandas geopandas requests
-
-      # Step 4: Run your Python script to generate the map
+      # Step 3: Run your Python script to generate the map
       - name: Generate map
-        run: python generate_map.py
+        run: uv run -m geotessera.cli map --output map.png
 
-      # Step 5: Commit the updated map file
+      # Step 4: Commit the updated map file
       # We use an existing action to simplify the commit operation
       - name: Commit and push if it changed
         uses: stefanzweifel/git-auto-commit-action@v5
