@@ -766,24 +766,14 @@ class GeoTessera:
                         src_bounds = landmask_src.bounds
                         src_height, src_width = landmask_src.height, landmask_src.width
                     
-                    # Extract and process the specified bands
+                    # Extract the specified bands
                     if len(bands) == 3:
                         vis_data = embedding[:, :, bands].copy()
                     else:
                         raise ValueError("Exactly 3 bands must be specified for RGB visualization")
                     
-                    # Normalize if requested
-                    if normalize:
-                        for i in range(3):
-                            channel = vis_data[:, :, i]
-                            min_val = np.min(channel)
-                            max_val = np.max(channel)
-                            if max_val > min_val:
-                                vis_data[:, :, i] = (channel - min_val) / (max_val - min_val)
-                    
-                    # Ensure we have valid RGB data in [0,1] range and convert to uint8
-                    vis_data = np.clip(vis_data, 0, 1)
-                    vis_data_uint8 = (vis_data * 255).astype(np.uint8)
+                    # Keep data as float32 for now - normalization happens after merging
+                    vis_data = vis_data.astype(np.float32)
                     
                     # Create temporary georeferenced TIFF file
                     temp_tiff_path = Path(temp_dir) / f"embed_{lat:.2f}_{lon:.2f}.tiff"
@@ -798,12 +788,12 @@ class GeoTessera:
                         )
                         
                         # Create reprojected array
-                        dst_data = np.zeros((dst_height, dst_width, 3), dtype=np.uint8)
+                        dst_data = np.zeros((dst_height, dst_width, 3), dtype=np.float32)
                         
                         # Reproject each band
                         for i in range(3):
                             reproject(
-                                source=vis_data_uint8[:, :, i],
+                                source=vis_data[:, :, i],
                                 destination=dst_data[:, :, i],
                                 src_transform=src_transform,
                                 src_crs=src_crs,
@@ -819,12 +809,12 @@ class GeoTessera:
                         final_height, final_width = dst_height, dst_width
                     else:
                         # Use original coordinate system
-                        final_data = vis_data_uint8
+                        final_data = vis_data
                         final_transform = src_transform
                         final_crs = src_crs
-                        final_height, final_width = vis_data_uint8.shape[:2]
+                        final_height, final_width = vis_data.shape[:2]
                     
-                    # Write georeferenced TIFF file
+                    # Write georeferenced TIFF file (as float32 for now)
                     with rasterio.open(
                         temp_tiff_path,
                         'w',
@@ -832,7 +822,7 @@ class GeoTessera:
                         height=final_height,
                         width=final_width,
                         count=3,
-                        dtype='uint8',
+                        dtype='float32',
                         crs=final_crs,
                         transform=final_transform,
                         compress='lzw',
@@ -864,23 +854,46 @@ class GeoTessera:
                 # Merge the files
                 merged_array, merged_transform = merge(src_files, method='first')
                 
+                # Apply global normalization after merging if requested
+                if normalize:
+                    print("Applying global normalization across all merged tiles...")
+                    for band_idx in range(merged_array.shape[0]):  # For each band
+                        band_data = merged_array[band_idx]
+                        
+                        # Only normalize non-zero pixels to preserve background
+                        mask = band_data != 0
+                        if np.any(mask):
+                            # Get global min/max for this band across all tiles
+                            min_val = np.min(band_data[mask])
+                            max_val = np.max(band_data[mask])
+                            
+                            if max_val > min_val:
+                                # Apply normalization only to non-zero pixels
+                                normalized = (band_data[mask] - min_val) / (max_val - min_val)
+                                band_data[mask] = normalized
+                
+                # Convert to uint8 for final output
+                # Clip to [0,1] range first, then scale to [0,255]
+                merged_array = np.clip(merged_array, 0, 1)
+                merged_array_uint8 = (merged_array * 255).astype(np.uint8)
+                
                 # Write the merged result
                 with rasterio.open(
                     output_path,
                     'w',
                     driver='GTiff',
-                    height=merged_array.shape[1],
-                    width=merged_array.shape[2],
-                    count=merged_array.shape[0],
-                    dtype=merged_array.dtype,
+                    height=merged_array_uint8.shape[1],
+                    width=merged_array_uint8.shape[2],
+                    count=merged_array_uint8.shape[0],
+                    dtype='uint8',
                     crs=target_crs,
                     transform=merged_transform,
                     compress='lzw'
                 ) as dst:
-                    dst.write(merged_array)
+                    dst.write(merged_array_uint8)
                 
                 print(f"Merged embedding visualization saved to: {output_path}")
-                print(f"Dimensions: {merged_array.shape[2]}x{merged_array.shape[1]} pixels")
+                print(f"Dimensions: {merged_array_uint8.shape[2]}x{merged_array_uint8.shape[1]} pixels")
                 
                 return output_path
                 
