@@ -9,10 +9,9 @@ dependencies = [
     "tqdm>=4.67.1",
     "numpy",
     "geopandas",
+    "pandas",
+    "matplotlib",
 ]
-
-[project.optional-dependencies]
-visualize = []
 
 [project.scripts]
 geotessera = "geotessera.cli:main"

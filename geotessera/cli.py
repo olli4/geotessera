@@ -3,6 +3,10 @@ import argparse
 import sys
 from pathlib import Path
 import numpy as np
+import pandas as pd
+import geopandas
+import matplotlib.pyplot as plt
+import datetime
 from .core import GeoTessera
 
 
@@ -42,6 +46,77 @@ def info_command(args):
     print(f"Base URL: {tessera._pooch.base_url}")
     print(f"Cache directory: {tessera._pooch.path}")
     print(f"Total embeddings: {tessera.count_available_embeddings()}")
+
+
+def map_command(args):
+    """Handle the map command to generate a world map with all available grid points."""
+    tessera = GeoTessera(version=args.version)
+    
+    print("Generating coverage map from registry data...")
+    
+    # Get all available embeddings from the library
+    embeddings = list(tessera.list_available_embeddings())
+    
+    # Extract unique coordinates (lat, lon)
+    coordinates = set()
+    for year, lat, lon in embeddings:
+        coordinates.add((lat, lon))
+    
+    print(f"Found {len(coordinates)} unique grid points")
+    
+    # Convert to DataFrame
+    coords_list = list(coordinates)
+    df = pd.DataFrame(coords_list, columns=['Latitude', 'Longitude'])
+    
+    # Convert pandas DataFrame to GeoDataFrame
+    print("Creating GeoDataFrame...")
+    gdf = geopandas.GeoDataFrame(
+        df, geometry=geopandas.points_from_xy(df.Longitude, df.Latitude)
+    )
+    gdf.set_crs("EPSG:4326", inplace=True)  # Set the coordinate system to WGS84
+    
+    # Plot the map
+    # Check if world map shapefile exists
+    world_map_path = Path('world_map/ne_110m_admin_0_countries.shp')
+    if not world_map_path.exists():
+        print("Using built-in world map.")
+        world = geopandas.read_file(geopandas.datasets.get_path('naturalearth_lowres'))
+    else:
+        world = geopandas.read_file(world_map_path)
+    
+    # Create the plotting area
+    print("Creating map...")
+    fig, ax = plt.subplots(1, 1, figsize=(20, 12))
+    
+    # Plot the world map base layer
+    world.plot(ax=ax, color='lightgray', edgecolor='black', linewidth=0.5)
+    
+    # Plot grid points on the map with smaller markers
+    gdf.plot(ax=ax, marker='o', color='red', markersize=2, alpha=0.8, label='Available')
+    
+    # Add a title with the current time and grid count
+    current_time_utc = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    ax.set_title(f'GeoTessera Grid Coverage Map\nTotal Grid Points: {len(df)}\nLast Updated: {current_time_utc}',
+                 fontdict={'fontsize': '18', 'fontweight': 'bold'})
+    
+    # Add legend
+    ax.legend(loc='lower left', frameon=True, fancybox=True, shadow=True, fontsize=12)
+    
+    # Set axis labels
+    ax.set_xlabel('Longitude', fontsize=14)
+    ax.set_ylabel('Latitude', fontsize=14)
+    
+    # Add grid for better readability
+    ax.grid(True, alpha=0.3, linestyle='--')
+    
+    # Save the map as an image file
+    plt.tight_layout()
+    output_path = args.output
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f"Map saved to {output_path} with {len(df)} grid points!")
+    
+    # Close the plot to free memory
+    plt.close()
 
 
 def visualize_command(args):
@@ -111,6 +186,9 @@ Examples:
   # Get information about the dataset
   geotessera info
   
+  # Generate a world map showing all available grid points
+  geotessera map --output coverage_map.png
+  
   # Export an embedding as GeoTIFF
   geotessera visualize --lat 52.05 --lon 0.15 --output output.tiff
         """
@@ -135,6 +213,11 @@ Examples:
     # Info command
     info_parser = subparsers.add_parser("info", help="Show dataset information")
     info_parser.set_defaults(func=info_command)
+    
+    # Map command
+    map_parser = subparsers.add_parser("map", help="Generate a world map showing all available grid points")
+    map_parser.add_argument("--output", type=str, default="map.png", help="Output map file path (default: map.png)")
+    map_parser.set_defaults(func=map_command)
     
     # Visualize command
     viz_parser = subparsers.add_parser("visualize", help="Export GeoTessera embeddings as high-resolution GeoTIFF")
