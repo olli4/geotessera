@@ -1,4 +1,14 @@
-"""Command-line interface for GeoTessera."""
+"""Command-line interface for accessing and visualizing Tessera embeddings.
+
+This module provides CLI commands for:
+- Listing and exploring available embedding tiles
+- Creating visualizations from embeddings as GeoTIFF files
+- Generating interactive web maps with Leaflet.js
+- Serving embedding tiles as web map tiles for visualization
+
+The CLI supports multiple visualization modes including false-color composites
+from different embedding channels and interactive web-based exploration.
+"""
 import argparse
 import sys
 from pathlib import Path
@@ -19,7 +29,24 @@ from .core import GeoTessera
 
 
 def list_embeddings_command(args):
-    """Handle the list-embeddings command."""
+    """List available Tessera embedding tiles with optional limit.
+    
+    Displays all available embedding tiles in the dataset, showing year,
+    latitude, and longitude for each tile. Useful for exploring coverage
+    and finding specific regions.
+    
+    Args:
+        args: Parsed command line arguments containing:
+            - version: Dataset version to use
+            - limit: Optional maximum number of tiles to display
+    
+    Example output::
+    
+        Available embeddings (50000 total):
+          - Year 2024: (51.50, -0.10)
+          - Year 2024: (51.50, -0.00)
+          ... and 49998 more
+    """
     tessera = GeoTessera(version=args.version)
     
     embeddings = list(tessera.list_available_embeddings())
@@ -37,7 +64,23 @@ def list_embeddings_command(args):
 
 
 def info_command(args):
-    """Handle the info command."""
+    """Display comprehensive information about the GeoTessera dataset.
+    
+    Shows dataset metadata including version, data URLs, cache locations,
+    and counts of available embeddings and land masks. Useful for debugging
+    and understanding the current configuration.
+    
+    Args:
+        args: Parsed command line arguments containing:
+            - version: Dataset version to query
+    
+    Information displayed:
+        - Dataset version identifier
+        - Remote data URLs for embeddings and land masks
+        - Local cache directory path
+        - Total count of available embeddings
+        - Count of auxiliary land mask files
+    """
     tessera = GeoTessera(version=args.version)
     
     print("GeoTessera Dataset Information")
@@ -50,7 +93,28 @@ def info_command(args):
 
 
 def map_command(args):
-    """Handle the map command to generate a world map with all available embedding grid points."""
+    """Generate a world map visualization showing Tessera embedding coverage.
+    
+    Creates a high-resolution map image displaying all available embedding
+    tile locations as red dots on a world map background. Useful for
+    understanding global coverage and identifying data-rich regions.
+    
+    Args:
+        args: Parsed command line arguments containing:
+            - version: Dataset version to map
+            - output: Output filename for the map image (PNG format)
+    
+    Output:
+        Saves a PNG image with:
+        - World map base layer with country boundaries
+        - Red dots marking each available 0.1° embedding tile
+        - Legend and grid lines for reference
+        - Timestamp and total tile count
+    
+    Note:
+        The map generation may take several seconds for large datasets
+        as it processes all available tile locations.
+    """
     tessera = GeoTessera(version=args.version)
     
     print("Generating coverage map from embedding registry data...")
@@ -127,7 +191,37 @@ def map_command(args):
 
 
 def visualize_command(args):
-    """Handle the visualize command using TopoJSON files."""
+    """Create false-color GeoTIFF visualization from Tessera embeddings.
+    
+    Generates a georeferenced image by mosaicking embedding tiles that
+    overlap with a TopoJSON/GeoJSON region. Allows custom band selection
+    for highlighting different features in the 128-channel embeddings.
+    
+    Args:
+        args: Parsed command line arguments containing:
+            - topojson: Path to TopoJSON/GeoJSON file defining the region
+            - output: Output GeoTIFF filename
+            - target_crs: Coordinate reference system for output
+            - bands: Three channel indices for RGB mapping (0-127)
+            - no_normalize: Flag to skip value normalization
+            - year: Year of embeddings to use
+            - version: Dataset version
+    
+    Process:
+        1. Reads geographic bounds from TopoJSON/GeoJSON
+        2. Identifies all embedding tiles overlapping the region
+        3. Downloads and merges tiles with proper alignment
+        4. Maps selected channels to RGB for visualization
+        5. Exports georeferenced GeoTIFF with metadata
+    
+    Example band combinations:
+        - [0, 1, 2]: First three channels (default)
+        - [10, 20, 30]: Mid-range channels
+        - [25, 50, 75]: Distributed sampling
+    
+    Raises:
+        SystemExit: If TopoJSON file is missing or invalid
+    """
     tessera = GeoTessera(version=args.version)
     
     if not args.topojson:
@@ -164,7 +258,23 @@ def visualize_command(args):
 
 
 class GeoJSONRequestHandler(http.server.SimpleHTTPRequestHandler):
-    """Custom HTTP request handler for serving GeoJSON with Leaflet.js."""
+    """HTTP request handler for interactive Tessera embedding visualization.
+    
+    Serves a Leaflet.js-based web interface that displays:
+    - GeoJSON/TopoJSON features as vector overlays
+    - Tessera embedding tiles as false-color base layers
+    - Interactive controls for opacity and layer switching
+    
+    The handler manages three main endpoints:
+    - /: Main HTML page with Leaflet map
+    - /geojson: GeoJSON data for vector overlay
+    - /tiles/{z}/{x}/{y}.png: Tessera visualization tiles
+    
+    Attributes:
+        geojson_data: Parsed GeoJSON data to serve
+        tiles_dir: Directory containing pre-generated tiles
+        tile_bounds: Geographic bounds extracted from tile metadata
+    """
     
     def __init__(self, *args, geojson_data=None, tiles_dir=None, **kwargs):
         self.geojson_data = geojson_data
@@ -173,7 +283,19 @@ class GeoJSONRequestHandler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, **kwargs)
     
     def _get_tile_bounds(self):
-        """Extract tile bounds from tilemapresource.xml if available."""
+        """Extract geographic bounds from tile metadata.
+        
+        Parses the tilemapresource.xml file generated by gdal2tiles
+        to determine the geographic extent of available tiles. This
+        helps Leaflet optimize tile loading and set appropriate bounds.
+        
+        Returns:
+            list or None: Bounds as [[south, west], [north, east]] for
+                         Leaflet, or None if metadata is unavailable.
+        
+        Note:
+            Gracefully handles missing or malformed metadata files.
+        """
         if not self.tiles_dir:
             return None
         
@@ -200,7 +322,17 @@ class GeoJSONRequestHandler(http.server.SimpleHTTPRequestHandler):
         return None
     
     def do_GET(self):
-        """Handle GET requests."""
+        """Handle HTTP GET requests for map interface and data.
+        
+        Routes requests to appropriate handlers:
+        - Root path serves the interactive map HTML
+        - /geojson endpoint serves vector data as JSON
+        - /tiles/* paths serve pre-generated PNG tiles
+        - Other paths use default file serving
+        
+        Tile requests that 404 are handled gracefully as this is
+        expected behavior for areas without data coverage.
+        """
         parsed_path = urlparse(self.path)
         
         if parsed_path.path == '/':
@@ -248,7 +380,23 @@ class GeoJSONRequestHandler(http.server.SimpleHTTPRequestHandler):
             super().do_GET()
     
     def generate_html(self):
-        """Generate the HTML page with Leaflet.js map."""
+        """Generate interactive map HTML with Leaflet.js integration.
+        
+        Creates a complete HTML page featuring:
+        - Leaflet.js map with OpenStreetMap base layer
+        - Optional Tessera false-color tile overlay
+        - GeoJSON feature rendering with popups
+        - Opacity slider for tile layer control
+        - Layer switcher for base/overlay selection
+        - Responsive design for various screen sizes
+        
+        Returns:
+            str: Complete HTML document as a string
+        
+        Note:
+            The generated HTML uses CDN-hosted Leaflet.js libraries
+            and includes all necessary CSS and JavaScript inline.
+        """
         tessera_meta = '<meta name="tessera-tiles" content="true">' if self.tiles_dir else ''
         tile_bounds_js = f'var tileBounds = {json.dumps(self.tile_bounds)};' if self.tile_bounds else 'var tileBounds = null;'
         
@@ -470,7 +618,33 @@ class GeoJSONRequestHandler(http.server.SimpleHTTPRequestHandler):
 
 
 def generate_static_tessera_tiles(geojson_path, output_dir, tessera_version="v1", year=2024, bands=[0, 1, 2]):
-    """Generate static tessera false color visualization tiles using gdal2tiles."""
+    """Generate web map tiles from Tessera embeddings for a region.
+    
+    Creates a pyramid of PNG tiles suitable for web mapping applications
+    by processing Tessera embeddings into false-color visualizations and
+    tiling them using gdal2tiles. Tiles follow the XYZ/Slippy map standard.
+    
+    Args:
+        geojson_path: Path to GeoJSON file defining the region of interest
+        output_dir: Directory to store generated tiles and metadata
+        tessera_version: Dataset version to use (default: "v1")
+        year: Year of embeddings to process (default: 2024)
+        bands: Three channel indices for RGB visualization (default: [0,1,2])
+    
+    Returns:
+        str or None: Path to tiles directory if successful, None on error
+    
+    Process:
+        1. Checks if tiles already exist (skips regeneration)
+        2. Reads region bounds from GeoJSON
+        3. Merges Tessera embeddings into single GeoTIFF
+        4. Runs gdal2tiles to create tile pyramid (zoom 1-15)
+        5. Cleans up intermediate files
+    
+    Note:
+        Requires GDAL tools to be installed (specifically gdal2tiles.py).
+        Tile generation can be time-consuming for large regions.
+    """
     # Check if tiles already exist FIRST
     tiles_output_dir = os.path.join(output_dir, "tiles")
     if os.path.exists(tiles_output_dir) and os.path.isdir(tiles_output_dir):
@@ -556,7 +730,37 @@ def generate_static_tessera_tiles(geojson_path, output_dir, tessera_version="v1"
 
 
 def serve_command(args):
-    """Handle the serve command to run HTTP server with Leaflet.js."""
+    """Launch interactive web server for Tessera embedding visualization.
+    
+    Starts a local HTTP server that serves an interactive map interface
+    combining GeoJSON vector features with Tessera embedding tiles as
+    false-color base layers. Supports real-time opacity adjustment and
+    layer switching.
+    
+    Args:
+        args: Parsed command line arguments containing:
+            - geojson: Path to GeoJSON file (required)
+            - port: HTTP server port (default: 8000)
+            - open: Whether to auto-open browser
+            - tiles_output: Directory for tile storage (optional)
+            - bands: Channel indices for visualization
+            - year: Year of embeddings to use
+            - version: Dataset version
+    
+    Features:
+        - Automatic tile generation from embeddings
+        - Interactive web map with multiple layers
+        - GeoJSON feature popups with properties
+        - Opacity control for embedding overlay
+        - Persistent or temporary tile storage
+    
+    Example:
+        geotessera serve --geojson city.json --open --bands 30 60 90
+    
+    Note:
+        Press Ctrl+C to stop the server. Temporary tiles are
+        automatically cleaned up on exit.
+    """
     if not args.geojson:
         print("Error: --geojson is required for serve command")
         sys.exit(1)
@@ -635,7 +839,21 @@ def serve_command(args):
 
 
 def main():
-    """Main CLI entry point."""
+    """Main entry point for the GeoTessera command-line interface.
+    
+    Parses command line arguments and routes to appropriate subcommands.
+    Provides comprehensive help text with examples and usage instructions.
+    
+    Available commands:
+        - list-embeddings: Browse available embedding tiles
+        - info: Display dataset information
+        - map: Generate coverage map visualization
+        - visualize: Create GeoTIFF from embeddings
+        - serve: Launch interactive web interface
+    
+    Each command has its own help accessible via:
+        geotessera <command> --help
+    """
     parser = argparse.ArgumentParser(
         description="GeoTessera - Access geospatial embeddings and create land masks for alignment",
         formatter_class=argparse.RawDescriptionHelpFormatter,

@@ -1,4 +1,17 @@
-"""Core GeoTessera functionality for accessing geospatial embeddings."""
+"""Core module for accessing and working with Tessera geospatial embeddings.
+
+This module provides the main GeoTessera class which interfaces with pre-computed
+satellite embeddings from the Tessera foundation model. The embeddings compress
+a full year of Sentinel-1 and Sentinel-2 observations into 128-dimensional
+representation maps at 10m spatial resolution.
+
+The module handles:
+- Automatic data fetching and caching from remote servers
+- Dequantization of compressed embeddings using scale factors
+- Geographic tile discovery and intersection analysis
+- Visualization and export of embeddings as GeoTIFF files
+- Merging multiple tiles with proper coordinate alignment
+"""
 from pathlib import Path
 from typing import Optional, Union, List, Tuple, Iterator
 import importlib.resources
@@ -8,22 +21,49 @@ import numpy as np
 
 
 class GeoTessera:
-    """Main class for accessing GeoTessera geospatial embeddings.
+    """Interface for accessing Tessera foundation model embeddings.
     
-    This class provides methods to fetch and load geospatial embeddings
-    from the GeoTessera dataset.
+    GeoTessera provides access to pre-computed embeddings from the Tessera
+    foundation model, which processes Sentinel-1 and Sentinel-2 satellite imagery
+    to generate dense representation maps. Each embedding compresses a full year
+    of temporal-spectral observations into 128 channels at 10m resolution.
+    
+    The embeddings are organized in a global 0.1-degree grid system, with each
+    tile covering approximately 11km × 11km at the equator. Files are fetched
+    on-demand and cached locally for efficient access.
     
     Attributes:
-        version: Version of the GeoTessera dataset to use (default: "v1")
-        cache_dir: Directory to cache downloaded files
+        version: Dataset version identifier (default: "v1")
+        cache_dir: Local directory for caching downloaded files
+        
+    Example:
+        >>> gt = GeoTessera()
+        >>> # Fetch embeddings for Cambridge, UK
+        >>> embedding = gt.get_embedding(lat=52.2053, lon=0.1218)
+        >>> print(f"Shape: {embedding.shape}")  # (height, width, 128)
+        >>> # Visualize as RGB composite
+        >>> gt.visualize_embedding(embedding, bands=[10, 20, 30])
     """
     
     def __init__(self, version: str = "v1", cache_dir: Optional[Union[str, Path]] = None):
-        """Initialize GeoTessera client.
+        """Initialize GeoTessera client for accessing Tessera embeddings.
+        
+        Creates a client instance that can fetch and work with pre-computed
+        satellite embeddings. Data is automatically cached locally after first
+        download to improve performance.
         
         Args:
-            version: Version of the dataset to use
-            cache_dir: Directory to cache downloaded files. If None, uses system cache.
+            version: Dataset version to use. Currently "v1" is available.
+            cache_dir: Directory for caching downloaded files. If None, uses
+                      the system's default cache directory (~/.cache/geotessera
+                      on Unix-like systems).
+                      
+        Raises:
+            ValueError: If the specified version is not supported.
+            
+        Note:
+            The client lazily loads registry files for each year as needed,
+            improving startup performance when working with specific years.
         """
         self.version = version
         self._cache_dir = cache_dir
@@ -35,7 +75,15 @@ class GeoTessera:
         self._initialize_pooch()
     
     def _initialize_pooch(self):
-        """Initialize the Pooch downloader with registry."""
+        """Initialize Pooch data fetchers for embeddings and land masks.
+        
+        Sets up two Pooch instances:
+        1. Main fetcher for numpy embedding files (.npy and _scales.npy)
+        2. Land mask fetcher for GeoTIFF files containing binary land/water
+           masks and coordinate reference system metadata
+           
+        Registry files are loaded lazily per year to improve performance.
+        """
         cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
         
         # Initialize main pooch for numpy embeddings
@@ -67,14 +115,21 @@ class GeoTessera:
         self._parse_available_landmasks()
     
     def _load_landmask_registry(self):
-        """Load the landmask registry file dynamically from the server.
+        """Load registry of available land mask GeoTIFF files.
         
-        The landmask TIFFs serve dual purposes:
-        1. Binary land/water distinction (0=water, 1=land pixel values)
-        2. Coordinate reference system metadata for proper georeferencing
+        Land mask files are auxiliary data that provide:
+        1. Binary land/water classification (pixel values: 0=water, 1=land)
+        2. Optimal coordinate reference system (CRS) for each tile
+        3. Precise georeferencing metadata for coordinate alignment
         
-        These files are used for coordinate alignment during array merging operations
-        and provide the optimal projection information for each tile.
+        These files are essential for accurate merging of multiple tiles,
+        especially when tiles span different UTM zones or require reprojection.
+        The CRS metadata ensures proper alignment without coordinate skew.
+        
+        Note:
+            This method is called during initialization. The registry download
+            is attempted but failures are handled gracefully, allowing the
+            system to work without land masks if necessary.
         """
         try:
             cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
@@ -96,10 +151,21 @@ class GeoTessera:
             # Continue without land mask support if registry loading fails
     
     def _ensure_year_loaded(self, year: int):
-        """Ensure that the registry for the given year is loaded.
+        """Ensure registry data for a specific year is loaded.
+        
+        Tessera embeddings are organized by year, with separate registry files
+        for each year's data. This method lazily loads the registry when first
+        accessing data from a particular year.
         
         Args:
-            year: The year to load the registry for
+            year: Year to load (e.g., 2024). Must be between 2017-2024.
+            
+        Raises:
+            ValueError: If no registry exists for the specified year.
+            
+        Note:
+            This method is called automatically when fetching embeddings.
+            Users typically don't need to call it directly.
         """
         if year not in self._loaded_years:
             registry_filename = f"registry_{year}.txt"
@@ -113,10 +179,18 @@ class GeoTessera:
                 raise ValueError(f"Registry file for year {year} not found. Available years: {self.get_available_years()}")
     
     def get_available_years(self) -> List[int]:
-        """Get a list of all available years based on registry files.
+        """List all years with available Tessera embeddings.
+        
+        Scans for registry files to determine which years have pre-computed
+        embeddings available. Currently supports years 2017-2024.
         
         Returns:
-            List of available years
+            List of years with available data, sorted in ascending order.
+            
+        Example:
+            >>> gt = GeoTessera()
+            >>> years = gt.get_available_years()
+            >>> print(years)  # [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024]
         """
         available_years = []
         for year in range(2017, 2025):  # Check years 2017-2024
@@ -130,19 +204,42 @@ class GeoTessera:
     
     def fetch_embedding(self, lat: float, lon: float, year: int = 2024, 
                        progressbar: bool = True) -> np.ndarray:
-        """Fetch and dequantize embedding for a specific location.
+        """Fetch and dequantize Tessera embeddings for a geographic location.
         
-        This method fetches both the quantized embedding and its scales,
-        then performs dequantization by multiplying them together.
+        Downloads both the quantized embedding array and its corresponding scale
+        factors, then performs dequantization by element-wise multiplication.
+        The embeddings represent learned features from a full year of Sentinel-1
+        and Sentinel-2 satellite observations.
         
         Args:
-            lat: Latitude coordinate
-            lon: Longitude coordinate
-            year: Year of the embedding (default: 2024)
-            progressbar: Show download progress bar
+            lat: Latitude in decimal degrees. Will be rounded to nearest 0.1°
+                 grid cell (e.g., 52.23 → 52.20).
+            lon: Longitude in decimal degrees. Will be rounded to nearest 0.1°
+                 grid cell (e.g., 0.17 → 0.15).
+            year: Year of embeddings to fetch (2017-2024). Different years may
+                  capture different environmental conditions.
+            progressbar: Whether to display download progress. Useful for tracking
+                        large file downloads.
             
         Returns:
-            Dequantized embedding array with shape (height, width, channels)
+            Dequantized embedding array of shape (height, width, 128) containing
+            128-dimensional feature vectors for each 10m pixel. Typical tile
+            dimensions are approximately 1100×1100 pixels.
+            
+        Raises:
+            ValueError: If the requested tile is not available or year is invalid.
+            IOError: If download fails after retries.
+            
+        Example:
+            >>> gt = GeoTessera()
+            >>> # Fetch embeddings for central London
+            >>> embedding = gt.fetch_embedding(lat=51.5074, lon=-0.1278)
+            >>> print(f"Tile shape: {embedding.shape}")
+            >>> print(f"Feature dimensions: {embedding.shape[-1]} channels")
+            
+        Note:
+            Files are cached after first download. Subsequent requests for the
+            same tile will load from cache unless the cache is cleared.
         """
         # Ensure the registry for this year is loaded
         self._ensure_year_loaded(year)
@@ -167,32 +264,49 @@ class GeoTessera:
         return dequantized
     
     def get_embedding(self, lat: float, lon: float, year: int = 2024) -> np.ndarray:
-        """Get the dequantized embedding for a specific location.
+        """Get dequantized Tessera embeddings for a location (convenience method).
+        
+        This is a convenience wrapper around fetch_embedding() that always shows
+        a progress bar during download. Use this for interactive applications.
         
         Args:
-            lat: Latitude coordinate
-            lon: Longitude coordinate
-            year: Year of the embedding (default: 2024)
+            lat: Latitude in decimal degrees (will be rounded to 0.1° grid).
+            lon: Longitude in decimal degrees (will be rounded to 0.1° grid).
+            year: Year of embeddings to retrieve (2017-2024).
             
         Returns:
-            Dequantized embedding array with shape (height, width, channels)
+            Dequantized embedding array of shape (height, width, 128).
+            
+        See Also:
+            fetch_embedding: Lower-level method with progress bar control.
+            
+        Example:
+            >>> gt = GeoTessera()
+            >>> embedding = gt.get_embedding(lat=40.7128, lon=-74.0060)  # NYC
         """
         return self.fetch_embedding(lat, lon, year, progressbar=True)
     
     def _fetch_landmask(self, lat: float, lon: float, progressbar: bool = True) -> str:
-        """Fetch landmask GeoTIFF file for a specific location.
+        """Download land mask GeoTIFF for coordinate reference information.
         
-        The landmask TIFFs serve dual purposes:
-        1. Binary land/water distinction (0=water, 1=land pixel values)
-        2. Coordinate reference system metadata for proper georeferencing
+        Land mask files contain binary land/water data and crucial CRS metadata
+        that defines the optimal projection for each tile. This metadata is used
+        during tile merging to ensure proper geographic alignment.
         
         Args:
-            lat: Latitude coordinate
-            lon: Longitude coordinate
-            progressbar: Show download progress bar
+            lat: Latitude in decimal degrees (rounded to 0.1° grid).
+            lon: Longitude in decimal degrees (rounded to 0.1° grid).
+            progressbar: Whether to show download progress.
             
         Returns:
-            Path to the downloaded landmask GeoTIFF file
+            Local file path to the cached land mask GeoTIFF.
+            
+        Raises:
+            RuntimeError: If land mask registry was not loaded successfully.
+            
+        Note:
+            This is an internal method used primarily during merge operations.
+            End users typically don't need to call this directly.
         """
         if not self._landmask_pooch:
             raise RuntimeError("Land mask registry not loaded. Check initialization.")
@@ -203,27 +317,44 @@ class GeoTessera:
         return self._landmask_pooch.fetch(landmask_filename, progressbar=progressbar)
     
     def _list_available_landmasks(self) -> Iterator[Tuple[float, float]]:
-        """List all available landmask GeoTIFF files as (lat, lon) tuples.
+        """Iterate over available land mask tiles.
         
-        The landmask TIFFs contain binary land/water data and optimal projection metadata.
+        Provides access to the catalog of land mask GeoTIFF files. Each file
+        contains binary land/water classification and coordinate system metadata
+        for its corresponding embedding tile.
         
         Returns:
-            Iterator of tuples containing (latitude, longitude) for each available landmask
+            Iterator yielding (latitude, longitude) tuples for each available
+            land mask, sorted by latitude then longitude.
+            
+        Note:
+            Land masks are auxiliary data used primarily for coordinate alignment
+            during tile merging operations.
         """
         return iter(self._available_landmasks)
     
     def _count_available_landmasks(self) -> int:
-        """Get the total number of available landmask GeoTIFF files.
-        
-        The landmask TIFFs contain binary land/water data and optimal projection metadata.
+        """Count total number of available land mask files.
         
         Returns:
-            Total count of available landmask files
+            Number of land mask GeoTIFF files in the registry.
+            
+        Note:
+            Land mask availability may be limited compared to embedding tiles.
+            Not all embedding tiles have corresponding land masks.
         """
         return len(self._available_landmasks)
     
     def _parse_available_embeddings(self):
-        """Parse registry to extract available embeddings as (year, lat, lon) tuples."""
+        """Parse registry files to build index of available embedding tiles.
+        
+        Scans through loaded registry files to extract metadata about available
+        tiles. Each tile is identified by year, latitude, and longitude. This
+        method is called automatically when registry files are loaded.
+        
+        The index is stored as a sorted list of (year, lat, lon) tuples for
+        efficient searching and iteration.
+        """
         embeddings = []
         
         if self._pooch and self._pooch.registry:
@@ -255,7 +386,15 @@ class GeoTessera:
         self._available_embeddings = embeddings
     
     def _parse_available_landmasks(self):
-        """Parse land mask registry to extract available land mask files as (lat, lon) tuples."""
+        """Parse land mask registry to index available GeoTIFF files.
+        
+        Land mask files serve dual purposes:
+        1. Provide binary land/water classification (0=water, 1=land)
+        2. Store coordinate reference system metadata for proper georeferencing
+        
+        This method builds an index of available land mask tiles as (lat, lon)
+        tuples for efficient lookup during merge operations.
+        """
         landmasks = []
         
         if not self._landmask_pooch or not self._landmask_pooch.registry:
@@ -281,10 +420,27 @@ class GeoTessera:
         self._available_landmasks = landmasks
     
     def list_available_embeddings(self) -> Iterator[Tuple[int, float, float]]:
-        """List all available embeddings as (year, lat, lon) tuples.
+        """Iterate over all available embedding tiles across all years.
+        
+        Provides an iterator over the complete catalog of available Tessera
+        embeddings. Each tile covers a 0.1° × 0.1° area (approximately 
+        11km × 11km at the equator) and contains embeddings for one year.
         
         Returns:
-            Iterator of tuples containing (year, latitude, longitude) for each available embedding
+            Iterator yielding (year, latitude, longitude) tuples for each
+            available tile. Tiles are sorted by year, then latitude, then
+            longitude.
+            
+        Example:
+            >>> gt = GeoTessera()
+            >>> # Count tiles in a specific region
+            >>> uk_tiles = [(y, lat, lon) for y, lat, lon in gt.list_available_embeddings()
+            ...             if 49 <= lat <= 59 and -8 <= lon <= 2]
+            >>> print(f"UK tiles available: {len(uk_tiles)}")
+            
+        Note:
+            On first call, this method will load registry files for all available
+            years, which may take a few seconds.
         """
         # If no years have been loaded yet, load all available years
         if not self._loaded_years:
@@ -299,22 +455,48 @@ class GeoTessera:
         return iter(self._available_embeddings)
     
     def count_available_embeddings(self) -> int:
-        """Get the total number of available embeddings.
+        """Count total number of available embedding tiles across all years.
         
         Returns:
-            Total count of available embeddings
+            Total number of available embedding tiles in the dataset.
+            
+        Example:
+            >>> gt = GeoTessera()
+            >>> total = gt.count_available_embeddings()
+            >>> print(f"Total tiles available: {total:,}")
         """
         return len(self._available_embeddings)
     
     
     def get_tiles_for_topojson(self, topojson_path: Union[str, Path]) -> List[Tuple[float, float, str]]:
-        """Get all Tessera tiles that intersect with a TopoJSON file geometries.
+        """Find all embedding tiles that intersect with TopoJSON geometries.
+        
+        Analyzes a TopoJSON file containing geographic features and identifies
+        which Tessera embedding tiles overlap with those features. This is useful
+        for efficiently fetching only the tiles needed to cover a specific region
+        or administrative boundary.
         
         Args:
-            topojson_path: Path to the TopoJSON file
+            topojson_path: Path to a TopoJSON file containing one or more
+                          geographic features (polygons, multipolygons, etc.).
             
         Returns:
-            List of tuples containing (lat, lon, tile_path) for intersecting tiles
+            List of tuples containing (latitude, longitude, tile_path) for each
+            tile that intersects with any geometry in the TopoJSON file. The
+            tile_path can be used with the Pooch fetcher.
+            
+        Example:
+            >>> gt = GeoTessera()
+            >>> # Find tiles covering a city boundary
+            >>> tiles = gt.get_tiles_for_topojson("city_boundary.json")
+            >>> print(f"Need {len(tiles)} tiles to cover the region")
+            >>> # Fetch all tiles
+            >>> for lat, lon, _ in tiles:
+            ...     embedding = gt.get_embedding(lat, lon)
+            
+        Note:
+            The method uses conservative intersection testing - a tile is included
+            if any part of it overlaps with the TopoJSON geometries.
         """
         from shapely.geometry import box
         
@@ -362,19 +544,41 @@ class GeoTessera:
                                    output_path: str = "topojson_tiles.tiff",
                                    bands: List[int] = [0, 1, 2],
                                    normalize: bool = True) -> str:
-        """Export a high-resolution TIFF of overlapping Tessera tiles with optional TopoJSON boundary.
+        """Create a GeoTIFF mosaic of embeddings covering a TopoJSON region.
         
-        This creates a clean mosaic without legends, titles, or decorations - just the 
-        false-color tile imagery and optionally the TopoJSON boundary overlay.
+        Generates a georeferenced TIFF image by mosaicking all Tessera tiles that
+        intersect with the geometries in a TopoJSON file. The output is a clean
+        satellite-style visualization without any overlays or decorations.
         
         Args:
-            topojson_path: Path to the TopoJSON file
-            output_path: Path for the output TIFF file
-            bands: Three band indices to visualize as RGB
-            normalize: Whether to normalize band values
+            topojson_path: Path to TopoJSON file defining the region of interest.
+            output_path: Output filename for the GeoTIFF (default: "topojson_tiles.tiff").
+            bands: Three embedding channel indices to map to RGB. Default [0,1,2]
+                   uses the first three channels. Try different combinations to
+                   highlight different features.
+            normalize: If True, normalizes each band to 0-1 range for better
+                      contrast. If False, uses raw embedding values.
             
         Returns:
-            Path to the created TIFF file
+            Path to the created GeoTIFF file.
+            
+        Raises:
+            ImportError: If rasterio is not installed.
+            ValueError: If no tiles overlap with the TopoJSON region.
+            
+        Example:
+            >>> gt = GeoTessera()
+            >>> # Create false-color image of a national park
+            >>> gt.visualize_topojson_as_tiff(
+            ...     "park_boundary.json",
+            ...     "park_tessera.tiff",
+            ...     bands=[10, 20, 30]  # Custom band combination
+            ... )
+            
+        Note:
+            The output TIFF includes georeferencing information and can be
+            opened in GIS software like QGIS or ArcGIS. Large regions may
+            take significant time to process and require substantial memory.
         """
         try:
             import rasterio
@@ -516,18 +720,42 @@ class GeoTessera:
     def export_single_tile_as_tiff(self, lat: float, lon: float, output_path: str,
                                    year: int = 2024, bands: List[int] = [0, 1, 2],
                                    normalize: bool = True) -> str:
-        """Export a single Tessera tile as a GeoTIFF.
+        """Export a single Tessera embedding tile as a georeferenced GeoTIFF.
+        
+        Creates a GeoTIFF file from a single embedding tile, selecting three
+        channels to visualize as RGB. The output includes proper georeferencing
+        metadata for use in GIS applications.
         
         Args:
-            lat: Latitude coordinate
-            lon: Longitude coordinate
-            output_path: Path for the output TIFF file
-            year: Year of the embedding (default: 2024)
-            bands: Three band indices to visualize as RGB
-            normalize: Whether to normalize band values
+            lat: Latitude of tile in decimal degrees (rounded to 0.1° grid).
+            lon: Longitude of tile in decimal degrees (rounded to 0.1° grid).
+            output_path: Filename for the output GeoTIFF.
+            year: Year of embeddings to export (2017-2024).
+            bands: Three channel indices to map to RGB. Each index must be
+                   between 0-127. Different combinations highlight different
+                   features (e.g., vegetation, water, urban areas).
+            normalize: If True, stretches values to use full 0-255 range for
+                      better visualization. If False, preserves relative values.
             
         Returns:
-            Path to the created TIFF file
+            Path to the created GeoTIFF file.
+            
+        Raises:
+            ImportError: If rasterio is not installed.
+            ValueError: If bands list doesn't contain exactly 3 indices.
+            
+        Example:
+            >>> gt = GeoTessera()
+            >>> # Export a tile over Paris with custom visualization
+            >>> gt.export_single_tile_as_tiff(
+            ...     lat=48.85, lon=2.35,
+            ...     output_path="paris_2024.tiff",
+            ...     bands=[25, 50, 75]  # Custom band selection
+            ... )
+            
+        Note:
+            Output files can be large (typically 10-50 MB per tile). The GeoTIFF
+            uses LZW compression to reduce file size.
         """
         try:
             import rasterio
@@ -593,23 +821,36 @@ class GeoTessera:
     
     def _merge_landmasks_for_region(self, bounds: Tuple[float, float, float, float], 
                               output_path: str, target_crs: str = "EPSG:4326") -> str:
-        """Merge multiple landmask GeoTIFF tiles for a region without coordinate skew.
+        """Merge land mask tiles for a geographic region with proper alignment.
         
-        The landmask TIFFs serve dual purposes:
-        1. Binary land/water distinction (0=water, 1=land pixel values)
-        2. Coordinate reference system metadata for proper georeferencing
+        Combines multiple land mask GeoTIFF tiles into a single file, handling
+        coordinate system differences between tiles. Each tile may use a different
+        optimal projection (e.g., different UTM zones), so this method reprojects
+        all tiles to a common coordinate system before merging.
         
-        This method uses the optimal projection information from each tile's GeoTIFF
-        metadata to perform proper coordinate reprojection and avoid skew issues
-        when merging tiles from different UTM zones.
+        The land masks provide:
+        - Binary classification: 0 = water, 1 = land
+        - Coordinate system metadata for accurate georeferencing
+        - Projection information to avoid coordinate skew
         
         Args:
-            bounds: Tuple of (min_lon, min_lat, max_lon, max_lat) in WGS84
-            output_path: Path for the output merged TIFF file
-            target_crs: Target coordinate reference system (default: EPSG:4326)
+            bounds: Geographic bounds as (min_lon, min_lat, max_lon, max_lat)
+                    in WGS84 decimal degrees.
+            output_path: Filename for the merged GeoTIFF output.
+            target_crs: Target coordinate reference system. Default "EPSG:4326"
+                       (WGS84). Can be any CRS supported by rasterio.
             
         Returns:
-            Path to the created merged binary land/water mask TIFF file
+            Path to the created merged land mask file.
+            
+        Raises:
+            ImportError: If rasterio is not installed.
+            ValueError: If no land mask tiles are found for the region.
+            
+        Note:
+            This is an internal method used by merge_embeddings_for_region().
+            Binary masks are automatically converted to visible grayscale
+            (0 → 0, 1 → 255) for better visualization.
         """
         try:
             import rasterio
@@ -741,22 +982,59 @@ class GeoTessera:
                                    output_path: str, target_crs: str = "EPSG:4326",
                                    bands: List[int] = [0, 1, 2], normalize: bool = True,
                                    year: int = 2024) -> str:
-        """Merge multiple numpy embeddings for a region with proper coordinate alignment.
+        """Create a seamless mosaic of Tessera embeddings for a geographic region.
         
-        This method follows the tessera-util approach: uses land mask TIFF files to get 
-        proper coordinate transforms, creates temporary georeferenced TIFF files from 
-        numpy embeddings, then merges them using rasterio.merge for perfect alignment.
+        Merges multiple embedding tiles into a single georeferenced GeoTIFF,
+        handling coordinate system differences and ensuring perfect alignment.
+        This method uses land mask files to obtain optimal projection metadata
+        for each tile, preventing coordinate skew when tiles span different
+        UTM zones.
+        
+        The process:
+        1. Identifies all tiles intersecting the bounding box
+        2. Downloads embeddings and corresponding land masks
+        3. Creates georeferenced temporary files using land mask CRS metadata
+        4. Reprojects tiles to common coordinate system if needed
+        5. Merges all tiles into seamless mosaic
+        6. Applies normalization across entire mosaic if requested
         
         Args:
-            bounds: Tuple of (min_lon, min_lat, max_lon, max_lat) in WGS84
-            output_path: Path for the output merged TIFF file
-            target_crs: Target coordinate reference system (default: EPSG:4326)
-            bands: List of band indices to use for RGB visualization (default: [0,1,2])
-            normalize: Whether to normalize band values (default: True)
-            year: Year of embeddings to use (default: 2024)
+            bounds: Region bounds as (min_lon, min_lat, max_lon, max_lat) in
+                    decimal degrees. Example: (-0.2, 51.4, 0.1, 51.6) for London.
+            output_path: Filename for the output GeoTIFF mosaic.
+            target_crs: Coordinate system for output. Default "EPSG:4326" (WGS84).
+                       Use local projections (e.g., UTM) for accurate area measurements.
+            bands: Three channel indices to visualize as RGB. Must be in range
+                   0-127. Different combinations highlight different features.
+            normalize: If True, applies global normalization across all merged
+                      tiles for consistent visualization. If False, preserves
+                      original embedding values.
+            year: Year of embeddings to merge (2017-2024).
             
         Returns:
-            Path to the created merged TIFF file
+            Path to the created mosaic GeoTIFF file.
+            
+        Raises:
+            ImportError: If rasterio is not installed.
+            ValueError: If no tiles found for region or invalid parameters.
+            RuntimeError: If land masks are not available for alignment.
+            
+        Example:
+            >>> gt = GeoTessera()
+            >>> # Create mosaic of San Francisco Bay Area
+            >>> bounds = (-122.6, 37.2, -121.7, 38.0)
+            >>> gt.merge_embeddings_for_region(
+            ...     bounds=bounds,
+            ...     output_path="sf_bay_tessera.tiff",
+            ...     bands=[30, 60, 90],  # False color visualization
+            ...     normalize=True
+            ... )
+            
+        Note:
+            Large regions require significant memory and processing time.
+            The output file includes full georeferencing metadata and can
+            be used in any GIS software. Normalization is applied globally
+            across all tiles to ensure consistent coloring.
         """
         try:
             import rasterio

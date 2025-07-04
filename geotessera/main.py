@@ -1,7 +1,34 @@
+"""Example script demonstrating basic GeoTessera usage.
+
+This module shows how to use the Pooch library directly to fetch
+Tessera embedding files. It's primarily a development example and
+test script rather than a user-facing tool.
+
+For normal usage, prefer the GeoTessera class or CLI commands.
+"""
+
 import importlib.resources
 import pooch
 
 def main():
+  """Demonstrate direct Pooch usage for fetching Tessera embeddings.
+  
+  This example shows the low-level approach to downloading embedding
+  files using Pooch directly. It fetches a single embedding file for
+  a specific location near Cambridge, UK.
+  
+  The process demonstrates:
+  1. Creating a Pooch instance with Tessera's data URL
+  2. Loading the registry file for year 2024
+  3. Fetching a specific embedding file with progress bar
+  4. Printing the local cache path where the file was saved
+  
+  Note:
+      This is a development example. For production use, prefer:
+      >>> from geotessera import GeoTessera
+      >>> gt = GeoTessera()
+      >>> embedding = gt.get_embedding(lat=52.05, lon=0.15)
+  """
   version="v1"
   POOCH = pooch.create(
     path=pooch.os_cache("geotessera"),
