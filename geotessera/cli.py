@@ -243,7 +243,6 @@ class GeoJSONRequestHandler(http.server.SimpleHTTPRequestHandler):
             # Serve custom tiles
             tile_path = parsed_path.path[7:]  # Remove '/tiles/' prefix
             full_tile_path = os.path.join(self.tiles_dir, tile_path)
-            print(f"...Looking up tile in {full_tile_path}")
             if os.path.exists(full_tile_path) and os.path.isfile(full_tile_path):
                 try:
                     with open(full_tile_path, 'rb') as tile_file:
@@ -319,12 +318,36 @@ class GeoJSONRequestHandler(http.server.SimpleHTTPRequestHandler):
             margin-right: 10px;
             border: 1px solid #ccc;
         }}
+        .opacity-control {{
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            z-index: 1000;
+            width: 200px;
+        }}
+        .opacity-control h4 {{
+            margin: 0 0 10px 0;
+            font-size: 14px;
+        }}
+        .opacity-slider {{
+            width: 100%;
+            margin: 10px 0;
+        }}
+        .opacity-value {{
+            text-align: center;
+            font-size: 12px;
+            color: #666;
+        }}
     </style>
 </head>
 <body>
     <div class="info">
         <h3>GeoTessera Map Viewer</h3>
-        <p>Interactive map with GeoJSON overlay on OpenStreetMap tiles</p>
+        <p>Interactive map with tessera false color visualization</p>
     </div>
     
     <div class="legend">
@@ -333,6 +356,12 @@ class GeoJSONRequestHandler(http.server.SimpleHTTPRequestHandler):
             <div class="legend-color" style="background-color: transparent; border: 2px solid #ff0000;"></div>
             <span>GeoJSON Outline</span>
         </div>
+    </div>
+    
+    <div class="opacity-control" id="opacityControl" style="display: none;">
+        <h4>Tessera Layer Opacity</h4>
+        <input type="range" min="0" max="100" value="70" class="opacity-slider" id="opacitySlider">
+        <div class="opacity-value" id="opacityValue">70%</div>
     </div>
     
     <div id="map"></div>
@@ -382,6 +411,19 @@ class GeoJSONRequestHandler(http.server.SimpleHTTPRequestHandler):
         // Add tessera layer by default if available
         if (tesseraLayer) {{
             tesseraLayer.addTo(map);
+            
+            // Show opacity control
+            document.getElementById('opacityControl').style.display = 'block';
+            
+            // Set up opacity slider
+            var opacitySlider = document.getElementById('opacitySlider');
+            var opacityValue = document.getElementById('opacityValue');
+            
+            opacitySlider.addEventListener('input', function(e) {{
+                var opacity = e.target.value / 100;
+                tesseraLayer.setOpacity(opacity);
+                opacityValue.textContent = e.target.value + '%';
+            }});
         }}
         
         // Add layer control if we have tessera tiles
@@ -554,34 +596,33 @@ def serve_command(args):
         print(f"Error loading GeoJSON file: {e}")
         sys.exit(1)
     
-    # Generate static tessera tiles if requested
+    # Generate static tessera tiles (always enabled now)
     tiles_dir = None
     temp_tiles_dir = None
     
-    if args.tessera_tiles:
-        if args.tiles_output:
-            # Use specified output directory
-            tiles_output_base = Path(args.tiles_output)
-            tiles_output_base.mkdir(parents=True, exist_ok=True)
-            print(f"Generating static tiles to: {tiles_output_base}")
-        else:
-            # Use temporary directory
-            temp_tiles_dir = tempfile.mkdtemp(prefix="tessera_static_tiles_")
-            tiles_output_base = Path(temp_tiles_dir)
-            print(f"Generating static tiles to temporary directory: {tiles_output_base}")
-        
-        tiles_dir = generate_static_tessera_tiles(
-            geojson_path,
-            str(tiles_output_base),
-            tessera_version=args.version,
-            year=args.year,
-            bands=args.bands
-        )
-        
-        if not tiles_dir:
-            print("Warning: Failed to generate tessera tiles, continuing without them")
-        else:
-            print(f"Static tessera tiles ready for serving")
+    if args.tiles_output:
+        # Use specified output directory
+        tiles_output_base = Path(args.tiles_output)
+        tiles_output_base.mkdir(parents=True, exist_ok=True)
+        print(f"Generating static tiles to: {tiles_output_base}")
+    else:
+        # Use temporary directory
+        temp_tiles_dir = tempfile.mkdtemp(prefix="tessera_static_tiles_")
+        tiles_output_base = Path(temp_tiles_dir)
+        print(f"Generating static tiles to temporary directory: {tiles_output_base}")
+    
+    tiles_dir = generate_static_tessera_tiles(
+        geojson_path,
+        str(tiles_output_base),
+        tessera_version=args.version,
+        year=args.year,
+        bands=args.bands
+    )
+    
+    if not tiles_dir:
+        print("Warning: Failed to generate tessera tiles, continuing without them")
+    else:
+        print(f"Static tessera tiles ready for serving")
     
     # Create custom handler with GeoJSON data and tiles
     def handler_factory(*args, **kwargs):
@@ -636,14 +677,14 @@ Examples:
   # Create a land mask for coordinate alignment (internal use)
   geotessera merge --min-lon 0.0 --min-lat 52.0 --max-lon 1.0 --max-lat 53.0 --output landmask.tiff
   
-  # Start HTTP server with Leaflet.js to display GeoJSON overlay
+  # Start HTTP server with Leaflet.js to display GeoJSON overlay with tessera false color tiles
   geotessera serve --geojson example/CB.geojson --port 8000 --open
   
-  # Start HTTP server with tessera false color visualization tiles
-  geotessera serve --geojson example/CB.geojson --tessera-tiles --bands 0 1 2 --year 2024 --open
+  # Serve with custom band selection for tessera visualization
+  geotessera serve --geojson example/CB.geojson --bands 0 1 2 --year 2024 --open
   
   # Generate static tiles to a specific directory and serve them
-  geotessera serve --geojson example/CB.geojson --tessera-tiles --tiles-output ./static_tiles --open
+  geotessera serve --geojson example/CB.geojson --tiles-output ./static_tiles --open
 
 Valid Target CRS Values:
   EPSG:4326     - WGS84 Geographic (lat/lon) - good for global/large areas
@@ -701,11 +742,10 @@ The 'merge' command creates binary land/water masks for internal coordinate alig
     viz_parser.set_defaults(func=visualize_command)
     
     # Serve command (HTTP server with Leaflet.js)
-    serve_parser = subparsers.add_parser("serve", help="Start HTTP server with Leaflet.js to display GeoJSON overlay on OpenStreetMap")
+    serve_parser = subparsers.add_parser("serve", help="Start HTTP server with Leaflet.js to display GeoJSON overlay with tessera false color tiles")
     serve_parser.add_argument("--geojson", type=str, required=True, help="GeoJSON file to display on the map")
     serve_parser.add_argument("--port", type=int, default=8000, help="Port for HTTP server (default: 8000)")
     serve_parser.add_argument("--open", action="store_true", help="Open browser automatically")
-    serve_parser.add_argument("--tessera-tiles", action="store_true", help="Generate and serve tessera false color visualization tiles")
     serve_parser.add_argument("--tiles-output", type=str, help="Directory to save generated tiles (default: temporary directory)")
     serve_parser.add_argument("--bands", type=int, nargs=3, default=[0, 1, 2], help="Three band indices for tessera visualization (default: 0 1 2)")
     serve_parser.add_argument("--year", type=int, default=2024, help="Year of embeddings for tessera visualization (default: 2024)")
