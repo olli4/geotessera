@@ -11,7 +11,8 @@ dependencies = [
     "geopandas",
     "pandas",
     "matplotlib",
-    "rasterio"
+    "rasterio",
+    "sphinx>=8.2.3",
 ]
 
 [project.scripts]

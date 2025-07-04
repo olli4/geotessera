@@ -124,28 +124,6 @@ def map_command(args):
     plt.close()
 
 
-def merge_command(args):
-    """Handle the merge command to merge land mask tiles for a region."""
-    tessera = GeoTessera(version=args.version)
-    
-    # Parse bounds
-    bounds = (args.min_lon, args.min_lat, args.max_lon, args.max_lat)
-    
-    print(f"Merging land mask tiles for region: {bounds}")
-    print(f"Target CRS: {args.target_crs}")
-    print("Note: This creates a binary land/water mask for coordinate alignment.")
-    
-    # Merge land mask tiles
-    try:
-        output_path = tessera.merge_landmasks_for_region(
-            bounds=bounds,
-            output_path=args.output,
-            target_crs=args.target_crs
-        )
-        print(f"Successfully merged land mask to: {output_path}")
-    except Exception as e:
-        print(f"Error merging land mask tiles: {e}")
-        sys.exit(1)
 
 
 def visualize_command(args):
@@ -675,9 +653,6 @@ Examples:
   # Create a false-color visualization from embeddings for a region
   geotessera visualize --topojson region.geojson --output region_viz.tiff --bands 0 1 2
   
-  # Create a land mask for coordinate alignment (internal use)
-  geotessera merge --min-lon 0.0 --min-lat 52.0 --max-lon 1.0 --max-lat 53.0 --output landmask.tiff
-  
   # Start HTTP server with Leaflet.js to display GeoJSON overlay with tessera false color tiles
   geotessera serve --geojson example/CB.geojson --port 8000 --open
   
@@ -695,7 +670,6 @@ Valid Target CRS Values:
   EPSG:3031     - Antarctic Polar Stereographic (for areas south of 70°S)
 
 Note: The 'visualize' command creates false-color visualizations from numpy embeddings.
-The 'merge' command creates binary land/water masks for internal coordinate alignment.
         """
     )
     
@@ -717,16 +691,6 @@ The 'merge' command creates binary land/water masks for internal coordinate alig
     map_parser.add_argument("--output", type=str, default="embedding_coverage_map.png", help="Output map file path (default: embedding_coverage_map.png)")
     map_parser.set_defaults(func=map_command)
     
-    # Merge command (internal land mask creation)
-    merge_parser = subparsers.add_parser("merge", help="Create binary land mask for a region (internal coordinate alignment)")
-    merge_parser.add_argument("--min-lon", type=float, required=True, help="Minimum longitude")
-    merge_parser.add_argument("--min-lat", type=float, required=True, help="Minimum latitude")
-    merge_parser.add_argument("--max-lon", type=float, required=True, help="Maximum longitude")
-    merge_parser.add_argument("--max-lat", type=float, required=True, help="Maximum latitude")
-    merge_parser.add_argument("--output", type=str, default="landmask.tiff", help="Output land mask file path")
-    merge_parser.add_argument("--target-crs", type=str, default="EPSG:4326", 
-                             help="Target CRS (default: EPSG:4326). See help for valid values.")
-    merge_parser.set_defaults(func=merge_command)
     
     # Visualize command (embedding visualization)
     viz_parser = subparsers.add_parser("visualize", help="Create false-color visualization from embeddings for a TopoJSON/GeoJSON region")

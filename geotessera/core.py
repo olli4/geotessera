@@ -262,13 +262,6 @@ class GeoTessera:
         """
         return len(self._available_embeddings)
     
-    def get_registry_info(self) -> Dict[str, str]:
-        """Get information about all files in the registry.
-        
-        Returns:
-            Dictionary mapping file paths to their checksums
-        """
-        return dict(self._pooch.registry)
     
     def get_tiles_for_topojson(self, topojson_path: Union[str, Path]) -> List[Tuple[float, float, str]]:
         """Get all Tessera tiles that intersect with a TopoJSON file geometries.
@@ -555,7 +548,7 @@ class GeoTessera:
         
         return output_path
     
-    def merge_landmasks_for_region(self, bounds: Tuple[float, float, float, float], 
+    def _merge_landmasks_for_region(self, bounds: Tuple[float, float, float, float], 
                               output_path: str, target_crs: str = "EPSG:4326") -> str:
         """Merge multiple landmask GeoTIFF tiles for a region without coordinate skew.
         
