@@ -31,17 +31,23 @@ pip install git+https://github.com/ucam-eo/geotessera
 Use `uvx` to run the CLI without installation:
 
 ```bash
-# Download embedding for Cambridge, UK
-uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera download --lat 52.05 --lon 0.15
-
 # List available embeddings
-uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera list --limit 10
+uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera list-embeddings --limit 10
 
 # Show dataset information
 uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera info
 
-# Visualize embedding as RGB composite
-uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera visualize --lat 52.05 --lon 0.15 --output cambridge.png
+# Generate a world map showing embedding coverage
+uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera map --output coverage_map.png
+
+# Create a false-color visualization for a region
+uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera visualize --topojson example/CB.geojson --output cambridge_viz.tiff
+
+# Serve an interactive web map with Leaflet.js
+uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera serve --geojson example/CB.geojson --open
+
+# Serve with custom band selection (e.g., bands 30, 60, 90)
+uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera serve --geojson example/CB.geojson --bands 30 60 90 --open
 ```
 
 If you have the repository checked out, then use `--from .` instead.
