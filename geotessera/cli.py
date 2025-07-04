@@ -243,7 +243,7 @@ class GeoJSONRequestHandler(http.server.SimpleHTTPRequestHandler):
             # Serve custom tiles
             tile_path = parsed_path.path[7:]  # Remove '/tiles/' prefix
             full_tile_path = os.path.join(self.tiles_dir, tile_path)
-            
+            print(f"...Looking up tile in {full_tile_path}")
             if os.path.exists(full_tile_path) and os.path.isfile(full_tile_path):
                 try:
                     with open(full_tile_path, 'rb') as tile_file:
@@ -330,12 +330,8 @@ class GeoJSONRequestHandler(http.server.SimpleHTTPRequestHandler):
     <div class="legend">
         <h4>Legend</h4>
         <div class="legend-item">
-            <div class="legend-color" style="background-color: #ff6b6b;"></div>
-            <span>GeoJSON Features</span>
-        </div>
-        <div class="legend-item">
-            <div class="legend-color" style="background-color: #4ecdc4;"></div>
-            <span>Feature Outline</span>
+            <div class="legend-color" style="background-color: transparent; border: 2px solid #ff0000;"></div>
+            <span>GeoJSON Outline</span>
         </div>
     </div>
     
@@ -404,12 +400,12 @@ class GeoJSONRequestHandler(http.server.SimpleHTTPRequestHandler):
         // Function to style GeoJSON features
         function style(feature) {{
             return {{
-                fillColor: getRandomColor(),
+                fillColor: 'transparent',
                 weight: 2,
                 opacity: 1,
-                color: '#4ecdc4',
-                dashArray: '3',
-                fillOpacity: 0.7
+                color: '#ff0000',
+                dashArray: '',
+                fillOpacity: 0
             }};
         }}
 
@@ -454,6 +450,21 @@ class GeoJSONRequestHandler(http.server.SimpleHTTPRequestHandler):
 
 def generate_static_tessera_tiles(geojson_path, output_dir, tessera_version="v1", year=2024, bands=[0, 1, 2]):
     """Generate static tessera false color visualization tiles using gdal2tiles."""
+    # Check if tiles already exist FIRST
+    tiles_output_dir = os.path.join(output_dir, "tiles")
+    if os.path.exists(tiles_output_dir) and os.path.isdir(tiles_output_dir):
+        # Check if tiles directory has content (at least one .png file)
+        has_tiles = False
+        for root, dirs, files in os.walk(tiles_output_dir):
+            if any(f.endswith('.png') for f in files):
+                has_tiles = True
+                break
+        
+        if has_tiles:
+            print(f"Tiles already exist in: {tiles_output_dir}")
+            print("Skipping tile generation. Delete the tiles directory to regenerate.")
+            return tiles_output_dir
+    
     print("Generating static tessera false color visualization tiles...")
     
     # Initialize tessera
@@ -490,22 +501,6 @@ def generate_static_tessera_tiles(geojson_path, output_dir, tessera_version="v1"
         print(f"Generated tessera visualization: {output_path}")
         
         # Generate tiles using gdal2tiles
-        tiles_output_dir = os.path.join(output_dir, "tiles")
-        
-        # Check if tiles already exist
-        if os.path.exists(tiles_output_dir) and os.path.isdir(tiles_output_dir):
-            # Check if tiles directory has content (at least one .png file)
-            has_tiles = False
-            for root, dirs, files in os.walk(tiles_output_dir):
-                if any(f.endswith('.png') for f in files):
-                    has_tiles = True
-                    break
-            
-            if has_tiles:
-                print(f"Tiles already exist in: {tiles_output_dir}")
-                print("Skipping tile generation. Delete the tiles directory to regenerate.")
-                return tiles_output_dir
-        
         print("Generating tiles with gdal2tiles...")
         
         # Run gdal2tiles.py
@@ -515,6 +510,7 @@ def generate_static_tessera_tiles(geojson_path, output_dir, tessera_version="v1"
             "--processes=4",
             "--webviewer=none",
             "--tiledriver=PNG",
+            "--xyz",  # Generate tiles in XYZ format for Leaflet compatibility
             output_path,
             tiles_output_dir
         ]
