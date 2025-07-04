@@ -32,6 +32,7 @@ class GeoTessera:
         self._landmask_pooch = None
         self._available_embeddings = []
         self._available_landmasks = []
+        self._loaded_years = set()  # Track which years have been loaded
         self._initialize_pooch()
     
     def _initialize_pooch(self):
@@ -46,9 +47,8 @@ class GeoTessera:
             registry=None,
         )
         
-        # Load the registry file for numpy embeddings
-        with importlib.resources.open_text("geotessera", "registry_2024.txt") as registry_file:
-            self._pooch.load_registry(registry_file)
+        # Registry files will be loaded lazily when needed
+        # This is handled by _ensure_year_loaded method
         
         # Initialize land mask pooch for landmask GeoTIFF files
         # These TIFFs serve dual purposes:
@@ -64,8 +64,7 @@ class GeoTessera:
         # Load land mask registry dynamically
         self._load_landmask_registry()
         
-        # Parse and cache available embeddings
-        self._parse_available_embeddings()
+        # Parse and cache available landmasks (still load immediately)
         self._parse_available_landmasks()
     
     def _load_landmask_registry(self):
@@ -97,6 +96,39 @@ class GeoTessera:
             print(f"Warning: Could not load land mask registry: {e}")
             # Continue without land mask support if registry loading fails
     
+    def _ensure_year_loaded(self, year: int):
+        """Ensure that the registry for the given year is loaded.
+        
+        Args:
+            year: The year to load the registry for
+        """
+        if year not in self._loaded_years:
+            registry_filename = f"registry_{year}.txt"
+            try:
+                with importlib.resources.open_text("geotessera", registry_filename) as registry_file:
+                    self._pooch.load_registry(registry_file)
+                self._loaded_years.add(year)
+                # Re-parse available embeddings to include the new year
+                self._parse_available_embeddings()
+            except FileNotFoundError:
+                raise ValueError(f"Registry file for year {year} not found. Available years: {self.get_available_years()}")
+    
+    def get_available_years(self) -> List[int]:
+        """Get a list of all available years based on registry files.
+        
+        Returns:
+            List of available years
+        """
+        available_years = []
+        for year in range(2017, 2025):  # Check years 2017-2024
+            registry_filename = f"registry_{year}.txt"
+            try:
+                with importlib.resources.open_text("geotessera", registry_filename):
+                    available_years.append(year)
+            except FileNotFoundError:
+                continue
+        return available_years
+    
     def fetch_embedding(self, lat: float, lon: float, year: int = 2024, 
                        progressbar: bool = True) -> np.ndarray:
         """Fetch and dequantize embedding for a specific location.
@@ -113,6 +145,8 @@ class GeoTessera:
         Returns:
             Dequantized embedding array with shape (height, width, channels)
         """
+        # Ensure the registry for this year is loaded
+        self._ensure_year_loaded(year)
         # Format coordinates to match file naming convention
         grid_name = f"grid_{lon:.2f}_{lat:.2f}"
         
@@ -193,28 +227,29 @@ class GeoTessera:
         """Parse registry to extract available embeddings as (year, lat, lon) tuples."""
         embeddings = []
         
-        for file_path in self._pooch.registry.keys():
-            # Only process .npy files that are not scale files
-            if file_path.endswith('.npy') and not file_path.endswith('_scales.npy'):
-                # Parse file path: e.g., "2024/grid_0.15_52.05/grid_0.15_52.05.npy"
-                parts = file_path.split('/')
-                if len(parts) >= 3:
-                    year_str = parts[0]
-                    grid_name = parts[1]  # e.g., "grid_0.15_52.05"
-                    
-                    try:
-                        year = int(year_str)
+        if self._pooch and self._pooch.registry:
+            for file_path in self._pooch.registry.keys():
+                # Only process .npy files that are not scale files
+                if file_path.endswith('.npy') and not file_path.endswith('_scales.npy'):
+                    # Parse file path: e.g., "2024/grid_0.15_52.05/grid_0.15_52.05.npy"
+                    parts = file_path.split('/')
+                    if len(parts) >= 3:
+                        year_str = parts[0]
+                        grid_name = parts[1]  # e.g., "grid_0.15_52.05"
                         
-                        # Extract coordinates from grid name
-                        if grid_name.startswith('grid_'):
-                            coords = grid_name[5:].split('_')  # Remove "grid_" prefix
-                            if len(coords) == 2:
-                                lon = float(coords[0])
-                                lat = float(coords[1])
-                                embeddings.append((year, lat, lon))
-                                
-                    except (ValueError, IndexError):
-                        continue
+                        try:
+                            year = int(year_str)
+                            
+                            # Extract coordinates from grid name
+                            if grid_name.startswith('grid_'):
+                                coords = grid_name[5:].split('_')  # Remove "grid_" prefix
+                                if len(coords) == 2:
+                                    lon = float(coords[0])
+                                    lat = float(coords[1])
+                                    embeddings.append((year, lat, lon))
+                                    
+                        except (ValueError, IndexError):
+                            continue
         
         # Sort by year, then lat, then lon for consistent ordering
         embeddings.sort(key=lambda x: (x[0], x[1], x[2]))
@@ -252,6 +287,16 @@ class GeoTessera:
         Returns:
             Iterator of tuples containing (year, latitude, longitude) for each available embedding
         """
+        # If no years have been loaded yet, load all available years
+        if not self._loaded_years:
+            available_years = self.get_available_years()
+            for year in available_years:
+                try:
+                    self._ensure_year_loaded(year)
+                except ValueError:
+                    # Skip years that can't be loaded
+                    continue
+        
         return iter(self._available_embeddings)
     
     def count_available_embeddings(self) -> int:
