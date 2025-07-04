@@ -14,7 +14,7 @@ import tempfile
 import shutil
 import subprocess
 import os
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse
 from .core import GeoTessera
 
 
@@ -40,7 +40,7 @@ def info_command(args):
     """Handle the info command."""
     tessera = GeoTessera(version=args.version)
     
-    print(f"GeoTessera Dataset Information")
+    print("GeoTessera Dataset Information")
     print(f"Version: {tessera.version}")
     print(f"Base URL: {tessera._pooch.base_url}")
     print(f"Cache directory: {tessera._pooch.path}")
@@ -601,7 +601,7 @@ def serve_command(args):
     if not tiles_dir:
         print("Warning: Failed to generate tessera tiles, continuing without them")
     else:
-        print(f"Static tessera tiles ready for serving")
+        print("Static tessera tiles ready for serving")
     
     # Create custom handler with GeoJSON data and tiles
     def handler_factory(*args, **kwargs):

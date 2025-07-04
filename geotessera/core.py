@@ -1,7 +1,6 @@
 """Core GeoTessera functionality for accessing geospatial embeddings."""
-import os
 from pathlib import Path
-from typing import Optional, Union, List, Dict, Tuple, Iterator
+from typing import Optional, Union, List, Tuple, Iterator
 import importlib.resources
 import pooch
 import geopandas as gpd
@@ -378,14 +377,13 @@ class GeoTessera:
             Path to the created TIFF file
         """
         try:
-            from PIL import Image
             import rasterio
             from rasterio.transform import from_bounds
         except ImportError:
             raise ImportError("Please install rasterio and pillow for TIFF export: pip install rasterio pillow")
         
         # Read the TopoJSON file
-        gdf = gpd.read_file(topojson_path)
+        gpd.read_file(topojson_path)
         
         # Get overlapping tiles
         tiles = self.get_tiles_for_topojson(topojson_path)
@@ -618,7 +616,6 @@ class GeoTessera:
             from rasterio.warp import calculate_default_transform, reproject
             from rasterio.enums import Resampling
             from rasterio.merge import merge
-            from rasterio.transform import from_bounds
             import tempfile
             import shutil
         except ImportError:
