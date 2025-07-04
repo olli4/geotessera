@@ -382,7 +382,8 @@ class GeoJSONRequestHandler(http.server.SimpleHTTPRequestHandler):
             var tileOptions = {{
                 attribution: 'Tessera False Color Visualization',
                 opacity: 0.7,
-                maxZoom: 15
+                maxNativeZoom: 15,  // Maximum zoom level of actual tiles
+                maxZoom: 20         // Allow zooming beyond native zoom (will scale tiles)
             }};
             
             // Add bounds if available
