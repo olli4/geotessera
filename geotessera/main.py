@@ -9,6 +9,7 @@ For normal usage, prefer the GeoTessera class or CLI commands.
 
 import importlib.resources
 import pooch
+from .core import TESSERA_BASE_URL
 
 def main():
   """Demonstrate direct Pooch usage for fetching Tessera embeddings.
@@ -32,7 +33,7 @@ def main():
   version="v1"
   POOCH = pooch.create(
     path=pooch.os_cache("geotessera"),
-    base_url="https://dl-1.tessera.wiki/{version}/global_0.1_degree_representation/",
+    base_url=f"{TESSERA_BASE_URL}/{version}/global_0.1_degree_representation/",
     version=version,
     registry=None,
   )

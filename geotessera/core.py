@@ -20,6 +20,10 @@ import geopandas as gpd
 import numpy as np
 
 
+# Base URL for Tessera data downloads
+TESSERA_BASE_URL = "https://dl-2.tessera.wiki"
+
+
 class GeoTessera:
     """Interface for accessing Tessera foundation model embeddings.
     
@@ -89,7 +93,7 @@ class GeoTessera:
         # Initialize main pooch for numpy embeddings
         self._pooch = pooch.create(
             path=cache_path,
-            base_url=f"https://dl-1.tessera.wiki/{self.version}/global_0.1_degree_representation/",
+            base_url=f"{TESSERA_BASE_URL}/{self.version}/global_0.1_degree_representation/",
             version=self.version,
             registry=None,
         )
@@ -103,7 +107,7 @@ class GeoTessera:
         # 2. Coordinate reference system metadata for proper georeferencing
         self._landmask_pooch = pooch.create(
             path=cache_path,
-            base_url=f"https://dl-1.tessera.wiki/{self.version}/global_0.1_degree_tiff_all/",
+            base_url=f"{TESSERA_BASE_URL}/{self.version}/global_0.1_degree_tiff_all/",
             version=self.version,
             registry=None,
         )
@@ -136,7 +140,7 @@ class GeoTessera:
             
             # Use pooch.retrieve to get the registry file without known hash
             registry_file = pooch.retrieve(
-                url=f"https://dl-1.tessera.wiki/{self.version}/global_0.1_degree_tiff_all/registry.txt",
+                url=f"{TESSERA_BASE_URL}/{self.version}/global_0.1_degree_tiff_all/registry.txt",
                 known_hash=None,
                 fname="landmask_registry.txt",
                 path=cache_path,
