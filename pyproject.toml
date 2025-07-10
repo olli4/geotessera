@@ -17,6 +17,7 @@ dependencies = [
 
 [project.scripts]
 geotessera = "geotessera.cli:main"
+geotessera-registry = "geotessera.registry_cli:main"
 
 [build-system]
 requires = ["setuptools", "wheel"]
