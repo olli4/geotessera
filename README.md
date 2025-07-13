@@ -25,6 +25,31 @@ GeoTessera provides access to geospatial embeddings from the [Tessera foundation
 pip install git+https://github.com/ucam-eo/geotessera
 ```
 
+## Configuration
+
+GeoTessera automatically caches downloaded data to improve performance. By default, files are cached in the system's default cache directory (`~/.cache/geotessera` on Unix-like systems).
+
+### Custom Cache Directory
+
+You can customize the cache location using the `TESSERA_DATA_DIR` environment variable:
+
+```bash
+# Set custom cache directory
+export TESSERA_DATA_DIR=/path/to/your/cache/directory
+
+# Or set for a single command
+TESSERA_DATA_DIR=/tmp/tessera geotessera info
+```
+
+You can also specify the cache directory programmatically:
+
+```python
+from geotessera import GeoTessera
+
+# Use custom cache directory
+tessera = GeoTessera(cache_dir="/path/to/your/cache")
+```
+
 ## Usage
 
 ### Command Line Interface

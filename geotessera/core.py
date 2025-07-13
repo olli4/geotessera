@@ -96,6 +96,7 @@ class GeoTessera:
             base_url=f"{TESSERA_BASE_URL}/{self.version}/global_0.1_degree_representation/",
             version=self.version,
             registry=None,
+            env="TESSERA_DATA_DIR",
         )
         
         # Registry files will be loaded lazily when needed
@@ -110,6 +111,7 @@ class GeoTessera:
             base_url=f"{TESSERA_BASE_URL}/{self.version}/global_0.1_degree_tiff_all/",
             version=self.version,
             registry=None,
+            env="TESSERA_DATA_DIR", # CR:avsm FIXME this should be a separate subdir
         )
         
         # Load land mask registry dynamically
