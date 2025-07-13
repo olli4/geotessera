@@ -3,11 +3,13 @@ name = "geotessera"
 version = "0.2.0"
 description = "Python library interface to the Tessera geofoundation model embeddings"
 readme = "README.md"
+license = {file = "LICENSE.md"}
 requires-python = ">=3.11"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: ISC License (ISCL)",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
