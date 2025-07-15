@@ -82,7 +82,7 @@ def get_registry_path_for_tile(registry_base_dir: str, year: str, lon: float, la
     Get the full path to the registry file containing a specific tile.
     
     Args:
-        registry_base_dir: Base directory for registry files
+        registry_base_dir: Base directory for registry files (should be the parent directory)
         year: Year string (e.g., "2024")
         lon: Longitude in decimal degrees
         lat: Latitude in decimal degrees
@@ -93,7 +93,7 @@ def get_registry_path_for_tile(registry_base_dir: str, year: str, lon: float, la
     import os
     block_lon, block_lat = get_block_coordinates(lon, lat)
     registry_filename = get_block_registry_filename(year, block_lon, block_lat)
-    return os.path.join(registry_base_dir, "embeddings", registry_filename)
+    return os.path.join(registry_base_dir, "registry", registry_filename)
 
 
 def get_tiles_registry_filename(block_lon: int, block_lat: int) -> str:
@@ -118,7 +118,7 @@ def get_registry_path_for_tiles(registry_base_dir: str, lon: float, lat: float) 
     Get the full path to the tiles registry file containing a specific coordinate.
     
     Args:
-        registry_base_dir: Base directory for registry files
+        registry_base_dir: Base directory for registry files (should be the parent directory)
         lon: Longitude in decimal degrees
         lat: Latitude in decimal degrees
         
@@ -128,7 +128,7 @@ def get_registry_path_for_tiles(registry_base_dir: str, lon: float, lat: float) 
     import os
     block_lon, block_lat = get_block_coordinates(lon, lat)
     registry_filename = get_tiles_registry_filename(block_lon, block_lat)
-    return os.path.join(registry_base_dir, "tiles", registry_filename)
+    return os.path.join(registry_base_dir, "registry", registry_filename)
 
 
 def get_all_blocks_in_range(min_lon: float, max_lon: float, 

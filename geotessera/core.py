@@ -143,7 +143,7 @@ class GeoTessera:
             
             # Download the master tiles registry index
             tiles_index_file = pooch.retrieve(
-                url=f"{TESSERA_BASE_URL}/{self.version}/global_0.1_degree_tiff_all/registry_index.txt",
+                url=f"{TESSERA_BASE_URL}/{self.version}/registry/tiles_registry_index.txt",
                 known_hash=None,
                 fname="tiles_registry_index.txt",
                 path=cache_path,
@@ -165,7 +165,7 @@ class GeoTessera:
         
         # Download the master registry index
         registry_index_file = pooch.retrieve(
-            url=f"{TESSERA_BASE_URL}/{self.version}/global_0.1_degree_representation/registry_index.txt",
+            url=f"{TESSERA_BASE_URL}/{self.version}/registry/registry_index.txt",
             known_hash=None,
             fname="registry_index.txt",
             path=cache_path,
@@ -192,7 +192,7 @@ class GeoTessera:
         registry_filename = get_block_registry_filename(str(year), block_lon, block_lat)
         
         # Download the specific block registry file
-        registry_url = f"{TESSERA_BASE_URL}/{self.version}/global_0.1_degree_representation/{registry_filename}"
+        registry_url = f"{TESSERA_BASE_URL}/{self.version}/registry/{registry_filename}"
         registry_file = pooch.retrieve(
             url=registry_url,
             known_hash=None,
@@ -227,7 +227,7 @@ class GeoTessera:
         registry_filename = get_tiles_registry_filename(block_lon, block_lat)
         
         # Download the specific tile block registry file
-        registry_url = f"{TESSERA_BASE_URL}/{self.version}/global_0.1_degree_tiff_all/{registry_filename}"
+        registry_url = f"{TESSERA_BASE_URL}/{self.version}/registry/{registry_filename}"
         registry_file = pooch.retrieve(
             url=registry_url,
             known_hash=None,

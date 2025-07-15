@@ -121,11 +121,13 @@ def update_representations_command(args):
         print(f"Error: Directory {base_dir} does not exist")
         return
 
-    # Determine registry output directory
+    # Determine registry output directory - go up to parent of base_dir
     if hasattr(args, 'registry_dir') and args.registry_dir:
-        registry_dir = os.path.join(os.path.abspath(args.registry_dir), "embeddings")
+        registry_dir = os.path.join(os.path.abspath(args.registry_dir), "registry")
     else:
-        registry_dir = base_dir
+        # Place registry at same level as global_0.1_degree_representation
+        parent_dir = os.path.dirname(base_dir)
+        registry_dir = os.path.join(parent_dir, "registry")
     
     # Ensure registry directory exists
     os.makedirs(registry_dir, exist_ok=True)
@@ -240,6 +242,27 @@ def update_representations_command(args):
         
         print(f"Master index written with {len(all_registry_files)} registry files")
         print(f"Total blocks processed: {total_blocks}")
+        
+        # Generate master registry.txt that includes all individual registries
+        master_registry_path = os.path.join(registry_dir, "registry.txt")
+        print(f"Generating master registry.txt: {master_registry_path}")
+        
+        with open(master_registry_path, 'w') as f:
+            f.write("# GeoTessera Master Registry\n")
+            f.write("# This file combines all block registries for embeddings\n")
+            f.write(f"# Contains entries from {len(all_registry_files)} block registry files\n\n")
+            
+            total_entries = 0
+            for registry_file in sorted(all_registry_files):
+                if os.path.exists(registry_file):
+                    with open(registry_file, 'r') as reg_f:
+                        for line in reg_f:
+                            line = line.strip()
+                            if line and not line.startswith('#'):
+                                f.write(f"{line}\n")
+                                total_entries += 1
+        
+        print(f"Master registry.txt written with {total_entries} total entries")
 
 
 
@@ -250,11 +273,13 @@ def update_tiles_command(args):
         print(f"Error: Directory {base_dir} does not exist")
         return
 
-    # Determine registry output directory
+    # Determine registry output directory - go up to parent of base_dir
     if hasattr(args, 'registry_dir') and args.registry_dir:
-        registry_dir = os.path.join(os.path.abspath(args.registry_dir), "tiles")
+        registry_dir = os.path.join(os.path.abspath(args.registry_dir), "registry")
     else:
-        registry_dir = base_dir
+        # Place registry at same level as global_0.1_degree_tiff_all
+        parent_dir = os.path.dirname(base_dir)
+        registry_dir = os.path.join(parent_dir, "registry")
     
     # Ensure registry directory exists
     os.makedirs(registry_dir, exist_ok=True)
@@ -348,7 +373,7 @@ def update_tiles_command(args):
 
     # Generate master index of all tile registry files
     if all_registry_files:
-        master_index_path = os.path.join(registry_dir, "registry_index.txt")
+        master_index_path = os.path.join(registry_dir, "tiles_registry_index.txt")
         print(f"\nGenerating master tiles registry index: {master_index_path}")
         
         with open(master_index_path, 'w') as f:
