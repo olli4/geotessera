@@ -134,7 +134,7 @@ def update_representations_command(args):
         
         print(f"\nProcessing year {year}: {len(year_files)} files")
 
-        # Load existing registry (always incremental now)
+        # Load existing registry
         existing_registry = load_existing_registry(registry_file)
         print(f"  Loaded {len(existing_registry)} existing entries")
 
@@ -142,11 +142,29 @@ def update_representations_command(args):
         files_to_process = []
         for file_path in year_files:
             rel_path = os.path.relpath(file_path, base_dir)
-            if rel_path not in existing_registry:
-                files_to_process.append(file_path)
+            
+            if hasattr(args, 'force') and args.force:
+                # Force mode: check if file exists and if checksum matches
+                if rel_path in existing_registry:
+                    # Verify checksum
+                    try:
+                        current_hash = calculate_sha256(file_path)
+                        if current_hash != existing_registry[rel_path]:
+                            print(f"  Checksum mismatch for {rel_path}, will update")
+                            files_to_process.append(file_path)
+                    except Exception as e:
+                        print(f"  Error checking {rel_path}: {e}, will update")
+                        files_to_process.append(file_path)
+                else:
+                    files_to_process.append(file_path)
+            else:
+                # Normal mode: only process if not in registry
+                if rel_path not in existing_registry:
+                    files_to_process.append(file_path)
 
         if not files_to_process:
-            print(f"  No new files to process for year {year}")
+            force_msg = " (with force checking)" if hasattr(args, 'force') and args.force else ""
+            print(f"  No files to process for year {year}{force_msg}")
             continue
 
         print(f"  Processing {len(files_to_process)} files...")
@@ -212,7 +230,7 @@ def update_tiles_command(args):
 
     registry_file = os.path.join(base_dir, "registry.txt")
     
-    # Load existing registry (always incremental now)
+    # Load existing registry
     existing_registry = load_existing_registry(registry_file)
     print(f"Loaded {len(existing_registry)} existing entries")
 
@@ -220,11 +238,29 @@ def update_tiles_command(args):
     files_to_process = []
     for file_path in all_files:
         rel_path = os.path.relpath(file_path, base_dir)
-        if rel_path not in existing_registry:
-            files_to_process.append(file_path)
+        
+        if hasattr(args, 'force') and args.force:
+            # Force mode: check if file exists and if checksum matches
+            if rel_path in existing_registry:
+                # Verify checksum
+                try:
+                    current_hash = calculate_sha256(file_path)
+                    if current_hash != existing_registry[rel_path]:
+                        print(f"  Checksum mismatch for {rel_path}, will update")
+                        files_to_process.append(file_path)
+                except Exception as e:
+                    print(f"  Error checking {rel_path}: {e}, will update")
+                    files_to_process.append(file_path)
+            else:
+                files_to_process.append(file_path)
+        else:
+            # Normal mode: only process if not in registry
+            if rel_path not in existing_registry:
+                files_to_process.append(file_path)
 
     if not files_to_process:
-        print("No new files to process")
+        force_msg = " (with force checking)" if hasattr(args, 'force') and args.force else ""
+        print(f"No files to process{force_msg}")
         return
 
     print(f"Processing {len(files_to_process)} files...")
@@ -292,7 +328,8 @@ def update_command(args):
         # Create a mock args object for the representations command
         repr_args = argparse.Namespace(
             base_dir=repr_dir,
-            workers=args.workers
+            workers=args.workers,
+            force=getattr(args, 'force', False)
         )
         update_representations_command(repr_args)
         processed_any = True
@@ -308,7 +345,8 @@ def update_command(args):
         # Create a mock args object for the tiles command
         tiles_args = argparse.Namespace(
             base_dir=tiles_dir,
-            workers=args.workers
+            workers=args.workers,
+            force=getattr(args, 'force', False)
         )
         update_tiles_command(tiles_args)
         processed_any = True
@@ -385,11 +423,14 @@ Examples:
   # Update with custom worker count
   geotessera-registry update /path/to/data --workers 8
   
+  # Force checksum verification of all files (not just missing ones)
+  geotessera-registry update /path/to/data --force
+  
   # Update only representation data (organized by year)
   geotessera-registry update-representations /path/to/global_0.1_degree_representation
   
-  # Update only tile data (flat structure)
-  geotessera-registry update-tiles /path/to/global_0.1_degree_tiff_all
+  # Update only tile data (flat structure) with force checking
+  geotessera-registry update-tiles /path/to/global_0.1_degree_tiff_all --force
   
   # List existing registry files
   geotessera-registry list /path/to/data
@@ -416,6 +457,8 @@ Directory Structure:
     update_parser.add_argument('base_dir', help='Base directory containing global_0.1_degree_representation and global_0.1_degree_tiff_all subdirectories')
     update_parser.add_argument('--workers', type=int, default=None,
                               help='Number of parallel workers (default: number of CPU cores)')
+    update_parser.add_argument('--force', action='store_true',
+                              help='Force checksum verification of all files, not just missing ones')
     update_parser.set_defaults(func=update_command)
     
     # Update representations command
@@ -424,6 +467,8 @@ Directory Structure:
     update_repr_parser.add_argument('base_dir', help='Base directory containing year subdirectories with .npy files')
     update_repr_parser.add_argument('--workers', type=int, default=None,
                                     help='Number of parallel workers (default: number of CPU cores)')
+    update_repr_parser.add_argument('--force', action='store_true',
+                                    help='Force checksum verification of all files, not just missing ones')
     update_repr_parser.set_defaults(func=update_representations_command)
     
     # Update tiles command
@@ -432,6 +477,8 @@ Directory Structure:
     update_tiles_parser.add_argument('base_dir', help='Base directory containing .tiff files')
     update_tiles_parser.add_argument('--workers', type=int, default=None,
                                      help='Number of parallel workers (default: number of CPU cores)')
+    update_tiles_parser.add_argument('--force', action='store_true',
+                                     help='Force checksum verification of all files, not just missing ones')
     update_tiles_parser.set_defaults(func=update_tiles_command)
     
     # List command
