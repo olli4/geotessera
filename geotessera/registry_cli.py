@@ -70,6 +70,17 @@ def find_npy_files(base_dir):
     return files_by_year
 
 
+def find_tiff_files(base_dir):
+    """Find all .tiff files (no year organization)."""
+    all_files = []
+    for root, _, files in os.walk(base_dir):
+        for file in files:
+            if file.endswith('.tiff'):
+                file_path = os.path.join(root, file)
+                all_files.append(file_path)
+    return all_files
+
+
 def generate_master_registry(base_dir, registry_files):
     """Generate a master registry.txt file listing all registry files."""
     master_registry_path = os.path.join(base_dir, "registry.txt")
@@ -93,8 +104,8 @@ def generate_master_registry(base_dir, registry_files):
     print(f"Listed {len(sorted_files)} registry files")
 
 
-def update_command(args):
-    """Update registry files for .npy files organized by year."""
+def update_representations_command(args):
+    """Update registry files for .npy representation files organized by year."""
     base_dir = os.path.abspath(args.base_dir)
     if not os.path.exists(base_dir):
         print(f"Error: Directory {base_dir} does not exist")
@@ -105,7 +116,7 @@ def update_command(args):
     print(f"Using {num_workers} parallel workers")
 
     # Find all .npy files organized by year
-    print("Scanning for .npy files...")
+    print("Scanning for .npy representation files...")
     files_by_year = find_npy_files(base_dir)
 
     if not files_by_year:
@@ -123,17 +134,15 @@ def update_command(args):
         
         print(f"\nProcessing year {year}: {len(year_files)} files")
 
-        # Load existing registry if incremental mode
-        existing_registry = {}
-        if args.incremental:
-            existing_registry = load_existing_registry(registry_file)
-            print(f"  Loaded {len(existing_registry)} existing entries")
+        # Load existing registry (always incremental now)
+        existing_registry = load_existing_registry(registry_file)
+        print(f"  Loaded {len(existing_registry)} existing entries")
 
         # Determine which files need processing
         files_to_process = []
         for file_path in year_files:
             rel_path = os.path.relpath(file_path, base_dir)
-            if not args.incremental or rel_path not in existing_registry:
+            if rel_path not in existing_registry:
                 files_to_process.append(file_path)
 
         if not files_to_process:
@@ -173,12 +182,152 @@ def update_command(args):
                 f.write(f"{rel_path} {final_registry[rel_path]}\n")
 
         print(f"  Total entries in registry: {len(final_registry)}")
-        if args.incremental:
-            print(f"  New entries added: {len(new_entries)}")
+        print(f"  New entries added: {len(new_entries)}")
 
-    # Generate master registry if requested
-    if args.generate_master and registry_files:
+    # Always generate master registry
+    if registry_files:
         generate_master_registry(base_dir, registry_files)
+
+
+def update_tiles_command(args):
+    """Update registry file for .tiff tile files."""
+    base_dir = os.path.abspath(args.base_dir)
+    if not os.path.exists(base_dir):
+        print(f"Error: Directory {base_dir} does not exist")
+        return
+
+    # Set number of workers
+    num_workers = args.workers or multiprocessing.cpu_count()
+    print(f"Using {num_workers} parallel workers")
+
+    # Find all .tiff files
+    print("Scanning for .tiff tile files...")
+    all_files = find_tiff_files(base_dir)
+
+    if not all_files:
+        print("No .tiff files found")
+        return
+
+    print(f"Found {len(all_files)} .tiff files")
+
+    registry_file = os.path.join(base_dir, "registry.txt")
+    
+    # Load existing registry (always incremental now)
+    existing_registry = load_existing_registry(registry_file)
+    print(f"Loaded {len(existing_registry)} existing entries")
+
+    # Determine which files need processing
+    files_to_process = []
+    for file_path in all_files:
+        rel_path = os.path.relpath(file_path, base_dir)
+        if rel_path not in existing_registry:
+            files_to_process.append(file_path)
+
+    if not files_to_process:
+        print("No new files to process")
+        return
+
+    print(f"Processing {len(files_to_process)} files...")
+
+    # Process files in parallel
+    new_entries = {}
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        # Submit all tasks
+        future_to_file = {
+            executor.submit(process_file, (file_path, base_dir)): file_path
+            for file_path in files_to_process
+        }
+
+        # Process completed tasks
+        completed = 0
+        for future in as_completed(future_to_file):
+            rel_path, file_hash = future.result()
+            if rel_path and file_hash:
+                new_entries[rel_path] = file_hash
+
+            completed += 1
+            if completed % 1000 == 0:
+                print(f"  Processed {completed}/{len(files_to_process)} files...")
+
+    # Merge with existing registry
+    final_registry = existing_registry.copy()
+    final_registry.update(new_entries)
+
+    # Write registry file
+    print(f"Writing registry file: {registry_file}")
+    with open(registry_file, 'w') as f:
+        for rel_path in sorted(final_registry.keys()):
+            f.write(f"{rel_path} {final_registry[rel_path]}\n")
+
+    print(f"Total entries in registry: {len(final_registry)}")
+    print(f"New entries added: {len(new_entries)}")
+
+    # Create master registry file with single entry for tiles
+    master_registry_path = os.path.join(base_dir, "registry.txt")
+    print(f"\nMaster registry for tiles: {master_registry_path}")
+    print("Single registry file contains all tile entries")
+
+
+def update_command(args):
+    """Update registry files for both representation and tile data."""
+    base_dir = os.path.abspath(args.base_dir)
+    if not os.path.exists(base_dir):
+        print(f"Error: Directory {base_dir} does not exist")
+        return
+
+    print(f"Scanning base directory: {base_dir}")
+    
+    # Look for both expected directories
+    repr_dir = os.path.join(base_dir, "global_0.1_degree_representation")
+    tiles_dir = os.path.join(base_dir, "global_0.1_degree_tiff_all")
+    
+    processed_any = False
+    
+    # Process representations if directory exists
+    if os.path.exists(repr_dir):
+        print(f"\n{'='*60}")
+        print("PROCESSING REPRESENTATIONS")
+        print(f"{'='*60}")
+        
+        # Create a mock args object for the representations command
+        repr_args = argparse.Namespace(
+            base_dir=repr_dir,
+            workers=args.workers
+        )
+        update_representations_command(repr_args)
+        processed_any = True
+    else:
+        print(f"Representations directory not found: {repr_dir}")
+    
+    # Process tiles if directory exists
+    if os.path.exists(tiles_dir):
+        print(f"\n{'='*60}")
+        print("PROCESSING TILES")
+        print(f"{'='*60}")
+        
+        # Create a mock args object for the tiles command
+        tiles_args = argparse.Namespace(
+            base_dir=tiles_dir,
+            workers=args.workers
+        )
+        update_tiles_command(tiles_args)
+        processed_any = True
+    else:
+        print(f"Tiles directory not found: {tiles_dir}")
+    
+    if not processed_any:
+        print("No data directories found. Expected:")
+        print(f"  - {repr_dir}")
+        print(f"  - {tiles_dir}")
+        return
+    
+    print(f"\n{'='*60}")
+    print("REGISTRY UPDATE COMPLETE")
+    print(f"{'='*60}")
+    if os.path.exists(repr_dir):
+        print(f"Representations: {repr_dir}")
+    if os.path.exists(tiles_dir):
+        print(f"Tiles: {tiles_dir}")
 
 
 def list_command(args):
@@ -230,14 +379,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Generate/update registry files for all years
+  # Update registry files for both representation and tile data (recommended)
   geotessera-registry update /path/to/data
   
-  # Update incrementally (only process new files)
-  geotessera-registry update /path/to/data --incremental
+  # Update with custom worker count
+  geotessera-registry update /path/to/data --workers 8
   
-  # Generate with custom worker count and create master registry
-  geotessera-registry update /path/to/data --workers 8 --generate-master
+  # Update only representation data (organized by year)
+  geotessera-registry update-representations /path/to/global_0.1_degree_representation
+  
+  # Update only tile data (flat structure)
+  geotessera-registry update-tiles /path/to/global_0.1_degree_tiff_all
   
   # List existing registry files
   geotessera-registry list /path/to/data
@@ -245,21 +397,42 @@ Examples:
 This tool is intended for GeoTessera data maintainers to generate the registry
 files that are distributed with the package. End users typically don't need
 to use this tool.
+
+Note: Incremental operation is now the default behavior and master registry
+generation is always enabled.
+
+Directory Structure:
+  The 'update' command expects to find these subdirectories:
+  - global_0.1_degree_representation/  (contains .npy files organized by year)
+  - global_0.1_degree_tiff_all/        (contains .tiff files in flat structure)
         """
     )
     
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
     
-    # Update command
-    update_parser = subparsers.add_parser('update', help='Generate or update registry files')
-    update_parser.add_argument('base_dir', help='Base directory containing year subdirectories')
+    # Update command (processes both directories)
+    update_parser = subparsers.add_parser('update', 
+                                         help='Update registry files for both representation and tile data')
+    update_parser.add_argument('base_dir', help='Base directory containing global_0.1_degree_representation and global_0.1_degree_tiff_all subdirectories')
     update_parser.add_argument('--workers', type=int, default=None,
                               help='Number of parallel workers (default: number of CPU cores)')
-    update_parser.add_argument('--incremental', action='store_true',
-                              help='Update existing registry files instead of regenerating')
-    update_parser.add_argument('--generate-master', action='store_true',
-                              help='Generate a master registry.txt file listing all registry files')
     update_parser.set_defaults(func=update_command)
+    
+    # Update representations command
+    update_repr_parser = subparsers.add_parser('update-representations', 
+                                               help='Generate or update registry files for representation data (.npy files organized by year)')
+    update_repr_parser.add_argument('base_dir', help='Base directory containing year subdirectories with .npy files')
+    update_repr_parser.add_argument('--workers', type=int, default=None,
+                                    help='Number of parallel workers (default: number of CPU cores)')
+    update_repr_parser.set_defaults(func=update_representations_command)
+    
+    # Update tiles command
+    update_tiles_parser = subparsers.add_parser('update-tiles',
+                                                help='Generate or update registry file for tile data (.tiff files in flat structure)')
+    update_tiles_parser.add_argument('base_dir', help='Base directory containing .tiff files')
+    update_tiles_parser.add_argument('--workers', type=int, default=None,
+                                     help='Number of parallel workers (default: number of CPU cores)')
+    update_tiles_parser.set_defaults(func=update_tiles_command)
     
     # List command
     list_parser = subparsers.add_parser('list', help='List existing registry files')
