@@ -15,6 +15,13 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from collections import defaultdict
 import multiprocessing
 
+from .registry_utils import (
+    get_block_coordinates, 
+    get_block_registry_filename,
+    parse_grid_coordinates,
+    BLOCK_SIZE
+)
+
 
 def calculate_sha256(file_path):
     """Calculate SHA256 hash of a file."""
@@ -27,10 +34,13 @@ def calculate_sha256(file_path):
 
 def process_file(args):
     """Process a single file and return its relative path and hash."""
-    file_path, base_dir = args
+    file_path, base_dir, skip_checksum = args
     try:
         rel_path = os.path.relpath(file_path, base_dir)
-        file_hash = calculate_sha256(file_path)
+        if skip_checksum:
+            file_hash = ""
+        else:
+            file_hash = calculate_sha256(file_path)
         return rel_path, file_hash
     except Exception as e:
         print(f"Error processing {file_path}: {e}")
@@ -51,9 +61,9 @@ def load_existing_registry(registry_path):
     return registry
 
 
-def find_npy_files(base_dir):
-    """Find all .npy files and organize them by year."""
-    files_by_year = defaultdict(list)
+def find_npy_files_by_blocks(base_dir):
+    """Find all .npy files and organize them by year and block."""
+    files_by_year_and_block = defaultdict(lambda: defaultdict(list))
 
     for root, _, files in os.walk(base_dir):
         for file in files:
@@ -65,243 +75,294 @@ def find_npy_files(base_dir):
                 path_parts = rel_path.split(os.sep)
                 if len(path_parts) > 0 and path_parts[0].isdigit() and len(path_parts[0]) == 4:
                     year = path_parts[0]
-                    files_by_year[year].append(file_path)
+                    
+                    # Extract coordinates from the grid directory name
+                    grid_dir = os.path.basename(os.path.dirname(file_path))
+                    lon, lat = parse_grid_coordinates(grid_dir)
+                    
+                    if lon is not None and lat is not None:
+                        block_lon, block_lat = get_block_coordinates(lon, lat)
+                        block_key = (block_lon, block_lat)
+                        files_by_year_and_block[year][block_key].append(file_path)
 
-    return files_by_year
+    return files_by_year_and_block
 
 
-def find_tiff_files(base_dir):
-    """Find all .tiff files (no year organization)."""
-    all_files = []
+
+
+def find_tiff_files_by_blocks(base_dir):
+    """Find all .tiff files and organize them by block."""
+    files_by_block = defaultdict(list)
+
     for root, _, files in os.walk(base_dir):
         for file in files:
             if file.endswith('.tiff'):
                 file_path = os.path.join(root, file)
-                all_files.append(file_path)
-    return all_files
+                
+                # Extract coordinates from the tiff filename (e.g., grid_-120.55_53.45.tiff)
+                filename = os.path.basename(file_path)
+                tiff_name = filename.replace('.tiff', '')
+                lon, lat = parse_grid_coordinates(tiff_name)
+                
+                if lon is not None and lat is not None:
+                    block_lon, block_lat = get_block_coordinates(lon, lat)
+                    block_key = (block_lon, block_lat)
+                    files_by_block[block_key].append(file_path)
+
+    return files_by_block
 
 
-def generate_master_registry(base_dir, registry_files):
-    """Generate a master registry.txt file listing all registry files."""
-    master_registry_path = os.path.join(base_dir, "registry.txt")
-    
-    print("\nGenerating master registry file...")
-    
-    # Sort registry files by year
-    sorted_files = sorted(registry_files)
-    
-    with open(master_registry_path, 'w') as f:
-        f.write("# GeoTessera Master Registry Index\n")
-        f.write("# Lists all available year-specific registry files\n")
-        f.write("# Format: registry_YYYY.txt\n\n")
-        
-        for registry_file in sorted_files:
-            # Extract just the filename without path
-            filename = os.path.basename(registry_file)
-            f.write(f"{filename}\n")
-    
-    print(f"Master registry written to: {master_registry_path}")
-    print(f"Listed {len(sorted_files)} registry files")
 
 
 def update_representations_command(args):
-    """Update registry files for .npy representation files organized by year."""
+    """Update block-based registry files for .npy representation files."""
     base_dir = os.path.abspath(args.base_dir)
     if not os.path.exists(base_dir):
         print(f"Error: Directory {base_dir} does not exist")
         return
 
+    # Determine registry output directory
+    if hasattr(args, 'registry_dir') and args.registry_dir:
+        registry_dir = os.path.join(os.path.abspath(args.registry_dir), "embeddings")
+    else:
+        registry_dir = base_dir
+    
+    # Ensure registry directory exists
+    os.makedirs(registry_dir, exist_ok=True)
+    print(f"Registry files will be written to: {registry_dir}")
+
     # Set number of workers
     num_workers = args.workers or multiprocessing.cpu_count()
     print(f"Using {num_workers} parallel workers")
+    
+    if getattr(args, 'skip_checksum', False):
+        print("WARNING: Skipping checksum calculation - registry will not verify file integrity")
 
-    # Find all .npy files organized by year
+    # Find all .npy files organized by year and block
     print("Scanning for .npy representation files...")
-    files_by_year = find_npy_files(base_dir)
+    files_by_year_and_block = find_npy_files_by_blocks(base_dir)
 
-    if not files_by_year:
+    if not files_by_year_and_block:
         print("No .npy files found")
         return
 
-    print(f"Found files for years: {', '.join(sorted(files_by_year.keys()))}")
-
-    registry_files = []
-
+    total_blocks = 0
+    all_registry_files = []
+    
     # Process each year
-    for year, year_files in sorted(files_by_year.items()):
-        registry_file = os.path.join(base_dir, f"registry_{year}.txt")
-        registry_files.append(registry_file)
+    for year in sorted(files_by_year_and_block.keys()):
+        blocks_for_year = files_by_year_and_block[year]
+        print(f"\nProcessing year {year}: {len(blocks_for_year)} blocks")
+        total_blocks += len(blocks_for_year)
         
-        print(f"\nProcessing year {year}: {len(year_files)} files")
+        year_registry_files = []
+
+        # Process each block within the year
+        for (block_lon, block_lat), block_files in sorted(blocks_for_year.items()):
+            registry_filename = get_block_registry_filename(year, block_lon, block_lat)
+            registry_file = os.path.join(registry_dir, registry_filename)
+            year_registry_files.append(registry_file)
+            all_registry_files.append(registry_file)
+            
+            print(f"  Block ({block_lon}, {block_lat}): {len(block_files)} files -> {registry_filename}")
+
+            # Load existing registry
+            existing_registry = load_existing_registry(registry_file)
+            
+            # Determine which files need processing
+            files_to_process = []
+            for file_path in block_files:
+                rel_path = os.path.relpath(file_path, base_dir)
+                
+                if hasattr(args, 'force') and args.force:
+                    if rel_path in existing_registry:
+                        try:
+                            current_hash = calculate_sha256(file_path)
+                            if current_hash != existing_registry[rel_path]:
+                                files_to_process.append(file_path)
+                        except Exception as e:
+                            print(f"    Error checking {rel_path}: {e}, will update")
+                            files_to_process.append(file_path)
+                    else:
+                        files_to_process.append(file_path)
+                else:
+                    if rel_path not in existing_registry:
+                        files_to_process.append(file_path)
+
+            if not files_to_process:
+                continue
+
+            print(f"    Processing {len(files_to_process)} files...")
+
+            # Process files in parallel
+            new_entries = {}
+            skip_checksum = getattr(args, 'skip_checksum', False)
+            with ProcessPoolExecutor(max_workers=num_workers) as executor:
+                future_to_file = {
+                    executor.submit(process_file, (file_path, base_dir, skip_checksum)): file_path
+                    for file_path in files_to_process
+                }
+
+                for future in as_completed(future_to_file):
+                    rel_path, file_hash = future.result()
+                    if rel_path and file_hash:
+                        new_entries[rel_path] = file_hash
+
+            # Merge with existing registry
+            final_registry = existing_registry.copy()
+            final_registry.update(new_entries)
+
+            # Write registry file
+            with open(registry_file, 'w') as f:
+                for rel_path in sorted(final_registry.keys()):
+                    checksum = final_registry[rel_path]
+                    if checksum:
+                        f.write(f"{rel_path} {checksum}\n")
+                    else:
+                        f.write(f"{rel_path}\n")
+
+            print(f"    Written: {len(final_registry)} total entries, {len(new_entries)} new")
+
+    # Generate master index of all registry files
+    if all_registry_files:
+        master_index_path = os.path.join(registry_dir, "registry_index.txt")
+        print(f"\nGenerating master registry index: {master_index_path}")
+        
+        with open(master_index_path, 'w') as f:
+            f.write("# GeoTessera Block Registry Index\n")
+            f.write(f"# Contains {len(all_registry_files)} block registry files\n")
+            f.write(f"# Block size: {BLOCK_SIZE}x{BLOCK_SIZE} degrees\n")
+            f.write("# Format: registry_YYYY_lonX_latY.txt\n\n")
+            
+            for registry_file in sorted(all_registry_files):
+                filename = os.path.basename(registry_file)
+                f.write(f"{filename}\n")
+        
+        print(f"Master index written with {len(all_registry_files)} registry files")
+        print(f"Total blocks processed: {total_blocks}")
+
+
+
+def update_tiles_command(args):
+    """Update block-based registry files for .tiff tile files."""
+    base_dir = os.path.abspath(args.base_dir)
+    if not os.path.exists(base_dir):
+        print(f"Error: Directory {base_dir} does not exist")
+        return
+
+    # Determine registry output directory
+    if hasattr(args, 'registry_dir') and args.registry_dir:
+        registry_dir = os.path.join(os.path.abspath(args.registry_dir), "tiles")
+    else:
+        registry_dir = base_dir
+    
+    # Ensure registry directory exists
+    os.makedirs(registry_dir, exist_ok=True)
+    print(f"Registry files will be written to: {registry_dir}")
+
+    # Set number of workers
+    num_workers = args.workers or multiprocessing.cpu_count()
+    print(f"Using {num_workers} parallel workers")
+    
+    if getattr(args, 'skip_checksum', False):
+        print("WARNING: Skipping checksum calculation - registry will not verify file integrity")
+
+    # Find all .tiff files organized by block
+    print("Scanning for .tiff tile files...")
+    files_by_block = find_tiff_files_by_blocks(base_dir)
+
+    if not files_by_block:
+        print("No .tiff files found")
+        return
+
+    total_blocks = len(files_by_block)
+    all_registry_files = []
+    
+    print(f"Found {total_blocks} blocks with TIFF files")
+
+    # Process each block
+    for (block_lon, block_lat), block_files in sorted(files_by_block.items()):
+        # For tiles, we don't have years, so use a generic naming scheme
+        registry_filename = f"registry_tiles_lon{block_lon}_lat{block_lat}.txt"
+        registry_file = os.path.join(registry_dir, registry_filename)
+        all_registry_files.append(registry_file)
+        
+        print(f"  Block ({block_lon}, {block_lat}): {len(block_files)} files -> {registry_filename}")
 
         # Load existing registry
         existing_registry = load_existing_registry(registry_file)
-        print(f"  Loaded {len(existing_registry)} existing entries")
-
+        
         # Determine which files need processing
         files_to_process = []
-        for file_path in year_files:
+        for file_path in block_files:
             rel_path = os.path.relpath(file_path, base_dir)
             
             if hasattr(args, 'force') and args.force:
-                # Force mode: check if file exists and if checksum matches
                 if rel_path in existing_registry:
-                    # Verify checksum
                     try:
                         current_hash = calculate_sha256(file_path)
                         if current_hash != existing_registry[rel_path]:
-                            print(f"  Checksum mismatch for {rel_path}, will update")
                             files_to_process.append(file_path)
                     except Exception as e:
-                        print(f"  Error checking {rel_path}: {e}, will update")
+                        print(f"    Error checking {rel_path}: {e}, will update")
                         files_to_process.append(file_path)
                 else:
                     files_to_process.append(file_path)
             else:
-                # Normal mode: only process if not in registry
                 if rel_path not in existing_registry:
                     files_to_process.append(file_path)
 
         if not files_to_process:
-            force_msg = " (with force checking)" if hasattr(args, 'force') and args.force else ""
-            print(f"  No files to process for year {year}{force_msg}")
             continue
 
-        print(f"  Processing {len(files_to_process)} files...")
+        print(f"    Processing {len(files_to_process)} files...")
 
         # Process files in parallel
         new_entries = {}
+        skip_checksum = getattr(args, 'skip_checksum', False)
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            # Submit all tasks
             future_to_file = {
-                executor.submit(process_file, (file_path, base_dir)): file_path
+                executor.submit(process_file, (file_path, base_dir, skip_checksum)): file_path
                 for file_path in files_to_process
             }
 
-            # Process completed tasks
-            completed = 0
             for future in as_completed(future_to_file):
                 rel_path, file_hash = future.result()
                 if rel_path and file_hash:
                     new_entries[rel_path] = file_hash
-
-                completed += 1
-                if completed % 1000 == 0:
-                    print(f"    Processed {completed}/{len(files_to_process)} files...")
 
         # Merge with existing registry
         final_registry = existing_registry.copy()
         final_registry.update(new_entries)
 
         # Write registry file
-        print(f"  Writing registry file: {registry_file}")
         with open(registry_file, 'w') as f:
             for rel_path in sorted(final_registry.keys()):
-                f.write(f"{rel_path} {final_registry[rel_path]}\n")
+                checksum = final_registry[rel_path]
+                if checksum:
+                    f.write(f"{rel_path} {checksum}\n")
+                else:
+                    f.write(f"{rel_path}\n")
 
-        print(f"  Total entries in registry: {len(final_registry)}")
-        print(f"  New entries added: {len(new_entries)}")
+        print(f"    Written: {len(final_registry)} total entries, {len(new_entries)} new")
 
-    # Always generate master registry
-    if registry_files:
-        generate_master_registry(base_dir, registry_files)
-
-
-def update_tiles_command(args):
-    """Update registry file for .tiff tile files."""
-    base_dir = os.path.abspath(args.base_dir)
-    if not os.path.exists(base_dir):
-        print(f"Error: Directory {base_dir} does not exist")
-        return
-
-    # Set number of workers
-    num_workers = args.workers or multiprocessing.cpu_count()
-    print(f"Using {num_workers} parallel workers")
-
-    # Find all .tiff files
-    print("Scanning for .tiff tile files...")
-    all_files = find_tiff_files(base_dir)
-
-    if not all_files:
-        print("No .tiff files found")
-        return
-
-    print(f"Found {len(all_files)} .tiff files")
-
-    registry_file = os.path.join(base_dir, "registry.txt")
-    
-    # Load existing registry
-    existing_registry = load_existing_registry(registry_file)
-    print(f"Loaded {len(existing_registry)} existing entries")
-
-    # Determine which files need processing
-    files_to_process = []
-    for file_path in all_files:
-        rel_path = os.path.relpath(file_path, base_dir)
+    # Generate master index of all tile registry files
+    if all_registry_files:
+        master_index_path = os.path.join(registry_dir, "registry_index.txt")
+        print(f"\nGenerating master tiles registry index: {master_index_path}")
         
-        if hasattr(args, 'force') and args.force:
-            # Force mode: check if file exists and if checksum matches
-            if rel_path in existing_registry:
-                # Verify checksum
-                try:
-                    current_hash = calculate_sha256(file_path)
-                    if current_hash != existing_registry[rel_path]:
-                        print(f"  Checksum mismatch for {rel_path}, will update")
-                        files_to_process.append(file_path)
-                except Exception as e:
-                    print(f"  Error checking {rel_path}: {e}, will update")
-                    files_to_process.append(file_path)
-            else:
-                files_to_process.append(file_path)
-        else:
-            # Normal mode: only process if not in registry
-            if rel_path not in existing_registry:
-                files_to_process.append(file_path)
-
-    if not files_to_process:
-        force_msg = " (with force checking)" if hasattr(args, 'force') and args.force else ""
-        print(f"No files to process{force_msg}")
-        return
-
-    print(f"Processing {len(files_to_process)} files...")
-
-    # Process files in parallel
-    new_entries = {}
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        # Submit all tasks
-        future_to_file = {
-            executor.submit(process_file, (file_path, base_dir)): file_path
-            for file_path in files_to_process
-        }
-
-        # Process completed tasks
-        completed = 0
-        for future in as_completed(future_to_file):
-            rel_path, file_hash = future.result()
-            if rel_path and file_hash:
-                new_entries[rel_path] = file_hash
-
-            completed += 1
-            if completed % 1000 == 0:
-                print(f"  Processed {completed}/{len(files_to_process)} files...")
-
-    # Merge with existing registry
-    final_registry = existing_registry.copy()
-    final_registry.update(new_entries)
-
-    # Write registry file
-    print(f"Writing registry file: {registry_file}")
-    with open(registry_file, 'w') as f:
-        for rel_path in sorted(final_registry.keys()):
-            f.write(f"{rel_path} {final_registry[rel_path]}\n")
-
-    print(f"Total entries in registry: {len(final_registry)}")
-    print(f"New entries added: {len(new_entries)}")
-
-    # Create master registry file with single entry for tiles
-    master_registry_path = os.path.join(base_dir, "registry.txt")
-    print(f"\nMaster registry for tiles: {master_registry_path}")
-    print("Single registry file contains all tile entries")
+        with open(master_index_path, 'w') as f:
+            f.write("# GeoTessera Tiles Block Registry Index\n")
+            f.write(f"# Contains {len(all_registry_files)} block registry files\n")
+            f.write(f"# Block size: {BLOCK_SIZE}x{BLOCK_SIZE} degrees\n")
+            f.write("# Format: registry_tiles_lonX_latY.txt\n\n")
+            
+            for registry_file in sorted(all_registry_files):
+                filename = os.path.basename(registry_file)
+                f.write(f"{filename}\n")
+        
+        print(f"Master tiles index written with {len(all_registry_files)} registry files")
+        print(f"Total blocks processed: {total_blocks}")
 
 
 def update_command(args):
@@ -329,7 +390,9 @@ def update_command(args):
         repr_args = argparse.Namespace(
             base_dir=repr_dir,
             workers=args.workers,
-            force=getattr(args, 'force', False)
+            force=getattr(args, 'force', False),
+            skip_checksum=getattr(args, 'skip_checksum', False),
+            registry_dir=getattr(args, 'registry_dir', None)
         )
         update_representations_command(repr_args)
         processed_any = True
@@ -346,7 +409,9 @@ def update_command(args):
         tiles_args = argparse.Namespace(
             base_dir=tiles_dir,
             workers=args.workers,
-            force=getattr(args, 'force', False)
+            force=getattr(args, 'force', False),
+            skip_checksum=getattr(args, 'skip_checksum', False),
+            registry_dir=getattr(args, 'registry_dir', None)
         )
         update_tiles_command(tiles_args)
         processed_any = True
@@ -420,17 +485,29 @@ Examples:
   # Update registry files for both representation and tile data (recommended)
   geotessera-registry update /path/to/data
   
+  # Update with separate registry output directory
+  geotessera-registry update /path/to/data --registry-dir /path/to/registry
+  
   # Update with custom worker count
   geotessera-registry update /path/to/data --workers 8
   
   # Force checksum verification of all files (not just missing ones)
   geotessera-registry update /path/to/data --force
   
-  # Update only representation data (organized by year)
+  # Skip checksum calculation for quick initialization
+  geotessera-registry update /path/to/data --skip-checksum
+  
+  # Update representation data using block-based registries
   geotessera-registry update-representations /path/to/global_0.1_degree_representation
+  
+  # Update representation data with separate output directory
+  geotessera-registry update-representations /path/to/data --registry-dir /path/to/registry
   
   # Update only tile data (flat structure) with force checking
   geotessera-registry update-tiles /path/to/global_0.1_degree_tiff_all --force
+  
+  # Quick scan without checksums for tiles
+  geotessera-registry update-tiles /path/to/global_0.1_degree_tiff_all --skip-checksum
   
   # List existing registry files
   geotessera-registry list /path/to/data
@@ -439,8 +516,11 @@ This tool is intended for GeoTessera data maintainers to generate the registry
 files that are distributed with the package. End users typically don't need
 to use this tool.
 
-Note: Incremental operation is now the default behavior and master registry
-generation is always enabled.
+Note: This tool creates block-based registries for efficient lazy loading:
+  - Embeddings: Organized into 5x5 degree blocks (registry_YYYY_lonX_latY.txt)
+  - Tiles: Organized into 5x5 degree blocks (registry_tiles_lonX_latY.txt)
+  - Each block contains ~2,500 tiles instead of one massive registry
+  - Registry files are created in subdirectories: registry/embeddings/ and registry/tiles/
 
 Directory Structure:
   The 'update' command expects to find these subdirectories:
@@ -455,30 +535,42 @@ Directory Structure:
     update_parser = subparsers.add_parser('update', 
                                          help='Update registry files for both representation and tile data')
     update_parser.add_argument('base_dir', help='Base directory containing global_0.1_degree_representation and global_0.1_degree_tiff_all subdirectories')
+    update_parser.add_argument('--registry-dir', type=str, default=None,
+                              help='Output directory for registry files (default: same as base_dir)')
     update_parser.add_argument('--workers', type=int, default=None,
                               help='Number of parallel workers (default: number of CPU cores)')
     update_parser.add_argument('--force', action='store_true',
                               help='Force checksum verification of all files, not just missing ones')
+    update_parser.add_argument('--skip-checksum', action='store_true',
+                              help='Skip checksum calculation for quick initialization')
     update_parser.set_defaults(func=update_command)
     
     # Update representations command
     update_repr_parser = subparsers.add_parser('update-representations', 
-                                               help='Generate or update registry files for representation data (.npy files organized by year)')
+                                               help='Generate block-based registry files for representation data (5x5 degree blocks)')
     update_repr_parser.add_argument('base_dir', help='Base directory containing year subdirectories with .npy files')
+    update_repr_parser.add_argument('--registry-dir', type=str, default=None,
+                                    help='Output directory for registry files (default: same as base_dir)')
     update_repr_parser.add_argument('--workers', type=int, default=None,
                                     help='Number of parallel workers (default: number of CPU cores)')
     update_repr_parser.add_argument('--force', action='store_true',
                                     help='Force checksum verification of all files, not just missing ones')
+    update_repr_parser.add_argument('--skip-checksum', action='store_true',
+                                    help='Skip checksum calculation for quick initialization')
     update_repr_parser.set_defaults(func=update_representations_command)
     
     # Update tiles command
     update_tiles_parser = subparsers.add_parser('update-tiles',
                                                 help='Generate or update registry file for tile data (.tiff files in flat structure)')
     update_tiles_parser.add_argument('base_dir', help='Base directory containing .tiff files')
+    update_tiles_parser.add_argument('--registry-dir', type=str, default=None,
+                                     help='Output directory for registry files (default: same as base_dir)')
     update_tiles_parser.add_argument('--workers', type=int, default=None,
                                      help='Number of parallel workers (default: number of CPU cores)')
     update_tiles_parser.add_argument('--force', action='store_true',
                                      help='Force checksum verification of all files, not just missing ones')
+    update_tiles_parser.add_argument('--skip-checksum', action='store_true',
+                                     help='Skip checksum calculation for quick initialization')
     update_tiles_parser.set_defaults(func=update_tiles_command)
     
     # List command

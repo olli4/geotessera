@@ -19,6 +19,16 @@ import pooch
 import geopandas as gpd
 import numpy as np
 
+from .registry_utils import (
+    get_block_coordinates,
+    get_block_registry_filename,
+    get_registry_path_for_tile,
+    get_tiles_registry_filename,
+    get_registry_path_for_tiles,
+    parse_grid_coordinates,
+    get_tile_name
+)
+
 
 # Base URL for Tessera data downloads
 TESSERA_BASE_URL = "https://dl-2.tessera.wiki"
@@ -75,7 +85,9 @@ class GeoTessera:
         self._landmask_pooch = None
         self._available_embeddings = []
         self._available_landmasks = []
-        self._loaded_years = set()  # Track which years have been loaded
+        self._loaded_blocks = set()  # Track which blocks have been loaded for embeddings
+        self._loaded_tile_blocks = set()  # Track which blocks have been loaded for landmasks
+        self._registry_base_dir = None  # Base directory for block registries
         self._initialize_pooch()
     
     def _initialize_pooch(self):
@@ -114,81 +126,129 @@ class GeoTessera:
             env="TESSERA_DATA_DIR", # CR:avsm FIXME this should be a separate subdir
         )
         
-        # Load land mask registry dynamically
-        self._load_landmask_registry()
+        # Load registry index for block-based registries
+        self._load_registry_index()
         
-        # Parse and cache available landmasks (still load immediately)
-        self._parse_available_landmasks()
+        # Try to load tiles registry index
+        self._load_tiles_registry_index()
     
-    def _load_landmask_registry(self):
-        """Load registry of available land mask GeoTIFF files.
+    def _load_tiles_registry_index(self):
+        """Load the registry index for block-based tile registries.
         
-        Land mask files are auxiliary data that provide:
-        1. Binary land/water classification (pixel values: 0=water, 1=land)
-        2. Optimal coordinate reference system (CRS) for each tile
-        3. Precise georeferencing metadata for coordinate alignment
-        
-        These files are essential for accurate merging of multiple tiles,
-        especially when tiles span different UTM zones or require reprojection.
-        The CRS metadata ensures proper alignment without coordinate skew.
-        
-        Note:
-            This method is called during initialization. The registry download
-            is attempted but failures are handled gracefully, allowing the
-            system to work without land masks if necessary.
+        Downloads and caches the registry index file that lists all
+        available tile block registry files.
         """
         try:
             cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
             
-            # Use pooch.retrieve to get the registry file without known hash
-            registry_file = pooch.retrieve(
-                url=f"{TESSERA_BASE_URL}/{self.version}/global_0.1_degree_tiff_all/registry.txt",
+            # Download the master tiles registry index
+            tiles_index_file = pooch.retrieve(
+                url=f"{TESSERA_BASE_URL}/{self.version}/global_0.1_degree_tiff_all/registry_index.txt",
                 known_hash=None,
-                fname="landmask_registry.txt",
+                fname="tiles_registry_index.txt",
                 path=cache_path,
                 progressbar=True
             )
             
-            # Load the registry into the land mask pooch
-            self._landmask_pooch.load_registry(registry_file)
-            
         except Exception as e:
-            print(f"Warning: Could not load land mask registry: {e}")
-            # Continue without land mask support if registry loading fails
+            print(f"Warning: Could not load tiles registry index: {e}")
+            # Continue without landmask support if registry loading fails
     
-    def _ensure_year_loaded(self, year: int):
-        """Ensure registry data for a specific year is loaded.
+    def _load_registry_index(self):
+        """Load the registry index for block-based registries.
         
-        Tessera embeddings are organized by year, with separate registry files
-        for each year's data. This method lazily loads the registry when first
-        accessing data from a particular year.
+        Downloads and caches the registry index file that lists all
+        available block registry files.
+        """
+        cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
+        self._registry_base_dir = cache_path
+        
+        # Download the master registry index
+        registry_index_file = pooch.retrieve(
+            url=f"{TESSERA_BASE_URL}/{self.version}/global_0.1_degree_representation/registry_index.txt",
+            known_hash=None,
+            fname="registry_index.txt",
+            path=cache_path,
+            progressbar=True
+        )
+    
+    def _ensure_block_loaded(self, year: int, lon: float, lat: float):
+        """Ensure registry data for a specific block is loaded.
+        
+        Loads only the registry file containing the specific coordinates needed,
+        providing efficient lazy loading of registry data.
         
         Args:
-            year: Year to load (e.g., 2024). Must be between 2017-2024.
-            
-        Raises:
-            ValueError: If no registry exists for the specified year.
-            
-        Note:
-            This method is called automatically when fetching embeddings.
-            Users typically don't need to call it directly.
+            year: Year to load (e.g., 2024)
+            lon: Longitude in decimal degrees
+            lat: Latitude in decimal degrees
         """
-        if year not in self._loaded_years:
-            registry_filename = f"registry_{year}.txt"
-            try:
-                with importlib.resources.open_text("geotessera", registry_filename) as registry_file:
-                    self._pooch.load_registry(registry_file)
-                self._loaded_years.add(year)
-                # Re-parse available embeddings to include the new year
-                self._parse_available_embeddings()
-            except FileNotFoundError:
-                raise ValueError(f"Registry file for year {year} not found. Available years: {self.get_available_years()}")
+        block_lon, block_lat = get_block_coordinates(lon, lat)
+        block_key = (year, block_lon, block_lat)
+        
+        if block_key in self._loaded_blocks:
+            return
+            
+        registry_filename = get_block_registry_filename(str(year), block_lon, block_lat)
+        
+        # Download the specific block registry file
+        registry_url = f"{TESSERA_BASE_URL}/{self.version}/global_0.1_degree_representation/{registry_filename}"
+        registry_file = pooch.retrieve(
+            url=registry_url,
+            known_hash=None,
+            fname=registry_filename,
+            path=self._registry_base_dir,
+            progressbar=False  # Don't show progress for individual block downloads
+        )
+        
+        # Load the registry into the pooch instance
+        self._pooch.load_registry(registry_file)
+        self._loaded_blocks.add(block_key)
+        
+        # Update available embeddings cache
+        self._parse_available_embeddings()
+    
+    def _ensure_tile_block_loaded(self, lon: float, lat: float):
+        """Ensure registry data for a specific tile block is loaded.
+        
+        Loads only the registry file containing the specific coordinates needed
+        for landmask tiles, providing efficient lazy loading.
+        
+        Args:
+            lon: Longitude in decimal degrees
+            lat: Latitude in decimal degrees
+        """
+        block_lon, block_lat = get_block_coordinates(lon, lat)
+        block_key = (block_lon, block_lat)
+        
+        if block_key in self._loaded_tile_blocks:
+            return
+            
+        registry_filename = get_tiles_registry_filename(block_lon, block_lat)
+        
+        # Download the specific tile block registry file
+        registry_url = f"{TESSERA_BASE_URL}/{self.version}/global_0.1_degree_tiff_all/{registry_filename}"
+        registry_file = pooch.retrieve(
+            url=registry_url,
+            known_hash=None,
+            fname=registry_filename,
+            path=self._registry_base_dir,
+            progressbar=False  # Don't show progress for individual block downloads
+        )
+        
+        # Load the registry into the landmask pooch instance
+        self._landmask_pooch.load_registry(registry_file)
+        self._loaded_tile_blocks.add(block_key)
+        
+        # Update available landmasks cache
+        self._parse_available_landmasks()
+    
     
     def get_available_years(self) -> List[int]:
         """List all years with available Tessera embeddings.
         
-        Scans for registry files to determine which years have pre-computed
-        embeddings available. Currently supports years 2017-2024.
+        Returns the years that have been loaded in blocks, or the common
+        range of years if no blocks have been loaded yet.
         
         Returns:
             List of years with available data, sorted in ascending order.
@@ -198,15 +258,12 @@ class GeoTessera:
             >>> years = gt.get_available_years()
             >>> print(years)  # [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024]
         """
-        available_years = []
-        for year in range(2017, 2025):  # Check years 2017-2024
-            registry_filename = f"registry_{year}.txt"
-            try:
-                with importlib.resources.open_text("geotessera", registry_filename):
-                    available_years.append(year)
-            except FileNotFoundError:
-                continue
-        return available_years
+        loaded_years = {year for year, _, _ in self._loaded_blocks}
+        if loaded_years:
+            return sorted(loaded_years)
+        else:
+            # Return common range if no blocks loaded yet
+            return list(range(2017, 2025))
     
     def fetch_embedding(self, lat: float, lon: float, year: int = 2024, 
                        progressbar: bool = True) -> np.ndarray:
@@ -247,8 +304,8 @@ class GeoTessera:
             Files are cached after first download. Subsequent requests for the
             same tile will load from cache unless the cache is cleared.
         """
-        # Ensure the registry for this year is loaded
-        self._ensure_year_loaded(year)
+        # Ensure the registry for this coordinate block is loaded
+        self._ensure_block_loaded(year, lon, lat)
         # Format coordinates to match file naming convention
         grid_name = f"grid_{lon:.2f}_{lat:.2f}"
         
@@ -316,6 +373,9 @@ class GeoTessera:
         """
         if not self._landmask_pooch:
             raise RuntimeError("Land mask registry not loaded. Check initialization.")
+        
+        # Ensure the registry for this coordinate block is loaded
+        self._ensure_tile_block_loaded(lon, lat)
         
         # Format coordinates to match file naming convention
         landmask_filename = f"grid_{lon:.2f}_{lat:.2f}.tiff"
