@@ -231,11 +231,6 @@ def update_representations_command(args):
         print(f"\nGenerating master registry index: {master_index_path}")
         
         with open(master_index_path, 'w') as f:
-            f.write("# GeoTessera Block Registry Index\n")
-            f.write(f"# Contains {len(all_registry_files)} block registry files\n")
-            f.write(f"# Block size: {BLOCK_SIZE}x{BLOCK_SIZE} degrees\n")
-            f.write("# Format: registry_YYYY_lonX_latY.txt\n\n")
-            
             for registry_file in sorted(all_registry_files):
                 filename = os.path.basename(registry_file)
                 f.write(f"{filename}\n")
@@ -248,10 +243,6 @@ def update_representations_command(args):
         print(f"Generating master registry.txt: {master_registry_path}")
         
         with open(master_registry_path, 'w') as f:
-            f.write("# GeoTessera Master Registry\n")
-            f.write("# This file combines all block registries for embeddings\n")
-            f.write(f"# Contains entries from {len(all_registry_files)} block registry files\n\n")
-            
             total_entries = 0
             for registry_file in sorted(all_registry_files):
                 if os.path.exists(registry_file):
@@ -377,17 +368,49 @@ def update_tiles_command(args):
         print(f"\nGenerating master tiles registry index: {master_index_path}")
         
         with open(master_index_path, 'w') as f:
-            f.write("# GeoTessera Tiles Block Registry Index\n")
-            f.write(f"# Contains {len(all_registry_files)} block registry files\n")
-            f.write(f"# Block size: {BLOCK_SIZE}x{BLOCK_SIZE} degrees\n")
-            f.write("# Format: registry_tiles_lonX_latY.txt\n\n")
-            
             for registry_file in sorted(all_registry_files):
                 filename = os.path.basename(registry_file)
                 f.write(f"{filename}\n")
         
         print(f"Master tiles index written with {len(all_registry_files)} registry files")
         print(f"Total blocks processed: {total_blocks}")
+
+
+def generate_master_registry(registry_dir):
+    """Generate a master registry.txt file containing hashes of all registry files."""
+    registry_files = []
+    
+    # Find all registry files (both representation and tile registry files)
+    for file in os.listdir(registry_dir):
+        if file.startswith("registry_") and file.endswith(".txt"):
+            registry_files.append(file)
+    
+    if not registry_files:
+        print("No registry files found to create master registry")
+        return
+    
+    # Create the master registry.txt
+    master_registry_path = os.path.join(registry_dir, "registry.txt")
+    print(f"Generating master registry.txt: {master_registry_path}")
+    
+    with open(master_registry_path, 'w') as f:
+        for filename in sorted(registry_files):
+            file_path = os.path.join(registry_dir, filename)
+            if os.path.exists(file_path):
+                file_hash = calculate_sha256(file_path)
+                f.write(f"{filename} {file_hash}\n")
+    
+    # Remove the old index files as they're now replaced by registry.txt
+    old_index_files = [
+        os.path.join(registry_dir, "registry_index.txt"),
+        os.path.join(registry_dir, "tiles_registry_index.txt")
+    ]
+    for old_file in old_index_files:
+        if os.path.exists(old_file):
+            os.remove(old_file)
+            print(f"Removed old index file: {os.path.basename(old_file)}")
+    
+    print(f"Master registry.txt created with {len(registry_files)} registry file entries")
 
 
 def update_command(args):
@@ -404,6 +427,7 @@ def update_command(args):
     tiles_dir = os.path.join(base_dir, "global_0.1_degree_tiff_all")
     
     processed_any = False
+    registry_dir = None
     
     # Process representations if directory exists
     if os.path.exists(repr_dir):
@@ -421,6 +445,13 @@ def update_command(args):
         )
         update_representations_command(repr_args)
         processed_any = True
+        
+        # Get the registry directory path
+        if hasattr(args, 'registry_dir') and args.registry_dir:
+            registry_dir = os.path.join(os.path.abspath(args.registry_dir), "registry")
+        else:
+            parent_dir = os.path.dirname(repr_dir)
+            registry_dir = os.path.join(parent_dir, "registry")
     else:
         print(f"Representations directory not found: {repr_dir}")
     
@@ -440,6 +471,14 @@ def update_command(args):
         )
         update_tiles_command(tiles_args)
         processed_any = True
+        
+        # Get the registry directory path if not set from representations
+        if not registry_dir:
+            if hasattr(args, 'registry_dir') and args.registry_dir:
+                registry_dir = os.path.join(os.path.abspath(args.registry_dir), "registry")
+            else:
+                parent_dir = os.path.dirname(tiles_dir)
+                registry_dir = os.path.join(parent_dir, "registry")
     else:
         print(f"Tiles directory not found: {tiles_dir}")
     
@@ -449,6 +488,13 @@ def update_command(args):
         print(f"  - {tiles_dir}")
         return
     
+    # Generate master registry.txt containing hashes of all registry files
+    if registry_dir and os.path.exists(registry_dir):
+        print(f"\n{'='*60}")
+        print("GENERATING MASTER REGISTRY")
+        print(f"{'='*60}")
+        generate_master_registry(registry_dir)
+    
     print(f"\n{'='*60}")
     print("REGISTRY UPDATE COMPLETE")
     print(f"{'='*60}")
@@ -456,6 +502,8 @@ def update_command(args):
         print(f"Representations: {repr_dir}")
     if os.path.exists(tiles_dir):
         print(f"Tiles: {tiles_dir}")
+    if registry_dir:
+        print(f"Registry: {registry_dir}")
 
 
 def list_command(args):

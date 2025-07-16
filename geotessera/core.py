@@ -141,17 +141,17 @@ class GeoTessera:
         try:
             cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
             
-            # Download the master tiles registry index
-            tiles_index_file = pooch.retrieve(
-                url=f"{TESSERA_BASE_URL}/{self.version}/registry/tiles_registry_index.txt",
+            # Download the master registry containing hashes of registry files
+            registry_file = pooch.retrieve(
+                url=f"{TESSERA_BASE_URL}/{self.version}/registry/registry.txt",
                 known_hash=None,
-                fname="tiles_registry_index.txt",
+                fname="registry.txt",
                 path=cache_path,
                 progressbar=True
             )
             
         except Exception as e:
-            print(f"Warning: Could not load tiles registry index: {e}")
+            print(f"Warning: Could not load registry: {e}")
             # Continue without landmask support if registry loading fails
     
     def _load_registry_index(self):
@@ -163,14 +163,41 @@ class GeoTessera:
         cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
         self._registry_base_dir = cache_path
         
-        # Download the master registry index
-        registry_index_file = pooch.retrieve(
-            url=f"{TESSERA_BASE_URL}/{self.version}/registry/registry_index.txt",
+        # Download the master registry containing hashes of registry files
+        registry_file = pooch.retrieve(
+            url=f"{TESSERA_BASE_URL}/{self.version}/registry/registry.txt",
             known_hash=None,
-            fname="registry_index.txt",
+            fname="registry.txt",
             path=cache_path,
             progressbar=True
         )
+    
+    def _get_registry_hash(self, registry_filename: str) -> Optional[str]:
+        """Get the hash for a specific registry file from the master registry.txt.
+        
+        Args:
+            registry_filename: Name of the registry file to look up
+            
+        Returns:
+            Hash string if found, None otherwise
+        """
+        try:
+            cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
+            registry_file = Path(cache_path) / "registry.txt"
+            
+            if not registry_file.exists():
+                return None
+            
+            with open(registry_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        parts = line.split(' ', 1)
+                        if len(parts) == 2 and parts[0] == registry_filename:
+                            return parts[1]
+            return None
+        except Exception:
+            return None
     
     def _ensure_block_loaded(self, year: int, lon: float, lat: float):
         """Ensure registry data for a specific block is loaded.
@@ -191,11 +218,14 @@ class GeoTessera:
             
         registry_filename = get_block_registry_filename(str(year), block_lon, block_lat)
         
+        # Get the hash from the master registry.txt file
+        registry_hash = self._get_registry_hash(registry_filename)
+        
         # Download the specific block registry file
         registry_url = f"{TESSERA_BASE_URL}/{self.version}/registry/{registry_filename}"
         registry_file = pooch.retrieve(
             url=registry_url,
-            known_hash=None,
+            known_hash=registry_hash,
             fname=registry_filename,
             path=self._registry_base_dir,
             progressbar=False  # Don't show progress for individual block downloads
@@ -226,11 +256,14 @@ class GeoTessera:
             
         registry_filename = get_tiles_registry_filename(block_lon, block_lat)
         
+        # Get the hash from the master registry.txt file
+        registry_hash = self._get_registry_hash(registry_filename)
+        
         # Download the specific tile block registry file
         registry_url = f"{TESSERA_BASE_URL}/{self.version}/registry/{registry_filename}"
         registry_file = pooch.retrieve(
             url=registry_url,
-            known_hash=None,
+            known_hash=registry_hash,
             fname=registry_filename,
             path=self._registry_base_dir,
             progressbar=False  # Don't show progress for individual block downloads
