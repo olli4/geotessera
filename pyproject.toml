@@ -28,6 +28,7 @@ dependencies = [
     "matplotlib",
     "rasterio",
     "sphinx>=8.2.3",
+    "rich",
 ]
 
 [project.scripts]

@@ -838,6 +838,8 @@ def serve_command(args):
             print("Temporary tiles directory cleaned up")
 
 
+
+
 def main():
     """Main entry point for the GeoTessera command-line interface.
     
@@ -850,6 +852,8 @@ def main():
         - map: Generate coverage map visualization
         - visualize: Create GeoTIFF from embeddings
         - serve: Launch interactive web interface
+    
+    For checksum management, use: geotessera-registry hash
     
     Each command has its own help accessible via:
         geotessera <command> --help
@@ -879,6 +883,9 @@ Examples:
   
   # Generate static tiles to a specific directory and serve them
   geotessera serve --geojson example/CB.geojson --tiles-output ./static_tiles --open
+  
+  # Generate SHA256 checksums (use geotessera-registry instead)
+  geotessera-registry hash /path/to/data
 
 Valid Target CRS Values:
   EPSG:4326     - WGS84 Geographic (lat/lon) - good for global/large areas
@@ -933,6 +940,7 @@ Note: The 'visualize' command creates false-color visualizations from numpy embe
     serve_parser.add_argument("--bands", type=int, nargs=3, default=[0, 1, 2], help="Three band indices for tessera visualization (default: 0 1 2)")
     serve_parser.add_argument("--year", type=int, default=2024, help="Year of embeddings for tessera visualization (default: 2024)")
     serve_parser.set_defaults(func=serve_command)
+    
     
     args = parser.parse_args()
     
