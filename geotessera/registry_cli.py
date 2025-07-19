@@ -912,7 +912,7 @@ def scan_embeddings_from_checksums(base_dir, registry_dir, console):
 
 
 def scan_tiffs_from_checksums(base_dir, registry_dir, console):
-    """Scan SHA256SUM file in TIFF directory and generate pooch-compatible registries."""
+    """Scan SHA256SUM file in TIFF directory and generate pooch-compatible registry."""
     console.print(Panel.fit("🗺️  Scanning TIFF Files", style="cyan"))
     
     sha256sum_file = os.path.join(base_dir, "SHA256SUM")
@@ -920,8 +920,8 @@ def scan_tiffs_from_checksums(base_dir, registry_dir, console):
         console.print(f"[red]SHA256SUM file not found:[/red] {sha256sum_file}")
         return False
     
-    # Group TIFF files by block
-    files_by_block = defaultdict(list)
+    # Read all TIFF entries from SHA256SUM
+    tiff_entries = []
     total_entries = 0
     
     console.print("[blue]Reading SHA256SUM file...[/blue]")
@@ -934,58 +934,47 @@ def scan_tiffs_from_checksums(base_dir, registry_dir, console):
                     if len(parts) == 2:
                         checksum, filename = parts
                         if filename.endswith('.tiff') or filename.endswith('.tif'):
-                            # Extract coordinates from filename (e.g., grid_-120.55_53.45.tiff)
-                            basename = os.path.basename(filename)
-                            tiff_name = basename.replace('.tiff', '').replace('.tif', '')
-                            lon, lat = parse_grid_coordinates(tiff_name)
-                            
-                            if lon is not None and lat is not None:
-                                block_lon, block_lat = get_block_coordinates(lon, lat)
-                                block_key = (block_lon, block_lat)
-                                files_by_block[block_key].append((filename, checksum))
-                                total_entries += 1
-                            else:
-                                console.print(f"  [yellow]Warning:[/yellow] Could not parse coordinates from {basename}")
+                            tiff_entries.append((filename, checksum))
+                            total_entries += 1
     except Exception as e:
         console.print(f"[red]Error reading SHA256SUM file:[/red] {e}")
         return False
     
     console.print(f"[green]Total TIFF entries found:[/green] {total_entries:,}")
-    console.print(f"[green]Organized into:[/green] {len(files_by_block)} blocks")
     
-    # Generate block-based registry files
-    all_registry_files = []
+    if not tiff_entries:
+        console.print("[yellow]No TIFF files found in SHA256SUM[/yellow]")
+        return False
     
     # Create landmasks subdirectory
     landmasks_dir = os.path.join(registry_dir, "landmasks")
     os.makedirs(landmasks_dir, exist_ok=True)
     
-    for (block_lon, block_lat), block_entries in sorted(files_by_block.items()):
-        registry_filename = get_landmasks_registry_filename(block_lon, block_lat)
-        registry_file = os.path.join(landmasks_dir, registry_filename)
-        all_registry_files.append(registry_file)
-        
-        console.print(f"  Block ({block_lon}, {block_lat}): {len(block_entries)} files → landmasks/{registry_filename}")
-        
-        # Write registry file
-        with open(registry_file, 'w') as f:
-            for rel_path, checksum in sorted(block_entries):
-                f.write(f"{rel_path} {checksum}\n")
+    # Write single registry file for all TIFF files
+    registry_filename = "landmasks_all.txt"
+    registry_file = os.path.join(landmasks_dir, registry_filename)
+    
+    console.print(f"[blue]Writing registry file:[/blue] landmasks/{registry_filename}")
+    
+    # Write registry file
+    with open(registry_file, 'w') as f:
+        for rel_path, checksum in sorted(tiff_entries):
+            f.write(f"{rel_path} {checksum}\n")
+    
+    console.print(f"[green]✓ Registry written with {len(tiff_entries)} entries[/green]")
     
     # Generate master index
-    if all_registry_files:
-        master_index_path = os.path.join(registry_dir, "landmasks_registry_index.txt")
-        console.print(f"[cyan]Generating landmasks registry index:[/cyan] {os.path.basename(master_index_path)}")
-        
-        with open(master_index_path, 'w') as f:
-            for registry_file in sorted(all_registry_files):
-                # Use relative path from registry_dir
-                rel_path = os.path.relpath(registry_file, registry_dir)
-                f.write(f"{rel_path}\n")
-        
-        console.print(f"[green]✓ Landmasks index written with {len(all_registry_files)} registry files[/green]")
+    master_index_path = os.path.join(registry_dir, "landmasks_registry_index.txt")
+    console.print(f"[cyan]Generating landmasks registry index:[/cyan] {os.path.basename(master_index_path)}")
     
-    return len(all_registry_files) > 0
+    with open(master_index_path, 'w') as f:
+        # Use relative path from registry_dir
+        rel_path = os.path.relpath(registry_file, registry_dir)
+        f.write(f"{rel_path}\n")
+    
+    console.print("[green]✓ Landmasks index written[/green]")
+    
+    return True
 
 
 def scan_command(args):
