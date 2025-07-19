@@ -14,19 +14,14 @@ The module handles:
 """
 from pathlib import Path
 from typing import Optional, Union, List, Tuple, Iterator
-import importlib.resources
 import pooch
 import geopandas as gpd
 import numpy as np
 
 from .registry_utils import (
     get_block_coordinates,
-    get_block_registry_filename,
-    get_registry_path_for_tile,
-    get_tiles_registry_filename,
-    get_registry_path_for_tiles,
-    parse_grid_coordinates,
-    get_tile_name
+    get_embeddings_registry_filename,
+    get_landmasks_registry_filename
 )
 
 
@@ -88,6 +83,7 @@ class GeoTessera:
         self._loaded_blocks = set()  # Track which blocks have been loaded for embeddings
         self._loaded_tile_blocks = set()  # Track which blocks have been loaded for landmasks
         self._registry_base_dir = None  # Base directory for block registries
+        self._registry_file = None  # Path to the master registry.txt file
         self._initialize_pooch()
     
     def _initialize_pooch(self):
@@ -139,16 +135,9 @@ class GeoTessera:
         available tile block registry files.
         """
         try:
-            cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
-            
-            # Download the master registry containing hashes of registry files
-            registry_file = pooch.retrieve(
-                url=f"{TESSERA_BASE_URL}/{self.version}/registry/registry.txt",
-                known_hash=None,
-                fname="registry.txt",
-                path=cache_path,
-                progressbar=True
-            )
+            # The registry file should already be loaded by _load_registry_index
+            # This method exists for compatibility but doesn't need to re-download
+            pass
             
         except Exception as e:
             print(f"Warning: Could not load registry: {e}")
@@ -164,7 +153,7 @@ class GeoTessera:
         self._registry_base_dir = cache_path
         
         # Download the master registry containing hashes of registry files
-        registry_file = pooch.retrieve(
+        self._registry_file = pooch.retrieve(
             url=f"{TESSERA_BASE_URL}/{self.version}/registry/registry.txt",
             known_hash=None,
             fname="registry.txt",
@@ -182,13 +171,10 @@ class GeoTessera:
             Hash string if found, None otherwise
         """
         try:
-            cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
-            registry_file = Path(cache_path) / "registry.txt"
-            
-            if not registry_file.exists():
+            if not self._registry_file or not Path(self._registry_file).exists():
                 return None
             
-            with open(registry_file, 'r') as f:
+            with open(self._registry_file, 'r') as f:
                 for line in f:
                     line = line.strip()
                     if line and not line.startswith('#'):
@@ -216,7 +202,7 @@ class GeoTessera:
         if block_key in self._loaded_blocks:
             return
             
-        registry_filename = get_block_registry_filename(str(year), block_lon, block_lat)
+        registry_filename = get_embeddings_registry_filename(str(year), block_lon, block_lat)
         
         # Get the hash from the master registry.txt file
         registry_hash = self._get_registry_hash(registry_filename)
@@ -246,24 +232,21 @@ class GeoTessera:
         find all block files and loads them.
         """
         try:
-            cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
-            registry_file = Path(cache_path) / "registry.txt"
-            
-            if not registry_file.exists():
+            if not self._registry_file or not Path(self._registry_file).exists():
                 print("Warning: Master registry not found")
                 return
             
             # Parse registry.txt to find all block registry files
             block_files = []
-            with open(registry_file, 'r') as f:
+            with open(self._registry_file, 'r') as f:
                 for line in f:
                     line = line.strip()
                     if line and not line.startswith('#'):
                         parts = line.split(' ', 1)
                         if len(parts) == 2:
                             filename = parts[0]
-                            # Look for block registry files (format: registry_YYYY_lonXXX_latYYY.txt)
-                            if filename.startswith('registry_') and '_lon' in filename and '_lat' in filename and filename.endswith('.txt'):
+                            # Look for embeddings registry files (format: embeddings_YYYY_lonXXX_latYYY.txt)
+                            if filename.startswith('embeddings_') and '_lon' in filename and '_lat' in filename and filename.endswith('.txt'):
                                 block_files.append(filename)
             
             print(f"Found {len(block_files)} block registry files to load")
@@ -290,11 +273,11 @@ class GeoTessera:
                     self._pooch.load_registry(downloaded_file)
                     
                     # Mark this block as loaded
-                    # Parse filename format: registry_YYYY_lonXXX_latYYY.txt
-                    # Examples: registry_2024_lon-15_lat10.txt, registry_2024_lon130_lat45.txt
+                    # Parse filename format: embeddings_YYYY_lonXXX_latYYY.txt
+                    # Examples: embeddings_2024_lon-15_lat10.txt, embeddings_2024_lon130_lat45.txt
                     parts = block_file.replace('.txt', '').split('_')
                     if len(parts) >= 4:
-                        year = int(parts[1])  # parts[0] is "registry", parts[1] is year
+                        year = int(parts[1])  # parts[0] is "embeddings", parts[1] is year
                         
                         # Extract lon and lat values
                         lon_part = None
@@ -338,7 +321,7 @@ class GeoTessera:
         if block_key in self._loaded_tile_blocks:
             return
             
-        registry_filename = get_tiles_registry_filename(block_lon, block_lat)
+        registry_filename = get_landmasks_registry_filename(block_lon, block_lat)
         
         # Get the hash from the master registry.txt file
         registry_hash = self._get_registry_hash(registry_filename)

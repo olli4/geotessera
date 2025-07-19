@@ -10,16 +10,15 @@ updates, and generation of a master registry index.
 import os
 import hashlib
 import argparse
-from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from collections import defaultdict
 import multiprocessing
 
 from .registry_utils import (
     get_block_coordinates, 
-    get_block_registry_filename,
-    parse_grid_coordinates,
-    BLOCK_SIZE
+    get_embeddings_registry_filename,
+    get_landmasks_registry_filename,
+    parse_grid_coordinates
 )
 
 
@@ -161,7 +160,7 @@ def update_representations_command(args):
 
         # Process each block within the year
         for (block_lon, block_lat), block_files in sorted(blocks_for_year.items()):
-            registry_filename = get_block_registry_filename(year, block_lon, block_lat)
+            registry_filename = get_embeddings_registry_filename(year, block_lon, block_lat)
             registry_file = os.path.join(registry_dir, registry_filename)
             year_registry_files.append(registry_file)
             all_registry_files.append(registry_file)
@@ -298,8 +297,8 @@ def update_tiles_command(args):
 
     # Process each block
     for (block_lon, block_lat), block_files in sorted(files_by_block.items()):
-        # For tiles, we don't have years, so use a generic naming scheme
-        registry_filename = f"registry_tiles_lon{block_lon}_lat{block_lat}.txt"
+        # For landmasks, we don't have years
+        registry_filename = get_landmasks_registry_filename(block_lon, block_lat)
         registry_file = os.path.join(registry_dir, registry_filename)
         all_registry_files.append(registry_file)
         
@@ -380,9 +379,9 @@ def generate_master_registry(registry_dir):
     """Generate a master registry.txt file containing hashes of all registry files."""
     registry_files = []
     
-    # Find all registry files (both representation and tile registry files)
+    # Find all registry files (embeddings and landmasks registry files)
     for file in os.listdir(registry_dir):
-        if file.startswith("registry_") and file.endswith(".txt"):
+        if (file.startswith("embeddings_") or file.startswith("landmasks_")) and file.endswith(".txt"):
             registry_files.append(file)
     
     if not registry_files:
@@ -515,17 +514,17 @@ def list_command(args):
 
     print(f"Scanning for registry files in: {base_dir}")
     
-    # Find all registry_*.txt files
+    # Find all embeddings_*.txt and landmasks_*.txt files
     registry_files = []
     for file in os.listdir(base_dir):
-        if file.startswith("registry_") and file.endswith(".txt"):
+        if (file.startswith("embeddings_") or file.startswith("landmasks_")) and file.endswith(".txt"):
             registry_path = os.path.join(base_dir, file)
             # Count entries in the registry
             try:
                 with open(registry_path, 'r') as f:
                     entry_count = sum(1 for line in f if line.strip() and not line.startswith('#'))
                 registry_files.append((file, entry_count))
-            except Exception as e:
+            except Exception:
                 registry_files.append((file, -1))
     
     if not registry_files:
@@ -545,7 +544,7 @@ def list_command(args):
     # Check for master registry
     master_registry = os.path.join(base_dir, "registry.txt")
     if os.path.exists(master_registry):
-        print(f"\nMaster registry found: registry.txt")
+        print("\nMaster registry found: registry.txt")
 
 
 def main():
@@ -590,10 +589,10 @@ files that are distributed with the package. End users typically don't need
 to use this tool.
 
 Note: This tool creates block-based registries for efficient lazy loading:
-  - Embeddings: Organized into 5x5 degree blocks (registry_YYYY_lonX_latY.txt)
-  - Tiles: Organized into 5x5 degree blocks (registry_tiles_lonX_latY.txt)
+  - Embeddings: Organized into 5x5 degree blocks (embeddings_YYYY_lonX_latY.txt)
+  - Landmasks: Organized into 5x5 degree blocks (landmasks_lonX_latY.txt)
   - Each block contains ~2,500 tiles instead of one massive registry
-  - Registry files are created in subdirectories: registry/embeddings/ and registry/tiles/
+  - Registry files are created in the registry/ subdirectory
 
 Directory Structure:
   The 'update' command expects to find these subdirectories:
