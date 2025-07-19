@@ -384,10 +384,15 @@ def generate_master_registry(registry_dir):
     """Generate a master registry.txt file containing hashes of all registry files."""
     registry_files = []
     
-    # Find all registry files (embeddings and landmasks registry files)
-    for file in os.listdir(registry_dir):
-        if (file.startswith("embeddings_") or file.startswith("landmasks_")) and file.endswith(".txt"):
-            registry_files.append(file)
+    # Find all registry files in embeddings and landmasks subdirectories
+    for subdir in ["embeddings", "landmasks"]:
+        subdir_path = os.path.join(registry_dir, subdir)
+        if os.path.exists(subdir_path):
+            for file in os.listdir(subdir_path):
+                if file.endswith(".txt"):
+                    # Store relative path from registry_dir
+                    rel_path = os.path.join(subdir, file)
+                    registry_files.append(rel_path)
     
     if not registry_files:
         print("No registry files found to create master registry")
@@ -398,11 +403,11 @@ def generate_master_registry(registry_dir):
     print(f"Generating master registry.txt: {master_registry_path}")
     
     with open(master_registry_path, 'w') as f:
-        for filename in sorted(registry_files):
-            file_path = os.path.join(registry_dir, filename)
+        for rel_path in sorted(registry_files):
+            file_path = os.path.join(registry_dir, rel_path)
             if os.path.exists(file_path):
                 file_hash = calculate_sha256(file_path)
-                f.write(f"{filename} {file_hash}\n")
+                f.write(f"{rel_path} {file_hash}\n")
     
     # Remove the old index files as they're now replaced by registry.txt
     old_index_files = [
@@ -874,12 +879,16 @@ def scan_embeddings_from_checksums(base_dir, registry_dir, console):
         blocks_for_year = files_by_year_and_block[year]
         console.print(f"[blue]Generating registries for year {year}:[/blue] {len(blocks_for_year)} blocks")
         
+        # Create embeddings subdirectory
+        embeddings_dir = os.path.join(registry_dir, "embeddings")
+        os.makedirs(embeddings_dir, exist_ok=True)
+        
         for (block_lon, block_lat), block_entries in sorted(blocks_for_year.items()):
             registry_filename = get_embeddings_registry_filename(year, block_lon, block_lat)
-            registry_file = os.path.join(registry_dir, registry_filename)
+            registry_file = os.path.join(embeddings_dir, registry_filename)
             all_registry_files.append(registry_file)
             
-            console.print(f"  Block ({block_lon}, {block_lat}): {len(block_entries)} files → {registry_filename}")
+            console.print(f"  Block ({block_lon}, {block_lat}): {len(block_entries)} files → embeddings/{registry_filename}")
             
             # Write registry file
             with open(registry_file, 'w') as f:
@@ -893,8 +902,9 @@ def scan_embeddings_from_checksums(base_dir, registry_dir, console):
         
         with open(master_index_path, 'w') as f:
             for registry_file in sorted(all_registry_files):
-                filename = os.path.basename(registry_file)
-                f.write(f"{filename}\n")
+                # Use relative path from registry_dir
+                rel_path = os.path.relpath(registry_file, registry_dir)
+                f.write(f"{rel_path}\n")
         
         console.print(f"[green]✓ Embeddings index written with {len(all_registry_files)} registry files[/green]")
     
@@ -946,12 +956,16 @@ def scan_tiffs_from_checksums(base_dir, registry_dir, console):
     # Generate block-based registry files
     all_registry_files = []
     
+    # Create landmasks subdirectory
+    landmasks_dir = os.path.join(registry_dir, "landmasks")
+    os.makedirs(landmasks_dir, exist_ok=True)
+    
     for (block_lon, block_lat), block_entries in sorted(files_by_block.items()):
         registry_filename = get_landmasks_registry_filename(block_lon, block_lat)
-        registry_file = os.path.join(registry_dir, registry_filename)
+        registry_file = os.path.join(landmasks_dir, registry_filename)
         all_registry_files.append(registry_file)
         
-        console.print(f"  Block ({block_lon}, {block_lat}): {len(block_entries)} files → {registry_filename}")
+        console.print(f"  Block ({block_lon}, {block_lat}): {len(block_entries)} files → landmasks/{registry_filename}")
         
         # Write registry file
         with open(registry_file, 'w') as f:
@@ -965,8 +979,9 @@ def scan_tiffs_from_checksums(base_dir, registry_dir, console):
         
         with open(master_index_path, 'w') as f:
             for registry_file in sorted(all_registry_files):
-                filename = os.path.basename(registry_file)
-                f.write(f"{filename}\n")
+                # Use relative path from registry_dir
+                rel_path = os.path.relpath(registry_file, registry_dir)
+                f.write(f"{rel_path}\n")
         
         console.print(f"[green]✓ Landmasks index written with {len(all_registry_files)} registry files[/green]")
     
@@ -1032,14 +1047,17 @@ def scan_command(args):
         console.print(Panel.fit("📝 Generating Master Registry", style="cyan"))
         generate_master_registry(registry_dir)
     
-    console.print(Panel.fit(
-        f"[green]✅ Registry Scan Complete[/green]\n\n"
-        f"📊 Data processed:\n"
-        f"{'• Embeddings: ' + repr_dir if os.path.exists(repr_dir) else ''}\n"
-        f"{'• TIFF files: ' + tiles_dir if os.path.exists(tiles_dir) else ''}\n"
-        f"📁 Registry: {registry_dir}",
-        style="green"
-    ))
+    summary_lines = ["[green]✅ Registry Scan Complete[/green]\n"]
+    summary_lines.append("📊 Data processed:")
+    if os.path.exists(repr_dir):
+        summary_lines.append(f"• Embeddings: {repr_dir}")
+        summary_lines.append("  → registry/embeddings/")
+    if os.path.exists(tiles_dir):
+        summary_lines.append(f"• TIFF files: {tiles_dir}")
+        summary_lines.append("  → registry/landmasks/")
+    summary_lines.append(f"📁 Registry root: {registry_dir}")
+    
+    console.print(Panel.fit("\n".join(summary_lines), style="green"))
     
     return 0
 
