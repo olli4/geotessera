@@ -10,6 +10,7 @@ updates, and generation of a master registry index.
 import os
 import hashlib
 import argparse
+import subprocess
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from collections import defaultdict
 import multiprocessing
@@ -547,177 +548,275 @@ def list_command(args):
         print("\nMaster registry found: registry.txt")
 
 
+def process_grid_checksum(args):
+    """Process a single grid directory to generate SHA256 checksums."""
+    year_dir, grid_name = args
+    grid_dir = os.path.join(year_dir, grid_name)
+    sha256_file = os.path.join(grid_dir, "SHA256")
+    
+    # Find all .npy files in this grid directory
+    npy_files = [f for f in os.listdir(grid_dir) if f.endswith('.npy')]
+    
+    if npy_files:
+        try:
+            # Change to grid directory and run sha256sum
+            result = subprocess.run(
+                ["sha256sum"] + sorted(npy_files),
+                cwd=grid_dir,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            # Write output to SHA256 file
+            with open(sha256_file, 'w') as f:
+                f.write(result.stdout)
+            
+            return (grid_name, len(npy_files), True, None)
+        except subprocess.CalledProcessError as e:
+            return (grid_name, len(npy_files), False, f"CalledProcessError: {e}")
+        except Exception as e:
+            return (grid_name, len(npy_files), False, f"Exception: {e}")
+    
+    return (grid_name, 0, True, None)
+
+
+def generate_embeddings_checksums(base_dir):
+    """Generate SHA256 checksums for .npy files in each embeddings subdirectory."""
+    from tqdm import tqdm
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    import multiprocessing
+    
+    print("Generating SHA256 checksums for embeddings...")
+    
+    # Get number of CPU cores
+    num_cores = multiprocessing.cpu_count()
+    print(f"Using {num_cores} CPU cores for parallel processing")
+    
+    # Process each year directory
+    year_dirs = []
+    for item in os.listdir(base_dir):
+        if item.isdigit() and len(item) == 4:  # Year directories
+            year_path = os.path.join(base_dir, item)
+            if os.path.isdir(year_path):
+                year_dirs.append(item)
+    
+    if not year_dirs:
+        print("No year directories found")
+        return 1
+    
+    total_grids = 0
+    processed_grids = 0
+    errors = []
+    
+    for year in sorted(year_dirs):
+        year_dir = os.path.join(base_dir, year)
+        print(f"\nProcessing year: {year}")
+        
+        # Find all grid directories
+        grid_dirs = []
+        for item in os.listdir(year_dir):
+            if item.startswith("grid_"):
+                grid_path = os.path.join(year_dir, item)
+                if os.path.isdir(grid_path):
+                    grid_dirs.append(item)
+        
+        total_grids += len(grid_dirs)
+        
+        # Prepare arguments for parallel processing
+        grid_args = [(year_dir, grid_name) for grid_name in sorted(grid_dirs)]
+        
+        # Process grid directories in parallel
+        with ProcessPoolExecutor(max_workers=num_cores) as executor:
+            # Submit all tasks
+            futures = {executor.submit(process_grid_checksum, args): args for args in grid_args}
+            
+            # Process results with progress bar
+            with tqdm(total=len(grid_dirs), desc=f"Year {year}", unit="grids") as pbar:
+                for future in as_completed(futures):
+                    grid_name, num_files, success, error_msg = future.result()
+                    
+                    if success:
+                        if num_files > 0:
+                            processed_grids += 1
+                        pbar.set_postfix(files=num_files)
+                    else:
+                        errors.append(f"{grid_name}: {error_msg}")
+                    
+                    pbar.update(1)
+    
+    # Report any errors
+    if errors:
+        print("\nErrors encountered:")
+        for error in errors[:10]:  # Show first 10 errors
+            print(f"  - {error}")
+        if len(errors) > 10:
+            print(f"  ... and {len(errors) - 10} more errors")
+    
+    print(f"\nProcessed {processed_grids}/{total_grids} grid directories")
+    return 0 if processed_grids > 0 else 1
+
+
+def process_tiff_chunk(args):
+    """Process a chunk of TIFF files to generate SHA256 checksums."""
+    base_dir, chunk, chunk_num = args
+    temp_file = os.path.join(base_dir, f".SHA256SUM.tmp{chunk_num}")
+    
+    try:
+        # Run sha256sum on this chunk
+        result = subprocess.run(
+            ["sha256sum"] + chunk,
+            cwd=base_dir,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        
+        # Write to temporary file
+        with open(temp_file, 'w') as f:
+            f.write(result.stdout)
+        
+        return (chunk_num, len(chunk), True, None, temp_file)
+    except subprocess.CalledProcessError as e:
+        return (chunk_num, len(chunk), False, f"CalledProcessError: {e}", temp_file)
+    except Exception as e:
+        return (chunk_num, len(chunk), False, f"Exception: {e}", temp_file)
+
+
+def generate_tiff_checksums(base_dir):
+    """Generate SHA256 checksums for TIFF files using chunked parallel processing."""
+    from tqdm import tqdm
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    import multiprocessing
+    
+    print("Generating SHA256 checksums for TIFF files...")
+    
+    # Get number of CPU cores
+    num_cores = multiprocessing.cpu_count()
+    print(f"Using {num_cores} CPU cores for parallel processing")
+    
+    # Find all .tiff files
+    tiff_files = []
+    for file in os.listdir(base_dir):
+        if file.endswith('.tiff') or file.endswith('.tif'):
+            tiff_files.append(file)
+    
+    if not tiff_files:
+        print("No TIFF files found")
+        return 1
+    
+    # Sort files for consistent ordering
+    tiff_files.sort()
+    total_files = len(tiff_files)
+    print(f"Found {total_files} TIFF files")
+    
+    # Process in chunks to avoid command line length limits
+    chunk_size = 1000  # Process 1000 files at a time
+    sha256sum_file = os.path.join(base_dir, "SHA256SUM")
+    
+    # Prepare chunks for parallel processing
+    chunks = []
+    for i in range(0, total_files, chunk_size):
+        chunk = tiff_files[i:i + chunk_size]
+        chunk_num = i // chunk_size + 1
+        chunks.append((base_dir, chunk, chunk_num))
+    
+    temp_files = []
+    errors = []
+    
+    try:
+        # Process chunks in parallel
+        with ProcessPoolExecutor(max_workers=num_cores) as executor:
+            # Submit all tasks
+            futures = {executor.submit(process_tiff_chunk, args): args for args in chunks}
+            
+            # Process results with progress bar
+            with tqdm(total=total_files, desc="Computing checksums", unit="files") as pbar:
+                results = []
+                for future in as_completed(futures):
+                    chunk_num, chunk_len, success, error_msg, temp_file = future.result()
+                    
+                    if success:
+                        results.append((chunk_num, temp_file))
+                    else:
+                        errors.append(f"Chunk {chunk_num}: {error_msg}")
+                    
+                    pbar.update(chunk_len)
+                
+                # Sort results by chunk number to maintain order
+                results.sort(key=lambda x: x[0])
+                temp_files = [temp_file for _, temp_file in results]
+        
+        if errors:
+            print("\nErrors encountered during processing:")
+            for error in errors:
+                print(f"  - {error}")
+            # Clean up any temporary files
+            for temp_file in temp_files:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+            return 1
+        
+        # Concatenate all temporary files into final SHA256SUM
+        print("Concatenating results...")
+        with open(sha256sum_file, 'w') as outfile:
+            for temp_file in temp_files:
+                if os.path.exists(temp_file):
+                    with open(temp_file, 'r') as infile:
+                        outfile.write(infile.read())
+        
+        # Clean up temporary files
+        for temp_file in temp_files:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        
+        print(f"Successfully generated checksums for {total_files} files")
+        print(f"Checksums written to: {sha256sum_file}")
+        return 0
+        
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        # Clean up any temporary files
+        for _, _, _, _, temp_file in chunks:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        return 1
+
+
 def hash_command(args):
-    """Generate or verify SHA256 checksums for files in a directory."""
+    """Generate SHA256 checksums for embeddings and TIFF files."""
     base_dir = os.path.abspath(args.base_dir)
     if not os.path.exists(base_dir):
         print(f"Error: Directory {base_dir} does not exist")
-        return
-
-    if getattr(args, 'check', False):
-        # Verification mode
-        return verify_checksums(args, base_dir)
-    else:
-        # Generation mode
-        return generate_checksums(args, base_dir)
-
-
-def verify_checksums(args, base_dir):
-    """Verify SHA256 checksums using sha256sum -c."""
-    checksum_file = args.checksum_file or os.path.join(base_dir, "SHA256")
-    
-    if not os.path.exists(checksum_file):
-        print(f"Error: Checksum file not found: {checksum_file}")
-        return 1
-    
-    print(f"Verifying checksums in: {base_dir}")
-    print(f"Using checksum file: {checksum_file}")
-    
-    try:
-        import subprocess
-        # Run sha256sum -c to verify checksums
-        # Change to the directory containing the checksum file for relative path resolution
-        checksum_dir = os.path.dirname(checksum_file)
-        checksum_filename = os.path.basename(checksum_file)
-        
-        if checksum_dir == "":
-            checksum_dir = "."
-        
-        result = subprocess.run(
-            ["sha256sum", "-c", checksum_filename],
-            cwd=checksum_dir,
-            capture_output=True,
-            text=True
-        )
-        
-        # Print the output
-        if result.stdout:
-            print(result.stdout.rstrip())
-        
-        if result.stderr:
-            print(f"Warnings/Errors: {result.stderr.rstrip()}")
-        
-        # Parse results for summary
-        lines = result.stdout.strip().split('\n') if result.stdout else []
-        ok_count = sum(1 for line in lines if line.endswith(": OK"))
-        failed_count = sum(1 for line in lines if line.endswith(": FAILED"))
-        
-        print(f"\nVerification Summary:")
-        print(f"  Files verified successfully: {ok_count}")
-        print(f"  Files failed verification: {failed_count}")
-        
-        if result.returncode == 0:
-            print("✓ All checksums verified successfully!")
-            return 0
-        else:
-            print("✗ Some files failed verification!")
-            return 1
-            
-    except FileNotFoundError:
-        print("Error: sha256sum command not found. Please install coreutils.")
-        return 1
-    except Exception as e:
-        print(f"Error during verification: {e}")
         return 1
 
-
-def generate_checksums(args, base_dir):
-    """Generate SHA256 checksums for files in a directory, excluding checksum files."""
-    from tqdm import tqdm
+    # Check if this is an embeddings directory structure
+    repr_dir = os.path.join(base_dir, "global_0.1_degree_representation")
+    tiles_dir = os.path.join(base_dir, "global_0.1_degree_tiff_all")
     
-    # File patterns to exclude from checksumming
-    exclude_patterns = {
-        'SHA256', 'SHA256SUM', 'CHECKSUMS', 'checksums',
-        '*.sha256', '*.sha256sum', '*.md5', '*.md5sum'
-    }
+    processed_any = False
     
-    output_file = args.output or os.path.join(base_dir, "SHA256")
-    file_patterns = args.patterns or ["*.npy", "*.tiff", "*.tif"]
+    # Process embeddings if directory exists
+    if os.path.exists(repr_dir):
+        print(f"Processing embeddings directory: {repr_dir}")
+        if generate_embeddings_checksums(repr_dir) == 0:
+            processed_any = True
     
-    print(f"Generating SHA256 checksums for directory: {base_dir}")
-    print(f"File patterns: {', '.join(file_patterns)}")
-    print(f"Output file: {output_file}")
-    print(f"Excluding checksum files: {', '.join(sorted(exclude_patterns))}")
+    # Process TIFF files if directory exists
+    if os.path.exists(tiles_dir):
+        print(f"Processing TIFF directory: {tiles_dir}")
+        if generate_tiff_checksums(tiles_dir) == 0:
+            processed_any = True
     
-    # First pass: count total files for progress tracking
-    print("Scanning directory structure...")
-    total_files_to_scan = 0
-    for root, _, files in os.walk(base_dir):
-        total_files_to_scan += len(files)
-    
-    # Find all matching files with progress bar
-    import fnmatch
-    all_files = []
-    
-    with tqdm(total=total_files_to_scan, desc="Scanning files", unit="files") as scan_pbar:
-        for root, _, files in os.walk(base_dir):
-            for file in files:
-                scan_pbar.update(1)
-                
-                file_path = os.path.join(root, file)
-                filename = os.path.basename(file_path)
-                
-                # Skip if it matches exclude patterns
-                should_exclude = False
-                for exclude_pattern in exclude_patterns:
-                    if exclude_pattern.startswith('*'):
-                        # Handle wildcard patterns
-                        if filename.endswith(exclude_pattern[1:]):
-                            should_exclude = True
-                            break
-                    else:
-                        # Handle exact matches
-                        if filename == exclude_pattern:
-                            should_exclude = True
-                            break
-                
-                if should_exclude:
-                    continue
-                    
-                # Check if file matches any of the patterns
-                for pattern in file_patterns:
-                    if fnmatch.fnmatch(filename, pattern):
-                        all_files.append(file_path)
-                        scan_pbar.set_postfix(found=len(all_files))
-                        break  # Stop checking other patterns once we find a match
-    
-    if not all_files:
-        print("No matching files found")
+    if not processed_any:
+        print("No data directories found. Expected:")
+        print(f"  - {repr_dir}")
+        print(f"  - {tiles_dir}")
         return 1
     
-    print(f"Found {len(all_files)} files to process")
-    
-    # Set number of workers
-    num_workers = args.workers or multiprocessing.cpu_count()
-    print(f"Using {num_workers} parallel workers")
-    
-    # Process files in parallel with progress bar
-    checksums = {}
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        # Submit all jobs
-        future_to_file = {
-            executor.submit(process_file, (file_path, base_dir, False)): file_path
-            for file_path in all_files
-        }
-        
-        # Process results with progress bar
-        with tqdm(total=len(all_files), desc="Computing checksums", unit="files") as hash_pbar:
-            for future in as_completed(future_to_file):
-                rel_path, file_hash = future.result()
-                if rel_path and file_hash:
-                    checksums[rel_path] = file_hash
-                hash_pbar.update(1)
-                hash_pbar.set_postfix(completed=len(checksums))
-    
-    # Write checksums to output file
-    print("Writing checksums to file...")
-    with open(output_file, 'w') as f:
-        for rel_path in sorted(checksums.keys()):
-            f.write(f"{checksums[rel_path]}  {rel_path}\n")
-    
-    print(f"Successfully generated checksums for {len(checksums)} files")
-    print(f"Checksums written to: {output_file}")
     return 0
+
+
 
 
 def main():
@@ -757,17 +856,12 @@ Examples:
   # List existing registry files
   geotessera-registry list /path/to/data
   
-  # Generate SHA256 checksums (excludes checksum files automatically)
-  geotessera-registry hash /path/to/data
+  # Generate SHA256 checksums for embeddings and TIFF files
+  geotessera-registry hash /path/to/v1
   
-  # Generate checksums with custom output file and patterns
-  geotessera-registry hash /path/to/data --output /path/to/CHECKSUMS --patterns "*.tiff" "*.npy"
-  
-  # Verify existing checksums
-  geotessera-registry hash /path/to/data --check
-  
-  # Verify checksums using a specific checksum file
-  geotessera-registry hash /path/to/data --check --checksum-file /path/to/CHECKSUMS
+  # This will:
+  # - Create SHA256 files in each grid subdirectory under global_0.1_degree_representation/YYYY/
+  # - Create SHA256SUM file in global_0.1_degree_tiff_all/ using chunked processing
 
 This tool is intended for GeoTessera data maintainers to generate the registry
 files that are distributed with the package. End users typically don't need
@@ -836,18 +930,8 @@ Directory Structure:
     list_parser.set_defaults(func=list_command)
     
     # Hash command
-    hash_parser = subparsers.add_parser('hash', help='Generate or verify SHA256 checksums for files')
-    hash_parser.add_argument('base_dir', help='Base directory to scan for files')
-    hash_parser.add_argument('--check', '-c', action='store_true',
-                            help='Verify checksums instead of generating them')
-    hash_parser.add_argument('--checksum-file', type=str, default=None,
-                            help='Checksum file to verify (default: SHA256 in base directory, used with --check)')
-    hash_parser.add_argument('--output', '-o', type=str, default=None,
-                            help='Output file for checksums (default: SHA256 in base directory, used for generation)')
-    hash_parser.add_argument('--patterns', '-p', nargs='+', default=None,
-                            help='File patterns to include (default: *.npy *.tiff *.tif, used for generation)')
-    hash_parser.add_argument('--workers', type=int, default=None,
-                            help='Number of parallel workers (default: number of CPU cores, used for generation)')
+    hash_parser = subparsers.add_parser('hash', help='Generate SHA256 checksums for embeddings and TIFF files')
+    hash_parser.add_argument('base_dir', help='Base directory containing global_0.1_degree_representation and/or global_0.1_degree_tiff_all subdirectories')
     hash_parser.set_defaults(func=hash_command)
     
     args = parser.parse_args()
