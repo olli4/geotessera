@@ -15,6 +15,10 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from collections import defaultdict
 import multiprocessing
 
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+
 from .registry_utils import (
     get_block_coordinates, 
     get_embeddings_registry_filename,
@@ -783,6 +787,263 @@ def generate_tiff_checksums(base_dir):
         return 1
 
 
+def scan_embeddings_from_checksums(base_dir, registry_dir, console):
+    """Scan SHA256 files in embeddings directory and generate pooch-compatible registries."""
+    console.print(Panel.fit("📡 Scanning Embeddings", style="cyan"))
+    
+    # Process each year directory
+    year_dirs = []
+    for item in os.listdir(base_dir):
+        if item.isdigit() and len(item) == 4:  # Year directories
+            year_path = os.path.join(base_dir, item)
+            if os.path.isdir(year_path):
+                year_dirs.append(item)
+    
+    if not year_dirs:
+        console.print("[red]No year directories found[/red]")
+        return False
+    
+    files_by_year_and_block = defaultdict(lambda: defaultdict(list))
+    total_entries = 0
+    
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console
+    ) as progress:
+        
+        for year in sorted(year_dirs):
+            year_dir = os.path.join(base_dir, year)
+            console.print(f"[blue]Processing year:[/blue] {year}")
+            
+            # Find all grid directories with SHA256 files
+            grid_dirs = []
+            for item in os.listdir(year_dir):
+                if item.startswith("grid_"):
+                    grid_path = os.path.join(year_dir, item)
+                    sha256_file = os.path.join(grid_path, "SHA256")
+                    if os.path.isdir(grid_path) and os.path.exists(sha256_file):
+                        grid_dirs.append(item)
+            
+            console.print(f"  Found [green]{len(grid_dirs)}[/green] grid directories with SHA256 files")
+            
+            # Process each grid directory
+            task = progress.add_task(f"Year {year}", total=len(grid_dirs))
+            
+            for grid_name in grid_dirs:
+                grid_path = os.path.join(year_dir, grid_name)
+                sha256_file = os.path.join(grid_path, "SHA256")
+                
+                # Parse coordinates from grid name
+                lon, lat = parse_grid_coordinates(grid_name)
+                if lon is None or lat is None:
+                    console.print(f"  [yellow]Warning:[/yellow] Could not parse coordinates from {grid_name}")
+                    progress.advance(task)
+                    continue
+                
+                # Get block coordinates
+                block_lon, block_lat = get_block_coordinates(lon, lat)
+                block_key = (block_lon, block_lat)
+                
+                # Read SHA256 file and add entries
+                try:
+                    with open(sha256_file, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            if line and not line.startswith('#'):
+                                parts = line.split(' ', 1)
+                                if len(parts) == 2:
+                                    checksum, filename = parts
+                                    # Convert to relative path from base_dir
+                                    rel_path = os.path.join(year, grid_name, filename)
+                                    files_by_year_and_block[year][block_key].append((rel_path, checksum))
+                                    total_entries += 1
+                except Exception as e:
+                    console.print(f"  [red]Error reading {sha256_file}:[/red] {e}")
+                
+                progress.advance(task)
+    
+    console.print(f"[green]Total entries found:[/green] {total_entries:,}")
+    
+    # Generate block-based registry files
+    all_registry_files = []
+    
+    for year in sorted(files_by_year_and_block.keys()):
+        blocks_for_year = files_by_year_and_block[year]
+        console.print(f"[blue]Generating registries for year {year}:[/blue] {len(blocks_for_year)} blocks")
+        
+        for (block_lon, block_lat), block_entries in sorted(blocks_for_year.items()):
+            registry_filename = get_embeddings_registry_filename(year, block_lon, block_lat)
+            registry_file = os.path.join(registry_dir, registry_filename)
+            all_registry_files.append(registry_file)
+            
+            console.print(f"  Block ({block_lon}, {block_lat}): {len(block_entries)} files → {registry_filename}")
+            
+            # Write registry file
+            with open(registry_file, 'w') as f:
+                for rel_path, checksum in sorted(block_entries):
+                    f.write(f"{rel_path} {checksum}\n")
+    
+    # Generate master index
+    if all_registry_files:
+        master_index_path = os.path.join(registry_dir, "embeddings_registry_index.txt")
+        console.print(f"[cyan]Generating embeddings registry index:[/cyan] {os.path.basename(master_index_path)}")
+        
+        with open(master_index_path, 'w') as f:
+            for registry_file in sorted(all_registry_files):
+                filename = os.path.basename(registry_file)
+                f.write(f"{filename}\n")
+        
+        console.print(f"[green]✓ Embeddings index written with {len(all_registry_files)} registry files[/green]")
+    
+    return len(all_registry_files) > 0
+
+
+def scan_tiffs_from_checksums(base_dir, registry_dir, console):
+    """Scan SHA256SUM file in TIFF directory and generate pooch-compatible registries."""
+    console.print(Panel.fit("🗺️  Scanning TIFF Files", style="cyan"))
+    
+    sha256sum_file = os.path.join(base_dir, "SHA256SUM")
+    if not os.path.exists(sha256sum_file):
+        console.print(f"[red]SHA256SUM file not found:[/red] {sha256sum_file}")
+        return False
+    
+    # Group TIFF files by block
+    files_by_block = defaultdict(list)
+    total_entries = 0
+    
+    console.print("[blue]Reading SHA256SUM file...[/blue]")
+    try:
+        with open(sha256sum_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    parts = line.split(' ', 1)
+                    if len(parts) == 2:
+                        checksum, filename = parts
+                        if filename.endswith('.tiff') or filename.endswith('.tif'):
+                            # Extract coordinates from filename (e.g., grid_-120.55_53.45.tiff)
+                            basename = os.path.basename(filename)
+                            tiff_name = basename.replace('.tiff', '').replace('.tif', '')
+                            lon, lat = parse_grid_coordinates(tiff_name)
+                            
+                            if lon is not None and lat is not None:
+                                block_lon, block_lat = get_block_coordinates(lon, lat)
+                                block_key = (block_lon, block_lat)
+                                files_by_block[block_key].append((filename, checksum))
+                                total_entries += 1
+                            else:
+                                console.print(f"  [yellow]Warning:[/yellow] Could not parse coordinates from {basename}")
+    except Exception as e:
+        console.print(f"[red]Error reading SHA256SUM file:[/red] {e}")
+        return False
+    
+    console.print(f"[green]Total TIFF entries found:[/green] {total_entries:,}")
+    console.print(f"[green]Organized into:[/green] {len(files_by_block)} blocks")
+    
+    # Generate block-based registry files
+    all_registry_files = []
+    
+    for (block_lon, block_lat), block_entries in sorted(files_by_block.items()):
+        registry_filename = get_landmasks_registry_filename(block_lon, block_lat)
+        registry_file = os.path.join(registry_dir, registry_filename)
+        all_registry_files.append(registry_file)
+        
+        console.print(f"  Block ({block_lon}, {block_lat}): {len(block_entries)} files → {registry_filename}")
+        
+        # Write registry file
+        with open(registry_file, 'w') as f:
+            for rel_path, checksum in sorted(block_entries):
+                f.write(f"{rel_path} {checksum}\n")
+    
+    # Generate master index
+    if all_registry_files:
+        master_index_path = os.path.join(registry_dir, "landmasks_registry_index.txt")
+        console.print(f"[cyan]Generating landmasks registry index:[/cyan] {os.path.basename(master_index_path)}")
+        
+        with open(master_index_path, 'w') as f:
+            for registry_file in sorted(all_registry_files):
+                filename = os.path.basename(registry_file)
+                f.write(f"{filename}\n")
+        
+        console.print(f"[green]✓ Landmasks index written with {len(all_registry_files)} registry files[/green]")
+    
+    return len(all_registry_files) > 0
+
+
+def scan_command(args):
+    """Scan SHA256 checksum files and generate pooch-compatible registry files."""
+    console = Console()
+    
+    base_dir = os.path.abspath(args.base_dir)
+    if not os.path.exists(base_dir):
+        console.print(f"[red]Error: Directory {base_dir} does not exist[/red]")
+        return 1
+
+    console.print(Panel.fit(f"🔍 Scanning Registry Data\n📁 {base_dir}", style="bold blue"))
+    
+    # Determine registry output directory
+    if hasattr(args, 'registry_dir') and args.registry_dir:
+        registry_dir = os.path.join(os.path.abspath(args.registry_dir), "registry")
+    else:
+        registry_dir = os.path.join(base_dir, "registry")
+    
+    # Ensure registry directory exists
+    os.makedirs(registry_dir, exist_ok=True)
+    console.print(f"[cyan]Registry files will be written to:[/cyan] {registry_dir}")
+    
+    # Look for both expected directories
+    repr_dir = os.path.join(base_dir, "global_0.1_degree_representation")
+    tiles_dir = os.path.join(base_dir, "global_0.1_degree_tiff_all")
+    
+    processed_any = False
+    
+    # Process embeddings if directory exists
+    if os.path.exists(repr_dir):
+        if scan_embeddings_from_checksums(repr_dir, registry_dir, console):
+            processed_any = True
+    else:
+        console.print(f"[yellow]Embeddings directory not found:[/yellow] {repr_dir}")
+    
+    # Process TIFF files if directory exists
+    if os.path.exists(tiles_dir):
+        if scan_tiffs_from_checksums(tiles_dir, registry_dir, console):
+            processed_any = True
+    else:
+        console.print(f"[yellow]TIFF directory not found:[/yellow] {tiles_dir}")
+    
+    if not processed_any:
+        console.print(Panel.fit(
+            "[red]No data directories found or no checksum files available.[/red]\n\n"
+            f"Expected:\n"
+            f"• {repr_dir}\n"
+            f"  (with SHA256 files in grid subdirectories)\n"
+            f"• {tiles_dir}\n"
+            f"  (with SHA256SUM file)\n\n"
+            f"[yellow]💡 Run 'geotessera-registry hash' first to generate checksum files.[/yellow]",
+            style="red"
+        ))
+        return 1
+    
+    # Generate master registry.txt containing hashes of all registry files
+    if processed_any:
+        console.print(Panel.fit("📝 Generating Master Registry", style="cyan"))
+        generate_master_registry(registry_dir)
+    
+    console.print(Panel.fit(
+        f"[green]✅ Registry Scan Complete[/green]\n\n"
+        f"📊 Data processed:\n"
+        f"{'• Embeddings: ' + repr_dir if os.path.exists(repr_dir) else ''}\n"
+        f"{'• TIFF files: ' + tiles_dir if os.path.exists(tiles_dir) else ''}\n"
+        f"📁 Registry: {registry_dir}",
+        style="green"
+    ))
+    
+    return 0
+
+
 def hash_command(args):
     """Generate SHA256 checksums for embeddings and TIFF files."""
     base_dir = os.path.abspath(args.base_dir)
@@ -862,6 +1123,14 @@ Examples:
   # This will:
   # - Create SHA256 files in each grid subdirectory under global_0.1_degree_representation/YYYY/
   # - Create SHA256SUM file in global_0.1_degree_tiff_all/ using chunked processing
+  
+  # Scan existing SHA256 checksum files and generate pooch-compatible registries
+  geotessera-registry scan /path/to/v1
+  
+  # This will:
+  # - Read SHA256 files from grid subdirectories and generate block-based registry files
+  # - Read SHA256SUM file from TIFF directory and generate landmask registry files
+  # - Create master registry.txt with hashes of all registry files
 
 This tool is intended for GeoTessera data maintainers to generate the registry
 files that are distributed with the package. End users typically don't need
@@ -933,6 +1202,13 @@ Directory Structure:
     hash_parser = subparsers.add_parser('hash', help='Generate SHA256 checksums for embeddings and TIFF files')
     hash_parser.add_argument('base_dir', help='Base directory containing global_0.1_degree_representation and/or global_0.1_degree_tiff_all subdirectories')
     hash_parser.set_defaults(func=hash_command)
+    
+    # Scan command
+    scan_parser = subparsers.add_parser('scan', help='Scan existing SHA256 checksum files and generate pooch-compatible registry files')
+    scan_parser.add_argument('base_dir', help='Base directory containing global_0.1_degree_representation and/or global_0.1_degree_tiff_all subdirectories with checksum files')
+    scan_parser.add_argument('--registry-dir', type=str, default=None,
+                            help='Output directory for registry files (default: same as base_dir)')
+    scan_parser.set_defaults(func=scan_command)
     
     args = parser.parse_args()
     
