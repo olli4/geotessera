@@ -238,6 +238,77 @@ class GeoTessera:
         # Update available embeddings cache
         self._parse_available_embeddings()
     
+    def _load_all_blocks(self):
+        """Load all available block registries to build complete embedding list.
+        
+        This method is used when a complete listing of all embeddings is needed,
+        such as for generating coverage maps. It parses the master registry to
+        find all block files and loads them.
+        """
+        try:
+            cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
+            registry_file = Path(cache_path) / "registry.txt"
+            
+            if not registry_file.exists():
+                print("Warning: Master registry not found")
+                return
+            
+            # Parse registry.txt to find all block registry files
+            block_files = []
+            with open(registry_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        parts = line.split(' ', 1)
+                        if len(parts) == 2:
+                            filename = parts[0]
+                            # Look for block registry files (format: registryYYYY_BXXX_BYYY.txt)
+                            if filename.startswith('registry') and '_B' in filename and filename.endswith('.txt'):
+                                block_files.append(filename)
+            
+            print(f"Found {len(block_files)} block registry files to load")
+            
+            # Load each block registry
+            for i, block_file in enumerate(block_files):
+                if (i + 1) % 100 == 0:  # Progress indicator every 100 blocks
+                    print(f"Loading block registries: {i + 1}/{len(block_files)}")
+                
+                try:
+                    # Download the block registry file
+                    registry_url = f"{TESSERA_BASE_URL}/{self.version}/registry/{block_file}"
+                    registry_hash = self._get_registry_hash(block_file)
+                    
+                    downloaded_file = pooch.retrieve(
+                        url=registry_url,
+                        known_hash=registry_hash,
+                        fname=block_file,
+                        path=self._registry_base_dir,
+                        progressbar=False  # Don't show progress for individual files
+                    )
+                    
+                    # Load the registry into the pooch instance
+                    self._pooch.load_registry(downloaded_file)
+                    
+                    # Mark this block as loaded (extract year and coordinates from filename)
+                    # Format: registryYYYY_BXXX_BYYY.txt
+                    parts = block_file.replace('registry', '').replace('.txt', '').split('_')
+                    if len(parts) == 3:
+                        year = int(parts[0])
+                        block_lon = int(parts[1].replace('B', ''))
+                        block_lat = int(parts[2].replace('B', ''))
+                        self._loaded_blocks.add((year, block_lon, block_lat))
+                        
+                except Exception as e:
+                    print(f"Warning: Failed to load block registry {block_file}: {e}")
+                    continue
+            
+            # Update available embeddings cache
+            self._parse_available_embeddings()
+            print(f"Loaded {len(self._available_embeddings)} total embeddings")
+            
+        except Exception as e:
+            print(f"Error loading all blocks: {e}")
+    
     def _ensure_tile_block_loaded(self, lon: float, lat: float):
         """Ensure registry data for a specific tile block is loaded.
         
@@ -541,15 +612,9 @@ class GeoTessera:
             On first call, this method will load registry files for all available
             years, which may take a few seconds.
         """
-        # If no years have been loaded yet, load all available years
-        if not self._loaded_years:
-            available_years = self.get_available_years()
-            for year in available_years:
-                try:
-                    self._ensure_year_loaded(year)
-                except ValueError:
-                    # Skip years that can't be loaded
-                    continue
+        # If no blocks have been loaded yet, load all available blocks
+        if not self._loaded_blocks:
+            self._load_all_blocks()
         
         return iter(self._available_embeddings)
     
