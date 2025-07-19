@@ -623,6 +623,8 @@ def verify_checksums(args, base_dir):
 
 def generate_checksums(args, base_dir):
     """Generate SHA256 checksums for files in a directory, excluding checksum files."""
+    from tqdm import tqdm
+    
     # File patterns to exclude from checksumming
     exclude_patterns = {
         'SHA256', 'SHA256SUM', 'CHECKSUMS', 'checksums',
@@ -637,11 +639,21 @@ def generate_checksums(args, base_dir):
     print(f"Output file: {output_file}")
     print(f"Excluding checksum files: {', '.join(sorted(exclude_patterns))}")
     
-    # Find all matching files
+    # First pass: count total files for progress tracking
+    print("Scanning directory structure...")
+    total_files_to_scan = 0
+    for root, _, files in os.walk(base_dir):
+        total_files_to_scan += len(files)
+    
+    # Find all matching files with progress bar
+    import fnmatch
     all_files = []
-    for pattern in file_patterns:
+    
+    with tqdm(total=total_files_to_scan, desc="Scanning files", unit="files") as scan_pbar:
         for root, _, files in os.walk(base_dir):
             for file in files:
+                scan_pbar.update(1)
+                
                 file_path = os.path.join(root, file)
                 filename = os.path.basename(file_path)
                 
@@ -662,10 +674,12 @@ def generate_checksums(args, base_dir):
                 if should_exclude:
                     continue
                     
-                # Check if file matches the pattern
-                import fnmatch
-                if fnmatch.fnmatch(filename, pattern):
-                    all_files.append(file_path)
+                # Check if file matches any of the patterns
+                for pattern in file_patterns:
+                    if fnmatch.fnmatch(filename, pattern):
+                        all_files.append(file_path)
+                        scan_pbar.set_postfix(found=len(all_files))
+                        break  # Stop checking other patterns once we find a match
     
     if not all_files:
         print("No matching files found")
@@ -677,20 +691,26 @@ def generate_checksums(args, base_dir):
     num_workers = args.workers or multiprocessing.cpu_count()
     print(f"Using {num_workers} parallel workers")
     
-    # Process files in parallel
+    # Process files in parallel with progress bar
     checksums = {}
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        # Submit all jobs
         future_to_file = {
             executor.submit(process_file, (file_path, base_dir, False)): file_path
             for file_path in all_files
         }
         
-        for future in as_completed(future_to_file):
-            rel_path, file_hash = future.result()
-            if rel_path and file_hash:
-                checksums[rel_path] = file_hash
+        # Process results with progress bar
+        with tqdm(total=len(all_files), desc="Computing checksums", unit="files") as hash_pbar:
+            for future in as_completed(future_to_file):
+                rel_path, file_hash = future.result()
+                if rel_path and file_hash:
+                    checksums[rel_path] = file_hash
+                hash_pbar.update(1)
+                hash_pbar.set_postfix(completed=len(checksums))
     
     # Write checksums to output file
+    print("Writing checksums to file...")
     with open(output_file, 'w') as f:
         for rel_path in sorted(checksums.keys()):
             f.write(f"{checksums[rel_path]}  {rel_path}\n")
