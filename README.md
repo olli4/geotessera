@@ -101,17 +101,12 @@ GeoTessera includes a separate tool for managing the registry files used by the 
 # List existing registry files
 uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera-registry list /path/to/data
 
-# Generate/update registry files for all years
-uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera-registry update /path/to/data
+# Generate SHA256 checksums for embeddings and TIFF files
+uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera-registry hash /path/to/data
 
-# Update incrementally (only process new files)
-uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera-registry update /path/to/data --incremental
-
-# Generate with custom worker count and create master registry index
-uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera-registry update /path/to/data --workers 8 --generate-master
+# Scan existing SHA256 checksum files and generate pooch-compatible registries
+uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera-registry scan /path/to/data
 ```
-
-The `--generate-master` flag creates a `registry.txt` file that lists all available registry files without hashes, serving as a master index.
 
 ## About Tessera
 
