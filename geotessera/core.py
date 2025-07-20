@@ -111,28 +111,45 @@ class GeoTessera:
     def _resolve_registry_dir(self, registry_dir: Optional[Union[str, Path]]) -> Optional[str]:
         """Resolve the registry directory path from multiple sources.
         
+        This method normalizes the registry directory path to always point to the
+        directory containing the actual registry files (embeddings/, landmasks/).
+        
         Priority order:
         1. Explicit registry_dir parameter
-        2. TESSERA_REGISTRY_DIR environment variable
+        2. TESSERA_REGISTRY_DIR environment variable  
         3. Auto-clone tessera-manifests repository to cache dir
         
         Args:
-            registry_dir: Explicitly provided registry directory
+            registry_dir: Directory containing registry files or parent directory
+                         with 'registry' subdirectory
             
         Returns:
-            Resolved registry directory path, or None for remote-only mode
+            Path to directory containing registry files, or None for remote-only mode
         """
+        resolved_path = None
+        
         # 1. Use explicit parameter if provided
         if registry_dir is not None:
-            return str(registry_dir)
-        
+            resolved_path = str(registry_dir)
         # 2. Check environment variable
-        env_registry_dir = os.environ.get('TESSERA_REGISTRY_DIR')
-        if env_registry_dir:
-            return env_registry_dir
-        
+        elif os.environ.get('TESSERA_REGISTRY_DIR'):
+            resolved_path = os.environ.get('TESSERA_REGISTRY_DIR')
         # 3. Auto-clone tessera-manifests repository
-        return self._setup_tessera_manifests()
+        else:
+            return self._setup_tessera_manifests()  # This already returns registry subdir
+        
+        # Normalize the path to point to the actual registry directory
+        if resolved_path:
+            registry_path = Path(resolved_path)
+            
+            # If the path contains a 'registry' subdirectory, use that
+            if (registry_path / "registry").exists():
+                return str(registry_path / "registry")
+            # Otherwise assume the path already points to the registry directory
+            else:
+                return str(registry_path)
+        
+        return None
     
     def _setup_tessera_manifests(self) -> str:
         """Setup tessera-manifests repository in cache directory.
@@ -243,7 +260,7 @@ class GeoTessera:
         Otherwise downloads and caches the registry index file from remote.
         """
         if self._registry_dir:
-            # Use local registry directory (already points to the registry subdir)
+            # Use local registry directory (already normalized to point to registry files)
             registry_path = Path(self._registry_dir)
             if not registry_path.exists():
                 raise ValueError(f"Registry directory not found: {registry_path}")
@@ -1574,8 +1591,8 @@ class GeoTessera:
                     temp_tiff_paths.append(str(temp_tiff_path))
                     
                 except Exception as e:
-                    print(f"Warning: Could not process embedding tile ({lat}, {lon}): {e}")
-                    continue
+                    # All errors during tile processing should be fatal
+                    raise RuntimeError(f"Failed to process embedding tile ({lat}, {lon}): {e}") from e
             
             if not temp_tiff_paths:
                 raise ValueError("No embedding tiles could be processed")
