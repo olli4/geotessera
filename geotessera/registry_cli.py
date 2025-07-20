@@ -459,9 +459,10 @@ def scan_embeddings_from_checksums(base_dir, registry_dir, console):
                         for line in f:
                             line = line.strip()
                             if line and not line.startswith('#'):
-                                parts = line.split(' ', 1)
-                                if len(parts) == 2:
-                                    checksum, filename = parts
+                                parts = line.split()
+                                if len(parts) >= 2:
+                                    checksum = parts[0]
+                                    filename = parts[-1]  # Take the last part as filename
                                     # Strip whitespace from all components
                                     checksum = checksum.strip()
                                     filename = filename.strip()
@@ -528,9 +529,10 @@ def scan_tiffs_from_checksums(base_dir, registry_dir, console):
             for line in f:
                 line = line.strip()
                 if line and not line.startswith('#'):
-                    parts = line.split(' ', 1)
-                    if len(parts) == 2:
-                        checksum, filename = parts
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        checksum = parts[0]
+                        filename = parts[-1]  # Take the last part as filename
                         if filename.endswith('.tiff') or filename.endswith('.tif'):
                             # Extract coordinates from filename (e.g., grid_-0.35_55.45.tiff)
                             if filename.startswith('grid_'):
