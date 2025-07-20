@@ -400,6 +400,47 @@ class GeoTessera:
         except Exception as e:
             print(f"Error loading all blocks: {e}")
 
+    def _load_blocks_for_region(self, bounds: Tuple[float, float, float, float], year: int):
+        """Load only the registry blocks needed for a specific region.
+        
+        This is much more efficient than loading all blocks globally when only
+        working with a specific geographic region.
+        
+        Args:
+            bounds: Geographic bounds as (min_lon, min_lat, max_lon, max_lat)
+            year: Year of embeddings to load
+        """
+        from .registry_utils import get_all_blocks_in_range
+        
+        min_lon, min_lat, max_lon, max_lat = bounds
+        
+        # Get all blocks that intersect with the region
+        required_blocks = get_all_blocks_in_range(min_lon, max_lon, min_lat, max_lat)
+        
+        print(f"Loading {len(required_blocks)} registry blocks for region bounds: "
+              f"({min_lon:.4f}, {min_lat:.4f}, {max_lon:.4f}, {max_lat:.4f})")
+        
+        # Load each required block
+        blocks_loaded = 0
+        for block_lon, block_lat in required_blocks:
+            block_key = (year, block_lon, block_lat)
+            
+            if block_key not in self._loaded_blocks:
+                # Use the center of the block to trigger loading
+                center_lon = block_lon + 2.5  # Center of 5-degree block
+                center_lat = block_lat + 2.5  # Center of 5-degree block
+                
+                try:
+                    self._ensure_block_loaded(year, center_lon, center_lat)
+                    blocks_loaded += 1
+                except Exception as e:
+                    print(f"Warning: Failed to load block ({block_lon}, {block_lat}): {e}")
+        
+        print(f"Successfully loaded {blocks_loaded}/{len(required_blocks)} registry blocks")
+        
+        # Update available embeddings cache
+        self._parse_available_embeddings()
+
     def _ensure_tile_block_loaded(self, lon: float, lat: float):
         """Ensure registry data for a specific tile block is loaded.
         
@@ -791,8 +832,21 @@ class GeoTessera:
         min_lat_grid = np.floor(min_lat * 10) / 10
         max_lat_grid = np.ceil(max_lat * 10) / 10
         
-        # Get all available tiles
-        available_tiles = self.list_available_embeddings()
+        # Load only the registry blocks needed for this region (for all available years)
+        # We need to check what years are available first without loading everything
+        if hasattr(self, '_loaded_blocks') and self._loaded_blocks:
+            # Get years from already loaded blocks
+            available_years = {year for year, _, _ in self._loaded_blocks}
+        else:
+            # Use default range if no blocks loaded yet
+            available_years = set(range(2017, 2025))
+        
+        # Load blocks for each year in the region
+        for year in available_years:
+            self._load_blocks_for_region(bounds, year)
+        
+        # Now get tiles from the loaded blocks (much smaller set)
+        available_tiles = self._available_embeddings
         
         # Filter tiles that actually intersect with the geometries
         overlapping_tiles = []
@@ -1322,9 +1376,12 @@ class GeoTessera:
         
         min_lon, min_lat, max_lon, max_lat = bounds
         
+        # Load only the registry blocks needed for this region (much more efficient)
+        self._load_blocks_for_region(bounds, year)
+        
         # Find all embedding tiles that intersect with the bounds
         tiles_to_merge = []
-        for emb_year, lat, lon in self.list_available_embeddings():
+        for emb_year, lat, lon in self._available_embeddings:
             if emb_year != year:
                 continue
                 
