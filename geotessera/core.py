@@ -26,7 +26,7 @@ from .registry_utils import (
 
 
 # Base URL for Tessera data downloads
-TESSERA_BASE_URL = "https://dl-1.tessera.wiki"
+TESSERA_BASE_URL = "https://dl-2.tessera.wiki"
 
 
 class GeoTessera:
