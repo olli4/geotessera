@@ -26,7 +26,7 @@ from .registry_utils import (
 
 
 # Base URL for Tessera data downloads
-TESSERA_BASE_URL = "https://dl-2.tessera.wiki"
+TESSERA_BASE_URL = "https://dl-1.tessera.wiki"
 
 
 class GeoTessera:
@@ -419,18 +419,21 @@ class GeoTessera:
         registry_filename = get_landmasks_registry_filename(block_lon, block_lat)
         
         if self._registry_dir:
-            # Load from local directory
+            # Load from local directory - use the single landmasks_all.txt file
             landmasks_dir = Path(self._registry_base_dir) / "landmasks"
-            registry_file = landmasks_dir / registry_filename
+            all_landmasks_file = landmasks_dir / "landmasks_all.txt"
             
-            if not registry_file.exists():
-                # Silently skip if file doesn't exist - it may not have data for this block
-                return
+            if not all_landmasks_file.exists():
+                raise FileNotFoundError(f"Landmasks registry file not found: {all_landmasks_file}")
             
-            # Load the registry file directly (now in correct pooch format)
-            self._landmask_pooch.load_registry(str(registry_file))
+            # Load the complete landmasks registry once (not block-based)
+            if not hasattr(self, '_landmasks_all_loaded'):
+                self._landmask_pooch.load_registry(str(all_landmasks_file))
+                self._landmasks_all_loaded = True
+                self._parse_available_landmasks()
+            
+            # Mark this block as loaded (even though we loaded everything)
             self._loaded_tile_blocks.add(block_key)
-            self._parse_available_landmasks()
             return
         else:
             # Original behavior: download from remote
