@@ -44,6 +44,7 @@ class GeoTessera:
     Attributes:
         version: Dataset version identifier (default: "v1")
         cache_dir: Local directory for caching downloaded files
+        registry_dir: Local directory containing registry files (if None, downloads from remote)
         
     Example:
         >>> gt = GeoTessera()
@@ -54,7 +55,8 @@ class GeoTessera:
         >>> gt.visualize_embedding(embedding, bands=[10, 20, 30])
     """
     
-    def __init__(self, version: str = "v1", cache_dir: Optional[Union[str, Path]] = None):
+    def __init__(self, version: str = "v1", cache_dir: Optional[Union[str, Path]] = None, 
+                 registry_dir: Optional[Union[str, Path]] = None):
         """Initialize GeoTessera client for accessing Tessera embeddings.
         
         Creates a client instance that can fetch and work with pre-computed
@@ -66,6 +68,11 @@ class GeoTessera:
             cache_dir: Directory for caching downloaded files. If None, uses
                       the system's default cache directory (~/.cache/geotessera
                       on Unix-like systems).
+            registry_dir: Local directory containing registry files. If provided,
+                         registry files will be loaded from this directory instead
+                         of being downloaded via pooch. Should point to directory
+                         containing "registry" subdirectory with embeddings and
+                         landmasks folders.
                       
         Raises:
             ValueError: If the specified version is not supported.
@@ -76,6 +83,7 @@ class GeoTessera:
         """
         self.version = version
         self._cache_dir = cache_dir
+        self._registry_dir = registry_dir
         self._pooch = None
         self._landmask_pooch = None
         self._available_embeddings = []
@@ -146,20 +154,37 @@ class GeoTessera:
     def _load_registry_index(self):
         """Load the registry index for block-based registries.
         
-        Downloads and caches the registry index file that lists all
-        available block registry files.
+        If registry_dir is provided, loads registry files from local directory.
+        Otherwise downloads and caches the registry index file from remote.
         """
-        cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
-        self._registry_base_dir = cache_path
-        
-        # Download the master registry containing hashes of registry files
-        self._registry_file = pooch.retrieve(
-            url=f"{TESSERA_BASE_URL}/{self.version}/registry/registry.txt",
-            known_hash=None,
-            fname="registry.txt",
-            path=cache_path,
-            progressbar=True
-        )
+        if self._registry_dir:
+            # Use local registry directory
+            registry_path = Path(self._registry_dir) / "registry"
+            if not registry_path.exists():
+                raise ValueError(f"Registry directory not found: {registry_path}")
+            
+            self._registry_base_dir = str(registry_path)
+            
+            # Look for master registry file in the local directory
+            master_registry = registry_path / "registry.txt"
+            if master_registry.exists():
+                self._registry_file = str(master_registry)
+            else:
+                # No master registry file, we'll scan directories later
+                self._registry_file = None
+        else:
+            # Original behavior: download from remote
+            cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
+            self._registry_base_dir = cache_path
+            
+            # Download the master registry containing hashes of registry files
+            self._registry_file = pooch.retrieve(
+                url=f"{TESSERA_BASE_URL}/{self.version}/registry/registry.txt",
+                known_hash=None,
+                fname="registry.txt",
+                path=cache_path,
+                progressbar=True
+            )
     
     def _get_registry_hash(self, registry_filename: str) -> Optional[str]:
         """Get the hash for a specific registry file from the master registry.txt.
@@ -204,18 +229,34 @@ class GeoTessera:
             
         registry_filename = get_embeddings_registry_filename(str(year), block_lon, block_lat)
         
-        # Get the hash from the master registry.txt file
-        registry_hash = self._get_registry_hash(registry_filename)
-        
-        # Download the specific block registry file
-        registry_url = f"{TESSERA_BASE_URL}/{self.version}/registry/{registry_filename}"
-        registry_file = pooch.retrieve(
-            url=registry_url,
-            known_hash=registry_hash,
-            fname=registry_filename,
-            path=self._registry_base_dir,
-            progressbar=False  # Don't show progress for individual block downloads
-        )
+        if self._registry_dir:
+            # Load from local directory
+            embeddings_dir = Path(self._registry_base_dir) / "embeddings"
+            registry_file = embeddings_dir / registry_filename
+            
+            if not registry_file.exists():
+                # Silently skip if file doesn't exist - it may not have data for this block
+                return
+            
+            # Load the registry file directly (now in correct pooch format)
+            self._pooch.load_registry(str(registry_file))
+            self._loaded_blocks.add(block_key)
+            self._parse_available_embeddings()
+            return
+        else:
+            # Original behavior: download from remote
+            # Get the hash from the master registry.txt file
+            registry_hash = self._get_registry_hash(registry_filename)
+            
+            # Download the specific block registry file
+            registry_url = f"{TESSERA_BASE_URL}/{self.version}/registry/{registry_filename}"
+            registry_file = pooch.retrieve(
+                url=registry_url,
+                known_hash=registry_hash,
+                fname=registry_filename,
+                path=self._registry_base_dir,
+                progressbar=False  # Don't show progress for individual block downloads
+            )
         
         # Load the registry into the pooch instance
         self._pooch.load_registry(registry_file)
@@ -228,75 +269,129 @@ class GeoTessera:
         """Load all available block registries to build complete embedding list.
         
         This method is used when a complete listing of all embeddings is needed,
-        such as for generating coverage maps. It parses the master registry to
-        find all block files and loads them.
+        such as for generating coverage maps. It scans the local registry directory
+        or parses the master registry to find all block files and loads them.
         """
         try:
-            if not self._registry_file or not Path(self._registry_file).exists():
-                print("Warning: Master registry not found")
-                return
-            
-            # Parse registry.txt to find all block registry files
-            block_files = []
-            with open(self._registry_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        parts = line.split(' ', 1)
-                        if len(parts) == 2:
-                            filename = parts[0]
-                            # Look for embeddings registry files (format: embeddings_YYYY_lonXXX_latYYY.txt)
-                            if filename.startswith('embeddings_') and '_lon' in filename and '_lat' in filename and filename.endswith('.txt'):
-                                block_files.append(filename)
-            
-            print(f"Found {len(block_files)} block registry files to load")
-            
-            # Load each block registry
-            for i, block_file in enumerate(block_files):
-                if (i + 1) % 100 == 0:  # Progress indicator every 100 blocks
-                    print(f"Loading block registries: {i + 1}/{len(block_files)}")
+            if self._registry_dir:
+                # Scan local embeddings directory for registry files
+                embeddings_dir = Path(self._registry_base_dir) / "embeddings"
+                if not embeddings_dir.exists():
+                    print(f"Warning: Embeddings directory not found: {embeddings_dir}")
+                    return
                 
-                try:
-                    # Download the block registry file
-                    registry_url = f"{TESSERA_BASE_URL}/{self.version}/registry/{block_file}"
-                    registry_hash = self._get_registry_hash(block_file)
+                # Find all embeddings registry files
+                block_files = []
+                for file_path in embeddings_dir.glob("embeddings_*.txt"):
+                    if '_lon' in file_path.name and '_lat' in file_path.name:
+                        block_files.append(file_path.name)
+                
+                print(f"Found {len(block_files)} block registry files to load")
+                
+                # Load each block registry
+                for i, block_file in enumerate(block_files):
+                    if (i + 1) % 100 == 0:  # Progress indicator every 100 blocks
+                        print(f"Loading block registries: {i + 1}/{len(block_files)}")
                     
-                    downloaded_file = pooch.retrieve(
-                        url=registry_url,
-                        known_hash=registry_hash,
-                        fname=block_file,
-                        path=self._registry_base_dir,
-                        progressbar=False  # Don't show progress for individual files
-                    )
+                    try:
+                        registry_file_path = embeddings_dir / block_file
+                        
+                        # Load the registry file directly (now in correct pooch format)
+                        self._pooch.load_registry(str(registry_file_path))
+                        
+                        # Mark this block as loaded
+                        # Parse filename format: embeddings_YYYY_lonXXX_latYYY.txt
+                        # Examples: embeddings_2024_lon-15_lat10.txt, embeddings_2024_lon130_lat45.txt
+                        parts = block_file.replace('.txt', '').split('_')
+                        if len(parts) >= 4:
+                            year = int(parts[1])  # parts[0] is "embeddings", parts[1] is year
+                            
+                            # Extract lon and lat values
+                            lon_part = None
+                            lat_part = None
+                            for j, part in enumerate(parts):
+                                if part.startswith('lon'):
+                                    lon_part = part[3:]  # Remove 'lon' prefix
+                                elif part.startswith('lat'):
+                                    lat_part = part[3:]  # Remove 'lat' prefix
+                            
+                            if lon_part and lat_part:
+                                # Convert to block coordinates (assuming these are already block coordinates)
+                                block_lon = int(lon_part)
+                                block_lat = int(lat_part)
+                                self._loaded_blocks.add((year, block_lon, block_lat))
+                            
+                    except Exception as e:
+                        print(f"Warning: Failed to load block registry {block_file}: {e}")
+                        continue
+                        
+            else:
+                # Original behavior: use master registry file
+                if not self._registry_file or not Path(self._registry_file).exists():
+                    print("Warning: Master registry not found")
+                    return
+                
+                # Parse registry.txt to find all block registry files
+                block_files = []
+                with open(self._registry_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            parts = line.split(' ', 1)
+                            if len(parts) == 2:
+                                filename = parts[0]
+                                # Look for embeddings registry files (format: embeddings_YYYY_lonXXX_latYYY.txt)
+                                if filename.startswith('embeddings_') and '_lon' in filename and '_lat' in filename and filename.endswith('.txt'):
+                                    block_files.append(filename)
+                
+                print(f"Found {len(block_files)} block registry files to load")
+                
+                # Load each block registry
+                for i, block_file in enumerate(block_files):
+                    if (i + 1) % 100 == 0:  # Progress indicator every 100 blocks
+                        print(f"Loading block registries: {i + 1}/{len(block_files)}")
                     
-                    # Load the registry into the pooch instance
-                    self._pooch.load_registry(downloaded_file)
-                    
-                    # Mark this block as loaded
-                    # Parse filename format: embeddings_YYYY_lonXXX_latYYY.txt
-                    # Examples: embeddings_2024_lon-15_lat10.txt, embeddings_2024_lon130_lat45.txt
-                    parts = block_file.replace('.txt', '').split('_')
-                    if len(parts) >= 4:
-                        year = int(parts[1])  # parts[0] is "embeddings", parts[1] is year
+                    try:
+                        # Download the block registry file
+                        registry_url = f"{TESSERA_BASE_URL}/{self.version}/registry/{block_file}"
+                        registry_hash = self._get_registry_hash(block_file)
                         
-                        # Extract lon and lat values
-                        lon_part = None
-                        lat_part = None
-                        for j, part in enumerate(parts):
-                            if part.startswith('lon'):
-                                lon_part = part[3:]  # Remove 'lon' prefix
-                            elif part.startswith('lat'):
-                                lat_part = part[3:]  # Remove 'lat' prefix
+                        downloaded_file = pooch.retrieve(
+                            url=registry_url,
+                            known_hash=registry_hash,
+                            fname=block_file,
+                            path=self._registry_base_dir,
+                            progressbar=False  # Don't show progress for individual files
+                        )
                         
-                        if lon_part and lat_part:
-                            # Convert to block coordinates (assuming these are already block coordinates)
-                            block_lon = int(lon_part)
-                            block_lat = int(lat_part)
-                            self._loaded_blocks.add((year, block_lon, block_lat))
+                        # Load the registry into the pooch instance
+                        self._pooch.load_registry(downloaded_file)
                         
-                except Exception as e:
-                    print(f"Warning: Failed to load block registry {block_file}: {e}")
-                    continue
+                        # Mark this block as loaded
+                        # Parse filename format: embeddings_YYYY_lonXXX_latYYY.txt
+                        # Examples: embeddings_2024_lon-15_lat10.txt, embeddings_2024_lon130_lat45.txt
+                        parts = block_file.replace('.txt', '').split('_')
+                        if len(parts) >= 4:
+                            year = int(parts[1])  # parts[0] is "embeddings", parts[1] is year
+                            
+                            # Extract lon and lat values
+                            lon_part = None
+                            lat_part = None
+                            for j, part in enumerate(parts):
+                                if part.startswith('lon'):
+                                    lon_part = part[3:]  # Remove 'lon' prefix
+                                elif part.startswith('lat'):
+                                    lat_part = part[3:]  # Remove 'lat' prefix
+                            
+                            if lon_part and lat_part:
+                                # Convert to block coordinates (assuming these are already block coordinates)
+                                block_lon = int(lon_part)
+                                block_lat = int(lat_part)
+                                self._loaded_blocks.add((year, block_lon, block_lat))
+                            
+                    except Exception as e:
+                        print(f"Warning: Failed to load block registry {block_file}: {e}")
+                        continue
             
             # Update available embeddings cache
             self._parse_available_embeddings()
@@ -323,18 +418,34 @@ class GeoTessera:
             
         registry_filename = get_landmasks_registry_filename(block_lon, block_lat)
         
-        # Get the hash from the master registry.txt file
-        registry_hash = self._get_registry_hash(registry_filename)
-        
-        # Download the specific tile block registry file
-        registry_url = f"{TESSERA_BASE_URL}/{self.version}/registry/{registry_filename}"
-        registry_file = pooch.retrieve(
-            url=registry_url,
-            known_hash=registry_hash,
-            fname=registry_filename,
-            path=self._registry_base_dir,
-            progressbar=False  # Don't show progress for individual block downloads
-        )
+        if self._registry_dir:
+            # Load from local directory
+            landmasks_dir = Path(self._registry_base_dir) / "landmasks"
+            registry_file = landmasks_dir / registry_filename
+            
+            if not registry_file.exists():
+                # Silently skip if file doesn't exist - it may not have data for this block
+                return
+            
+            # Load the registry file directly (now in correct pooch format)
+            self._landmask_pooch.load_registry(str(registry_file))
+            self._loaded_tile_blocks.add(block_key)
+            self._parse_available_landmasks()
+            return
+        else:
+            # Original behavior: download from remote
+            # Get the hash from the master registry.txt file
+            registry_hash = self._get_registry_hash(registry_filename)
+            
+            # Download the specific tile block registry file
+            registry_url = f"{TESSERA_BASE_URL}/{self.version}/registry/{registry_filename}"
+            registry_file = pooch.retrieve(
+                url=registry_url,
+                known_hash=registry_hash,
+                fname=registry_filename,
+                path=self._registry_base_dir,
+                progressbar=False  # Don't show progress for individual block downloads
+            )
         
         # Load the registry into the landmask pooch instance
         self._landmask_pooch.load_registry(registry_file)

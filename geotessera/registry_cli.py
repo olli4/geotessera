@@ -463,7 +463,8 @@ def scan_embeddings_from_checksums(base_dir, registry_dir, console):
                                 if len(parts) == 2:
                                     checksum, filename = parts
                                     # Convert to relative path from base_dir
-                                    rel_path = os.path.join(year, grid_name, filename)
+                                    # Use forward slashes and ensure no trailing slashes or spaces
+                                    rel_path = f"{year}/{grid_name}/{filename}"
                                     files_by_year_and_block[year][block_key].append((rel_path, checksum))
                                     total_entries += 1
                 except Exception as e:

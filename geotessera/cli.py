@@ -38,6 +38,7 @@ def list_embeddings_command(args):
     Args:
         args: Parsed command line arguments containing:
             - version: Dataset version to use
+            - registry_dir: Optional local registry directory
             - limit: Optional maximum number of tiles to display
     
     Example output::
@@ -47,7 +48,7 @@ def list_embeddings_command(args):
           - Year 2024: (51.50, -0.00)
           ... and 49998 more
     """
-    tessera = GeoTessera(version=args.version)
+    tessera = GeoTessera(version=args.version, registry_dir=args.registry_dir)
     
     embeddings = list(tessera.list_available_embeddings())
     print(f"Available embeddings ({len(embeddings)} total):")
@@ -73,6 +74,7 @@ def info_command(args):
     Args:
         args: Parsed command line arguments containing:
             - version: Dataset version to query
+            - registry_dir: Optional local registry directory
     
     Information displayed:
         - Dataset version identifier
@@ -81,7 +83,7 @@ def info_command(args):
         - Total count of available embeddings
         - Count of auxiliary land mask files
     """
-    tessera = GeoTessera(version=args.version)
+    tessera = GeoTessera(version=args.version, registry_dir=args.registry_dir)
     
     print("GeoTessera Dataset Information")
     print(f"Version: {tessera.version}")
@@ -115,7 +117,7 @@ def map_command(args):
         The map generation may take several seconds for large datasets
         as it processes all available tile locations.
     """
-    tessera = GeoTessera(version=args.version)
+    tessera = GeoTessera(version=args.version, registry_dir=args.registry_dir)
     
     print("Generating coverage map from embedding registry data...")
     
@@ -222,7 +224,7 @@ def visualize_command(args):
     Raises:
         SystemExit: If TopoJSON file is missing or invalid
     """
-    tessera = GeoTessera(version=args.version)
+    tessera = GeoTessera(version=args.version, registry_dir=args.registry_dir)
     
     if not args.topojson:
         print("Error: --topojson is required for visualization")
@@ -617,7 +619,7 @@ class GeoJSONRequestHandler(http.server.SimpleHTTPRequestHandler):
         return html_template.format(tessera_meta=tessera_meta, tile_bounds_js=tile_bounds_js)
 
 
-def generate_static_tessera_tiles(geojson_path, output_dir, tessera_version="v1", year=2024, bands=[0, 1, 2]):
+def generate_static_tessera_tiles(geojson_path, output_dir, tessera_version="v1", year=2024, bands=[0, 1, 2], registry_dir=None):
     """Generate web map tiles from Tessera embeddings for a region.
     
     Creates a pyramid of PNG tiles suitable for web mapping applications
@@ -630,6 +632,7 @@ def generate_static_tessera_tiles(geojson_path, output_dir, tessera_version="v1"
         tessera_version: Dataset version to use (default: "v1")
         year: Year of embeddings to process (default: 2024)
         bands: Three channel indices for RGB visualization (default: [0,1,2])
+        registry_dir: Local directory containing registry files (optional)
     
     Returns:
         str or None: Path to tiles directory if successful, None on error
@@ -663,7 +666,7 @@ def generate_static_tessera_tiles(geojson_path, output_dir, tessera_version="v1"
     print("Generating static tessera false color visualization tiles...")
     
     # Initialize tessera
-    tessera = GeoTessera(version=tessera_version)
+    tessera = GeoTessera(version=tessera_version, registry_dir=registry_dir)
     
     # Read GeoJSON to get bounds
     try:
@@ -799,7 +802,8 @@ def serve_command(args):
         str(tiles_output_base),
         tessera_version=args.version,
         year=args.year,
-        bands=args.bands
+        bands=args.bands,
+        registry_dir=args.registry_dir
     )
     
     if not tiles_dir:
@@ -899,6 +903,7 @@ Note: The 'visualize' command creates false-color visualizations from numpy embe
     )
     
     parser.add_argument("--version", default="v1", help="Dataset version (default: v1)")
+    parser.add_argument("--registry-dir", type=str, help="Local directory containing registry files (if not specified, downloads from remote)")
     
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
     
