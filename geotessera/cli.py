@@ -48,7 +48,7 @@ def list_embeddings_command(args):
           - Year 2024: (51.50, -0.00)
           ... and 49998 more
     """
-    tessera = GeoTessera(version=args.version, registry_dir=args.registry_dir)
+    tessera = GeoTessera(version=args.version, registry_dir=args.registry_dir, auto_update=args.auto_update, manifests_repo_url=args.manifests_repo_url)
     
     embeddings = list(tessera.list_available_embeddings())
     print(f"Available embeddings ({len(embeddings)} total):")
@@ -83,7 +83,7 @@ def info_command(args):
         - Total count of available embeddings
         - Count of auxiliary land mask files
     """
-    tessera = GeoTessera(version=args.version, registry_dir=args.registry_dir)
+    tessera = GeoTessera(version=args.version, registry_dir=args.registry_dir, auto_update=args.auto_update, manifests_repo_url=args.manifests_repo_url)
     
     print("GeoTessera Dataset Information")
     print(f"Version: {tessera.version}")
@@ -117,7 +117,7 @@ def map_command(args):
         The map generation may take several seconds for large datasets
         as it processes all available tile locations.
     """
-    tessera = GeoTessera(version=args.version, registry_dir=args.registry_dir)
+    tessera = GeoTessera(version=args.version, registry_dir=args.registry_dir, auto_update=args.auto_update, manifests_repo_url=args.manifests_repo_url)
     
     print("Generating coverage map from embedding registry data...")
     
@@ -224,7 +224,7 @@ def visualize_command(args):
     Raises:
         SystemExit: If TopoJSON file is missing or invalid
     """
-    tessera = GeoTessera(version=args.version, registry_dir=args.registry_dir)
+    tessera = GeoTessera(version=args.version, registry_dir=args.registry_dir, auto_update=args.auto_update, manifests_repo_url=args.manifests_repo_url)
     
     if not args.topojson:
         print("Error: --topojson is required for visualization")
@@ -619,7 +619,7 @@ class GeoJSONRequestHandler(http.server.SimpleHTTPRequestHandler):
         return html_template.format(tessera_meta=tessera_meta, tile_bounds_js=tile_bounds_js)
 
 
-def generate_static_tessera_tiles(geojson_path, output_dir, tessera_version="v1", year=2024, bands=[0, 1, 2], registry_dir=None):
+def generate_static_tessera_tiles(geojson_path, output_dir, tessera_version="v1", year=2024, bands=[0, 1, 2], registry_dir=None, auto_update=False, manifests_repo_url="https://github.com/ucam-eo/tessera-manifests.git"):
     """Generate web map tiles from Tessera embeddings for a region.
     
     Creates a pyramid of PNG tiles suitable for web mapping applications
@@ -633,6 +633,7 @@ def generate_static_tessera_tiles(geojson_path, output_dir, tessera_version="v1"
         year: Year of embeddings to process (default: 2024)
         bands: Three channel indices for RGB visualization (default: [0,1,2])
         registry_dir: Local directory containing registry files (optional)
+        auto_update: Update tessera-manifests repository to latest version
     
     Returns:
         str or None: Path to tiles directory if successful, None on error
@@ -666,7 +667,7 @@ def generate_static_tessera_tiles(geojson_path, output_dir, tessera_version="v1"
     print("Generating static tessera false color visualization tiles...")
     
     # Initialize tessera
-    tessera = GeoTessera(version=tessera_version, registry_dir=registry_dir)
+    tessera = GeoTessera(version=tessera_version, registry_dir=registry_dir, auto_update=auto_update, manifests_repo_url=manifests_repo_url)
     
     # Read GeoJSON to get bounds
     try:
@@ -803,7 +804,9 @@ def serve_command(args):
         tessera_version=args.version,
         year=args.year,
         bands=args.bands,
-        registry_dir=args.registry_dir
+        registry_dir=args.registry_dir,
+        auto_update=args.auto_update,
+        manifests_repo_url=args.manifests_repo_url
     )
     
     if not tiles_dir:
@@ -903,7 +906,9 @@ Note: The 'visualize' command creates false-color visualizations from numpy embe
     )
     
     parser.add_argument("--version", default="v1", help="Dataset version (default: v1)")
-    parser.add_argument("--registry-dir", type=str, help="Local directory containing registry files (if not specified, downloads from remote)")
+    parser.add_argument("--registry-dir", type=str, help="Local directory containing registry files (if not specified, uses TESSERA_REGISTRY_DIR env var or auto-clones tessera-manifests)")
+    parser.add_argument("--auto-update", action="store_true", help="Update tessera-manifests repository to latest version before use")
+    parser.add_argument("--manifests-repo-url", default="https://github.com/ucam-eo/tessera-manifests.git", help="Git repository URL for tessera-manifests (default: official repository)")
     
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
     

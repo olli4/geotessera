@@ -14,6 +14,8 @@ The module handles:
 """
 from pathlib import Path
 from typing import Optional, Union, List, Tuple, Iterator
+import os
+import subprocess
 import pooch
 import geopandas as gpd
 import numpy as np
@@ -56,7 +58,8 @@ class GeoTessera:
     """
     
     def __init__(self, version: str = "v1", cache_dir: Optional[Union[str, Path]] = None, 
-                 registry_dir: Optional[Union[str, Path]] = None):
+                 registry_dir: Optional[Union[str, Path]] = None, auto_update: bool = False,
+                 manifests_repo_url: str = "https://github.com/ucam-eo/tessera-manifests.git"):
         """Initialize GeoTessera client for accessing Tessera embeddings.
         
         Creates a client instance that can fetch and work with pre-computed
@@ -72,7 +75,16 @@ class GeoTessera:
                          registry files will be loaded from this directory instead
                          of being downloaded via pooch. Should point to directory
                          containing "registry" subdirectory with embeddings and
-                         landmasks folders.
+                         landmasks folders. If None, will check TESSERA_REGISTRY_DIR
+                         environment variable, and if that's also not set, will
+                         auto-clone the tessera-manifests repository.
+            auto_update: If True, updates the tessera-manifests repository to
+                        the latest version from upstream (main branch). Only
+                        applies when using the auto-cloned manifests repository.
+            manifests_repo_url: Git repository URL for tessera-manifests. Only used
+                               when auto-cloning the manifests repository (when no
+                               registry_dir is specified and TESSERA_REGISTRY_DIR is
+                               not set). Defaults to the official repository.
                       
         Raises:
             ValueError: If the specified version is not supported.
@@ -83,7 +95,9 @@ class GeoTessera:
         """
         self.version = version
         self._cache_dir = cache_dir
-        self._registry_dir = registry_dir
+        self._auto_update = auto_update
+        self._manifests_repo_url = manifests_repo_url
+        self._registry_dir = self._resolve_registry_dir(registry_dir)
         self._pooch = None
         self._landmask_pooch = None
         self._available_embeddings = []
@@ -93,6 +107,77 @@ class GeoTessera:
         self._registry_base_dir = None  # Base directory for block registries
         self._registry_file = None  # Path to the master registry.txt file
         self._initialize_pooch()
+    
+    def _resolve_registry_dir(self, registry_dir: Optional[Union[str, Path]]) -> Optional[str]:
+        """Resolve the registry directory path from multiple sources.
+        
+        Priority order:
+        1. Explicit registry_dir parameter
+        2. TESSERA_REGISTRY_DIR environment variable
+        3. Auto-clone tessera-manifests repository to cache dir
+        
+        Args:
+            registry_dir: Explicitly provided registry directory
+            
+        Returns:
+            Resolved registry directory path, or None for remote-only mode
+        """
+        # 1. Use explicit parameter if provided
+        if registry_dir is not None:
+            return str(registry_dir)
+        
+        # 2. Check environment variable
+        env_registry_dir = os.environ.get('TESSERA_REGISTRY_DIR')
+        if env_registry_dir:
+            return env_registry_dir
+        
+        # 3. Auto-clone tessera-manifests repository
+        return self._setup_tessera_manifests()
+    
+    def _setup_tessera_manifests(self) -> str:
+        """Setup tessera-manifests repository in cache directory.
+        
+        Clones or updates the tessera-manifests repository from GitHub.
+        
+        Returns:
+            Path to the tessera-manifests directory
+        """
+        cache_path = self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
+        manifests_dir = Path(cache_path) / "tessera-manifests"
+        
+        if manifests_dir.exists():
+            if self._auto_update:
+                # Update existing repository
+                try:
+                    print(f"Updating tessera-manifests repository in {manifests_dir}")
+                    subprocess.run([
+                        "git", "fetch", "origin"
+                    ], cwd=manifests_dir, check=True, capture_output=True)
+                    
+                    subprocess.run([
+                        "git", "reset", "--hard", "origin/main"
+                    ], cwd=manifests_dir, check=True, capture_output=True)
+                    
+                    print("✓ tessera-manifests updated to latest version")
+                except subprocess.CalledProcessError as e:
+                    print(f"Warning: Failed to update tessera-manifests: {e}")
+        else:
+            # Clone repository
+            try:
+                print(f"Cloning tessera-manifests repository to {manifests_dir}")
+                subprocess.run([
+                    "git", "clone", 
+                    self._manifests_repo_url,
+                    str(manifests_dir)
+                ], check=True, capture_output=True)
+                
+                print("✓ tessera-manifests repository cloned successfully")
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f"Failed to clone tessera-manifests repository: {e}")
+        
+        # Return the registry subdirectory path
+        registry_dir = manifests_dir / "registry"
+        return str(registry_dir)
     
     def _initialize_pooch(self):
         """Initialize Pooch data fetchers for embeddings and land masks.
@@ -158,8 +243,8 @@ class GeoTessera:
         Otherwise downloads and caches the registry index file from remote.
         """
         if self._registry_dir:
-            # Use local registry directory
-            registry_path = Path(self._registry_dir) / "registry"
+            # Use local registry directory (already points to the registry subdir)
+            registry_path = Path(self._registry_dir)
             if not registry_path.exists():
                 raise ValueError(f"Registry directory not found: {registry_path}")
             
@@ -460,20 +545,18 @@ class GeoTessera:
         registry_filename = get_landmasks_registry_filename(block_lon, block_lat)
         
         if self._registry_dir:
-            # Load from local directory - use the single landmasks_all.txt file
+            # Load from local directory using block-based landmasks
             landmasks_dir = Path(self._registry_base_dir) / "landmasks"
-            all_landmasks_file = landmasks_dir / "landmasks_all.txt"
+            landmasks_registry_file = landmasks_dir / registry_filename
             
-            if not all_landmasks_file.exists():
-                raise FileNotFoundError(f"Landmasks registry file not found: {all_landmasks_file}")
+            if not landmasks_registry_file.exists():
+                raise FileNotFoundError(f"Landmasks registry file not found: {landmasks_registry_file}")
             
-            # Load the complete landmasks registry once (not block-based)
-            if not hasattr(self, '_landmasks_all_loaded'):
-                self._landmask_pooch.load_registry(str(all_landmasks_file))
-                self._landmasks_all_loaded = True
-                self._parse_available_landmasks()
+            # Load the block-specific landmasks registry
+            self._landmask_pooch.load_registry(str(landmasks_registry_file))
+            self._parse_available_landmasks()
             
-            # Mark this block as loaded (even though we loaded everything)
+            # Mark this block as loaded
             self._loaded_tile_blocks.add(block_key)
             return
         else:

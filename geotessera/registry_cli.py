@@ -510,7 +510,7 @@ def scan_embeddings_from_checksums(base_dir, registry_dir, console):
 
 
 def scan_tiffs_from_checksums(base_dir, registry_dir, console):
-    """Scan SHA256SUM file in TIFF directory and generate pooch-compatible registry."""
+    """Scan SHA256SUM file in TIFF directory and generate block-based pooch-compatible registry."""
     console.print(Panel.fit("🗺️  Scanning TIFF Files", style="cyan"))
     
     sha256sum_file = os.path.join(base_dir, "SHA256SUM")
@@ -519,7 +519,7 @@ def scan_tiffs_from_checksums(base_dir, registry_dir, console):
         return False
     
     # Read all TIFF entries from SHA256SUM
-    tiff_entries = []
+    tiff_blocks = defaultdict(list)
     total_entries = 0
     
     console.print("[blue]Reading SHA256SUM file...[/blue]")
@@ -532,15 +532,32 @@ def scan_tiffs_from_checksums(base_dir, registry_dir, console):
                     if len(parts) == 2:
                         checksum, filename = parts
                         if filename.endswith('.tiff') or filename.endswith('.tif'):
-                            tiff_entries.append((filename, checksum))
-                            total_entries += 1
+                            # Extract coordinates from filename (e.g., grid_-0.35_55.45.tiff)
+                            if filename.startswith('grid_'):
+                                try:
+                                    # Remove 'grid_' prefix and '.tiff' suffix
+                                    coords_str = filename[5:].replace('.tiff', '').replace('.tif', '')
+                                    lon_str, lat_str = coords_str.split('_')
+                                    lon = float(lon_str)
+                                    lat = float(lat_str)
+                                    
+                                    # Determine block coordinates (5x5 degree blocks)
+                                    block_lon, block_lat = get_block_coordinates(lon, lat)
+                                    
+                                    # Add to appropriate block
+                                    tiff_blocks[(block_lon, block_lat)].append((filename, checksum))
+                                    total_entries += 1
+                                except (ValueError, IndexError) as e:
+                                    console.print(f"[yellow]Warning: Could not parse coordinates from {filename}: {e}[/yellow]")
+                                    continue
     except Exception as e:
         console.print(f"[red]Error reading SHA256SUM file:[/red] {e}")
         return False
     
     console.print(f"[green]Total TIFF entries found:[/green] {total_entries:,}")
+    console.print(f"[green]Total blocks:[/green] {len(tiff_blocks)}")
     
-    if not tiff_entries:
+    if not tiff_blocks:
         console.print("[yellow]No TIFF files found in SHA256SUM[/yellow]")
         return False
     
@@ -548,18 +565,24 @@ def scan_tiffs_from_checksums(base_dir, registry_dir, console):
     landmasks_dir = os.path.join(registry_dir, "landmasks")
     os.makedirs(landmasks_dir, exist_ok=True)
     
-    # Write single registry file for all TIFF files
-    registry_filename = "landmasks_all.txt"
-    registry_file = os.path.join(landmasks_dir, registry_filename)
+    # Write block-based registry files
+    all_registry_files = []
+    console.print(f"\n[blue]Writing block-based landmasks registry files:[/blue]")
     
-    console.print(f"[blue]Writing registry file:[/blue] landmasks/{registry_filename}")
+    for (block_lon, block_lat), block_entries in sorted(tiff_blocks.items()):
+        registry_filename = get_landmasks_registry_filename(block_lon, block_lat)
+        registry_file = os.path.join(landmasks_dir, registry_filename)
+        all_registry_files.append(registry_file)
+        
+        console.print(f"  Block ({block_lon}, {block_lat}): {len(block_entries)} files → landmasks/{registry_filename}")
+        
+        # Write registry file
+        with open(registry_file, 'w') as f:
+            for rel_path, checksum in sorted(block_entries):
+                f.write(f"{rel_path} {checksum}\n")
     
-    # Write registry file
-    with open(registry_file, 'w') as f:
-        for rel_path, checksum in sorted(tiff_entries):
-            f.write(f"{rel_path} {checksum}\n")
-    
-    console.print(f"[green]✓ Registry written with {len(tiff_entries)} entries[/green]")
+    if all_registry_files:
+        console.print(f"[green]✓ Created {len(all_registry_files)} landmasks registry files[/green]")
     
     console.print("[green]✓ Landmasks registry written[/green]")
     
