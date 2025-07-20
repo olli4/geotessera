@@ -29,9 +29,10 @@ def get_block_coordinates(lon: float, lat: float) -> Tuple[int, int]:
     return int(block_lon), int(block_lat)
 
 
-def get_block_registry_filename(year: str, block_lon: int, block_lat: int) -> str:
+
+def get_embeddings_registry_filename(year: str, block_lon: int, block_lat: int) -> str:
     """
-    Generate the registry filename for a specific block.
+    Generate the registry filename for a specific embeddings block.
     
     Args:
         year: Year string (e.g., "2024")
@@ -39,12 +40,12 @@ def get_block_registry_filename(year: str, block_lon: int, block_lat: int) -> st
         block_lat: Block latitude (lower-left corner)
         
     Returns:
-        str: Registry filename like "registry_2024_lon-55_lat-25.txt"
+        str: Registry filename like "embeddings_2024_lon-55_lat-25.txt"
     """
     # Format longitude and latitude to avoid negative zero
     lon_str = f"lon{block_lon}" if block_lon != 0 else "lon0"
     lat_str = f"lat{block_lat}" if block_lat != 0 else "lat0"
-    return f"registry_{year}_{lon_str}_{lat_str}.txt"
+    return f"embeddings_{year}_{lon_str}_{lat_str}.txt"
 
 
 def parse_grid_coordinates(filename: str) -> Tuple[Optional[float], Optional[float]]:
@@ -92,11 +93,12 @@ def get_registry_path_for_tile(registry_base_dir: str, year: str, lon: float, la
     """
     import os
     block_lon, block_lat = get_block_coordinates(lon, lat)
-    registry_filename = get_block_registry_filename(year, block_lon, block_lat)
+    registry_filename = get_embeddings_registry_filename(year, block_lon, block_lat)
     return os.path.join(registry_base_dir, "registry", registry_filename)
 
 
-def get_tiles_registry_filename(block_lon: int, block_lat: int) -> str:
+
+def get_landmasks_registry_filename(block_lon: int, block_lat: int) -> str:
     """
     Generate the registry filename for a specific landmask tiles block.
     
@@ -105,12 +107,12 @@ def get_tiles_registry_filename(block_lon: int, block_lat: int) -> str:
         block_lat: Block latitude (lower-left corner)
         
     Returns:
-        str: Registry filename like "registry_tiles_lon-55_lat-25.txt"
+        str: Registry filename like "landmasks_lon-55_lat-25.txt"
     """
     # Format longitude and latitude to avoid negative zero
     lon_str = f"lon{block_lon}" if block_lon != 0 else "lon0"
     lat_str = f"lat{block_lat}" if block_lat != 0 else "lat0"
-    return f"registry_tiles_{lon_str}_{lat_str}.txt"
+    return f"landmasks_{lon_str}_{lat_str}.txt"
 
 
 def get_registry_path_for_tiles(registry_base_dir: str, lon: float, lat: float) -> str:
@@ -127,7 +129,7 @@ def get_registry_path_for_tiles(registry_base_dir: str, lon: float, lat: float) 
     """
     import os
     block_lon, block_lat = get_block_coordinates(lon, lat)
-    registry_filename = get_tiles_registry_filename(block_lon, block_lat)
+    registry_filename = get_landmasks_registry_filename(block_lon, block_lat)
     return os.path.join(registry_base_dir, "registry", registry_filename)
 
 
