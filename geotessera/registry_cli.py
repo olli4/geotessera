@@ -22,6 +22,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskPr
 from .registry_utils import (
     get_block_coordinates, 
     get_embeddings_registry_filename,
+    get_landmasks_registry_filename,
     parse_grid_coordinates
 )
 
