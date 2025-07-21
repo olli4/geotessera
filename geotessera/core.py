@@ -54,7 +54,7 @@ class GeoTessera:
     Example:
         >>> gt = GeoTessera()
         >>> # Fetch embeddings for Cambridge, UK
-        >>> embedding = gt.get_embedding(lat=52.2053, lon=0.1218)
+        >>> embedding = gt.fetch_embedding(lat=52.2053, lon=0.1218)
         >>> print(f"Shape: {embedding.shape}")  # (height, width, 128)
         >>> # Visualize as RGB composite
         >>> gt.visualize_embedding(embedding, bands=[10, 20, 30])
@@ -695,8 +695,8 @@ class GeoTessera:
                  grid cell (e.g., 0.17 → 0.15).
             year: Year of embeddings to fetch (2017-2024). Different years may
                   capture different environmental conditions.
-            progressbar: Whether to display download progress. Useful for tracking
-                        large file downloads.
+            progressbar: Whether to display download progress. Set to False for
+                        batch processing to reduce output verbosity.
 
         Returns:
             Dequantized embedding array of shape (height, width, 128) containing
@@ -740,28 +740,6 @@ class GeoTessera:
 
         return dequantized
 
-    def get_embedding(self, lat: float, lon: float, year: int = 2024) -> np.ndarray:
-        """Get dequantized Tessera embeddings for a location (convenience method).
-
-        This is a convenience wrapper around fetch_embedding() that always shows
-        a progress bar during download. Use this for interactive applications.
-
-        Args:
-            lat: Latitude in decimal degrees (will be rounded to 0.1° grid).
-            lon: Longitude in decimal degrees (will be rounded to 0.1° grid).
-            year: Year of embeddings to retrieve (2017-2024).
-
-        Returns:
-            Dequantized embedding array of shape (height, width, 128).
-
-        See Also:
-            fetch_embedding: Lower-level method with progress bar control.
-
-        Example:
-            >>> gt = GeoTessera()
-            >>> embedding = gt.get_embedding(lat=40.7128, lon=-74.0060)  # NYC
-        """
-        return self.fetch_embedding(lat, lon, year, progressbar=True)
 
     def _fetch_landmask(self, lat: float, lon: float, progressbar: bool = True) -> str:
         """Download land mask GeoTIFF for coordinate reference information.
@@ -948,91 +926,57 @@ class GeoTessera:
     def get_tiles_for_topojson(
         self, topojson_path: Union[str, Path]
     ) -> List[Tuple[float, float, str]]:
-        """Find all embedding tiles that intersect with TopoJSON geometries.
+        """Find all embedding tiles that intersect with region geometries.
 
-        Analyzes a TopoJSON file containing geographic features and identifies
-        which Tessera embedding tiles overlap with those features. This is useful
-        for efficiently fetching only the tiles needed to cover a specific region
-        or administrative boundary.
+        Analyzes a region file (GeoJSON, TopoJSON, Shapefile, GeoPackage) containing 
+        geographic features and identifies which Tessera embedding tiles overlap with 
+        those features. Uses improved geometry-based intersection without grid rounding 
+        that could miss edge tiles.
 
         Args:
-            topojson_path: Path to a TopoJSON file containing one or more
-                          geographic features (polygons, multipolygons, etc.).
+            topojson_path: Path to a region file containing one or more geographic 
+                          features. Supports GeoJSON, TopoJSON, Shapefile (.shp), 
+                          and GeoPackage (.gpkg) formats.
 
         Returns:
             List of tuples containing (latitude, longitude, tile_path) for each
-            tile that intersects with any geometry in the TopoJSON file. The
+            tile that intersects with any geometry in the region file. The
             tile_path can be used with the Pooch fetcher.
 
         Example:
             >>> gt = GeoTessera()
-            >>> # Find tiles covering a city boundary
-            >>> tiles = gt.get_tiles_for_topojson("city_boundary.json")
+            >>> # Find tiles covering a region (any supported format)
+            >>> tiles = gt.get_tiles_for_topojson("boundary.shp")
             >>> print(f"Need {len(tiles)} tiles to cover the region")
-            >>> # Fetch all tiles
-            >>> for lat, lon, _ in tiles:
-            ...     embedding = gt.get_embedding(lat, lon)
 
         Note:
-            The method uses conservative intersection testing - a tile is included
-            if any part of it overlaps with the TopoJSON geometries.
+            This method now uses precise geometric intersection testing without 
+            grid rounding that could cause edge clipping issues. It returns tiles
+            for all available years - use find_tiles_for_geometry() if you need
+            year-specific filtering.
         """
-        from shapely.geometry import box
-
-        # Read the TopoJSON file
+        # Load region using general I/O utility
         gdf = gpd.read_file(topojson_path)
-
+        
+        # Ensure it's in the correct CRS
+        if gdf.crs != "EPSG:4326":
+            gdf = gdf.to_crs("EPSG:4326")
+        
         # Create a unified geometry (union of all features)
-        # This handles the convex hull of all shapes properly
         unified_geom = gdf.unary_union
-
-        # Get the bounds to limit our search area
-        bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
-        min_lon, min_lat, max_lon, max_lat = bounds
-
-        # Round to 0.1 degree grid (Tessera grid resolution) to get search bounds
-        min_lon_grid = np.floor(min_lon * 10) / 10
-        max_lon_grid = np.ceil(max_lon * 10) / 10
-        min_lat_grid = np.floor(min_lat * 10) / 10
-        max_lat_grid = np.ceil(max_lat * 10) / 10
-
-        # Load only the registry blocks needed for this region (for all available years)
-        # We need to check what years are available first without loading everything
-        if hasattr(self, "_loaded_blocks") and self._loaded_blocks:
-            # Get years from already loaded blocks
-            available_years = {year for year, _, _ in self._loaded_blocks}
-        else:
-            # Use default range if no blocks loaded yet
-            available_years = set(range(2017, 2025))
-
-        # Load blocks for each year in the region
-        for year in available_years:
-            self._load_blocks_for_region(bounds, year)
-
-        # Now get tiles from the loaded blocks (much smaller set)
-        available_tiles = self._available_embeddings
-
-        # Filter tiles that actually intersect with the geometries
+        from shapely.geometry import box
+        
+        # Find intersecting tiles across all available years
         overlapping_tiles = []
-
-        for year, tile_lat, tile_lon in available_tiles:
-            # First check if tile is within the bounding box (optimization)
-            if (
-                tile_lon >= min_lon_grid
-                and tile_lon <= max_lon_grid
-                and tile_lat >= min_lat_grid
-                and tile_lat <= max_lat_grid
-            ):
-                # Create a box representing the tile (0.1 degree grid)
-                tile_box = box(tile_lon, tile_lat, tile_lon + 0.1, tile_lat + 0.1)
-
-                # Check if the tile box intersects with the actual geometries
-                # Conservative approach: if ANY part of the boundary is within the tile, include it
-                if unified_geom.intersects(tile_box):
-                    # Create the tile path for reference
-                    tile_path = f"{year}/grid_{tile_lon:.2f}_{tile_lat:.2f}/grid_{tile_lon:.2f}_{tile_lat:.2f}.npy"
-                    overlapping_tiles.append((tile_lat, tile_lon, tile_path))
-
+        for year, lat, lon in self.list_available_embeddings():
+            # Create tile bounding box
+            tile_box = box(lon, lat, lon + 0.1, lat + 0.1)
+            
+            # Check intersection with precise geometry testing
+            if unified_geom.intersects(tile_box):
+                tile_path = f"{year}/grid_{lon:.2f}_{lat:.2f}/grid_{lon:.2f}_{lat:.2f}.npy"
+                overlapping_tiles.append((lat, lon, tile_path))
+                
         return overlapping_tiles
 
     def visualize_topojson_as_tiff(

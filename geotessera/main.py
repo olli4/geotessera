@@ -29,7 +29,7 @@ def main():
         This is a development example. For production use, prefer:
         >>> from geotessera import GeoTessera
         >>> gt = GeoTessera()
-        >>> embedding = gt.get_embedding(lat=52.05, lon=0.15)
+        >>> embedding = gt.fetch_embedding(lat=52.05, lon=0.15)
     """
     version = "v1"
     POOCH = pooch.create(

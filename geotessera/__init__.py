@@ -17,7 +17,7 @@ Basic Usage:
     >>> gt = GeoTessera()
     >>>
     >>> # Fetch embeddings for a specific location
-    >>> embedding = gt.get_embedding(lat=52.2053, lon=0.1218)  # Cambridge, UK
+    >>> embedding = gt.fetch_embedding(lat=52.2053, lon=0.1218)  # Cambridge, UK
     >>> print(embedding.shape)  # (height, width, 128)
     >>>
     >>> # List available embeddings for a region
