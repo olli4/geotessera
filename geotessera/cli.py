@@ -294,20 +294,20 @@ def visualize_command(args):
         manifests_repo_url=args.manifests_repo_url,
     )
 
-    if not args.topojson:
-        print("Error: --topojson is required for visualization")
+    if not args.region:
+        print("Error: --region is required for visualization")
         sys.exit(1)
 
-    print(f"Analyzing TopoJSON file: {args.topojson}")
+    print(f"Analyzing region file: {args.region}")
 
     # Load region of interest using enhanced I/O utility (supports more formats)
     try:
-        gdf = load_roi(args.topojson)
+        gdf = load_roi(args.region)
         bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
         min_lon, min_lat, max_lon, max_lat = bounds
 
         print(
-            f"TopoJSON bounds: ({min_lon:.4f}, {min_lat:.4f}, {max_lon:.4f}, {max_lat:.4f})"
+            f"Region bounds: ({min_lon:.4f}, {min_lat:.4f}, {max_lon:.4f}, {max_lat:.4f})"
         )
 
         # Enhanced merging with better error handling and format support
@@ -333,7 +333,7 @@ def visualize_command(args):
         )
 
         print(
-            f"Created merged embedding visualization for TopoJSON region: {output_path}"
+            f"Created merged embedding visualization for region: {output_path}"
         )
 
     except Exception as e:
@@ -717,7 +717,7 @@ class GeoJSONRequestHandler(http.server.SimpleHTTPRequestHandler):
 
 
 def generate_static_tessera_tiles(
-    geojson_path,
+    region_path,
     output_dir,
     tessera_version="v1",
     year=2024,
@@ -733,7 +733,7 @@ def generate_static_tessera_tiles(
     tiling them using gdal2tiles. Tiles follow the XYZ/Slippy map standard.
 
     Args:
-        geojson_path: Path to GeoJSON file defining the region of interest
+        region_path: Path to region file defining the area of interest (supports multiple formats)
         output_dir: Directory to store generated tiles and metadata
         tessera_version: Dataset version to use (default: "v1")
         year: Year of embeddings to process (default: 2024)
@@ -746,7 +746,7 @@ def generate_static_tessera_tiles(
 
     Process:
         1. Checks if tiles already exist (skips regeneration)
-        2. Reads region bounds from GeoJSON
+        2. Reads region bounds from region file
         3. Merges Tessera embeddings into single GeoTIFF
         4. Runs gdal2tiles to create tile pyramid (zoom 1-15)
         5. Cleans up intermediate files
@@ -782,7 +782,7 @@ def generate_static_tessera_tiles(
 
     # Read region file to get bounds using enhanced I/O utility
     try:
-        gdf = load_roi(geojson_path)
+        gdf = load_roi(region_path)
         bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
         min_lon, min_lat, max_lon, max_lat = bounds
         print(
@@ -873,18 +873,18 @@ def serve_command(args):
         - Persistent or temporary tile storage
 
     Example:
-        geotessera serve --geojson city.json --open --bands 30 60 90
+        geotessera serve --region city.json --open --bands 30 60 90
 
     Note:
         Press Ctrl+C to stop the server. Temporary tiles are
         automatically cleaned up on exit.
     """
-    if not args.geojson:
-        print("Error: --geojson is required for serve command")
+    if not args.region:
+        print("Error: --region is required for serve command")
         sys.exit(1)
 
     # Load region data using enhanced I/O utility (supports multiple formats)
-    region_path = Path(args.geojson)
+    region_path = Path(args.region)
     if not region_path.exists():
         print(f"Error: Region file not found: {region_path}")
         sys.exit(1)
@@ -998,19 +998,19 @@ Examples:
   geotessera map --output coverage_map.png
   
   # Create a false-color visualization from embeddings for a region (multiple formats supported)
-  geotessera visualize --topojson region.geojson --output region_viz.tiff --bands 0 1 2
-  geotessera visualize --topojson boundary.shp --output area_viz.tiff --bands 10 20 30
-  geotessera visualize --topojson study_area.gpkg --output study_viz.tiff
+  geotessera visualize --region region.geojson --output region_viz.tiff --bands 0 1 2
+  geotessera visualize --region boundary.shp --output area_viz.tiff --bands 10 20 30
+  geotessera visualize --region study_area.gpkg --output study_viz.tiff
   
   # Start HTTP server with Leaflet.js to display region overlay with tessera false color tiles
-  geotessera serve --geojson example/CB.geojson --port 8000 --open
-  geotessera serve --geojson boundary.shp --port 8080 --bands 25 50 75 --open
+  geotessera serve --region example/CB.geojson --port 8000 --open
+  geotessera serve --region boundary.shp --port 8080 --bands 25 50 75 --open
   
   # Serve with custom band selection for tessera visualization
-  geotessera serve --geojson example/CB.geojson --bands 0 1 2 --year 2024 --open
+  geotessera serve --region example/CB.geojson --bands 0 1 2 --year 2024 --open
   
   # Generate static tiles to a specific directory and serve them
-  geotessera serve --geojson example/CB.geojson --tiles-output ./static_tiles --open
+  geotessera serve --region example/CB.geojson --tiles-output ./static_tiles --open
   
   # Generate SHA256 checksums (use geotessera-registry instead)
   geotessera-registry hash /path/to/data
@@ -1074,7 +1074,7 @@ Note: The 'visualize' command creates false-color visualizations from numpy embe
         help="Create false-color visualization from embeddings for a region (supports multiple formats)",
     )
     viz_parser.add_argument(
-        "--topojson",
+        "--region",
         type=str,
         required=True,
         help="Region file to visualize (GeoJSON, TopoJSON, Shapefile, GeoPackage)",
@@ -1115,7 +1115,7 @@ Note: The 'visualize' command creates false-color visualizations from numpy embe
         help="Start HTTP server with Leaflet.js to display region overlay with tessera false color tiles",
     )
     serve_parser.add_argument(
-        "--geojson", type=str, required=True, help="Region file to display (GeoJSON, TopoJSON, Shapefile, GeoPackage)"
+        "--region", type=str, required=True, help="Region file to display (GeoJSON, TopoJSON, Shapefile, GeoPackage)"
     )
     serve_parser.add_argument(
         "--port", type=int, default=8000, help="Port for HTTP server (default: 8000)"
