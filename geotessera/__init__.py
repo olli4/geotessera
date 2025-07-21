@@ -41,6 +41,10 @@ See Also:
 """
 
 from .core import GeoTessera
+from . import io
+from . import spatial
+from . import parallel
+from . import export
 
 __version__ = "0.1.0"
-__all__ = ["GeoTessera"]
+__all__ = ["GeoTessera", "io", "spatial", "parallel", "export"]

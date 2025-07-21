@@ -14,12 +14,14 @@ The module handles:
 """
 
 from pathlib import Path
-from typing import Optional, Union, List, Tuple, Iterator
+from typing import Optional, Union, List, Tuple, Iterator, Dict
 import os
 import subprocess
 import pooch
 import geopandas as gpd
 import numpy as np
+import pandas as pd
+import shapely.geometry
 
 from .registry_utils import (
     get_block_coordinates,
@@ -1794,3 +1796,244 @@ class GeoTessera:
         finally:
             # Clean up temporary files
             shutil.rmtree(temp_dir)
+
+    def find_tiles_for_geometry(
+        self,
+        geometry: Union[gpd.GeoDataFrame, "shapely.geometry.BaseGeometry"],
+        year: int = 2024,
+    ) -> List[Tuple[float, float]]:
+        """Find all available tiles intersecting with a given geometry.
+
+        Args:
+            geometry: A GeoDataFrame or Shapely geometry (must be in EPSG:4326)
+            year: Year of embeddings to search
+
+        Returns:
+            List of (lat, lon) tuples for tiles that intersect the geometry
+        """
+        from shapely.geometry import box
+
+        # Convert to GeoDataFrame if needed
+        if hasattr(geometry, "bounds"):  # Shapely geometry
+            gdf = gpd.GeoDataFrame([1], geometry=[geometry], crs="EPSG:4326")
+        elif isinstance(geometry, gpd.GeoDataFrame):
+            if geometry.crs != "EPSG:4326":
+                gdf = geometry.to_crs("EPSG:4326")
+            else:
+                gdf = geometry
+        else:
+            raise TypeError("geometry must be a GeoDataFrame or Shapely geometry")
+
+        # Get unified geometry
+        unified_geom = gdf.unary_union
+
+        # Find intersecting tiles
+        tiles = []
+        for tile_year, lat, lon in self.list_available_embeddings():
+            if tile_year != year:
+                continue
+
+            # Create tile bounding box
+            tile_box = box(lon, lat, lon + 0.1, lat + 0.1)
+
+            # Check intersection
+            if unified_geom.intersects(tile_box):
+                tiles.append((lat, lon))
+
+        return tiles
+
+    def extract_points(
+        self,
+        points: Union[List[Dict], pd.DataFrame, gpd.GeoDataFrame],
+        year: int = 2024,
+        include_coords: bool = False,
+        progressbar: bool = True,
+    ) -> pd.DataFrame:
+        """Extract embedding values at specific point locations.
+
+        This method efficiently extracts embeddings for multiple points by:
+        1. Grouping points by their containing tiles
+        2. Loading each tile only once
+        3. Extracting values for all points within that tile
+
+        Args:
+            points: Points with 'lat'/'lon' columns/keys. Can include 'label' or other metadata.
+                   Accepts list of dicts, pandas DataFrame, or GeoDataFrame.
+            year: Year of embeddings to use
+            include_coords: If True, includes lat/lon in output DataFrame
+            progressbar: Show progress bar during extraction
+
+        Returns:
+            DataFrame with embeddings (128 columns named 'emb_0' to 'emb_127') plus any metadata from input.
+            Points that fall outside available tiles will be excluded from results.
+        """
+        import rasterio
+        from pyproj import Transformer
+        from collections import defaultdict
+
+        # Convert input to consistent format
+        if isinstance(points, list):
+            points_df = pd.DataFrame(points)
+        elif isinstance(points, gpd.GeoDataFrame):
+            # Extract coordinates from geometry if needed
+            if "lat" not in points.columns or "lon" not in points.columns:
+                points = points.copy()
+                points["lon"] = points.geometry.x
+                points["lat"] = points.geometry.y
+            points_df = pd.DataFrame(points.drop(columns="geometry"))
+        else:
+            points_df = points.copy()
+
+        # Validate required columns
+        if "lat" not in points_df.columns or "lon" not in points_df.columns:
+            raise ValueError("Input must have 'lat' and 'lon' columns")
+
+        # Group points by potential tiles
+        points_by_tile = defaultdict(list)
+        for idx, point in points_df.iterrows():
+            # Find potential tiles (considering edge cases)
+            base_lat = np.floor(point["lat"] * 10) / 10
+            base_lon = np.floor(point["lon"] * 10) / 10
+
+            # Check up to 4 adjacent tiles for edge cases
+            for lat_offset in [0, -0.1]:
+                for lon_offset in [0, -0.1]:
+                    tile_lat = base_lat + lat_offset
+                    tile_lon = base_lon + lon_offset
+                    points_by_tile[(tile_lat, tile_lon)].append((idx, point))
+
+        # Process points tile by tile
+        results = []
+        processed_indices = set()
+
+        if progressbar:
+            from tqdm import tqdm
+
+            tile_iterator = tqdm(points_by_tile.items(), desc="Processing tiles")
+        else:
+            tile_iterator = points_by_tile.items()
+
+        for (tile_lat, tile_lon), tile_points in tile_iterator:
+            try:
+                # Skip if tile doesn't exist
+                if not any(
+                    t_year == year and t_lat == tile_lat and t_lon == tile_lon
+                    for t_year, t_lat, t_lon in self.list_available_embeddings()
+                ):
+                    continue
+
+                # Fetch embedding and landmask for georeferencing
+                embedding = self.fetch_embedding(
+                    tile_lat, tile_lon, year, progressbar=False
+                )
+                landmask_path = self._fetch_landmask(
+                    tile_lat, tile_lon, progressbar=False
+                )
+
+                # Get georeferencing info
+                with rasterio.open(landmask_path) as src:
+                    transformer = Transformer.from_crs(
+                        "EPSG:4326", src.crs, always_xy=True
+                    )
+                    h, w = src.height, src.width
+
+                    # Process each point
+                    for idx, point in tile_points:
+                        if (
+                            idx in processed_indices
+                        ):  # Skip if already processed by another tile
+                            continue
+
+                        # Transform coordinates
+                        px, py = transformer.transform(point["lon"], point["lat"])
+                        row, col = src.index(px, py)
+
+                        # Check if point is within tile bounds
+                        if 0 <= row < h and 0 <= col < w:
+                            # Extract embedding vector
+                            emb_vector = embedding[row, col]
+
+                            # Build result row
+                            result = {f"emb_{i}": emb_vector[i] for i in range(128)}
+
+                            # Add metadata
+                            for col_name in points_df.columns:
+                                if col_name not in ["lat", "lon"] or include_coords:
+                                    result[col_name] = point[col_name]
+
+                            results.append(result)
+                            processed_indices.add(idx)
+
+            except Exception as e:
+                if progressbar:
+                    print(
+                        f"\nWarning: Failed to process tile ({tile_lat:.2f}, {tile_lon:.2f}): {e}"
+                    )
+                continue
+
+        if not results:
+            print(
+                "Warning: No embeddings were extracted. Check that points fall within available tiles."
+            )
+            return pd.DataFrame()
+
+        # Create DataFrame with consistent column order
+        results_df = pd.DataFrame(results)
+
+        # Reorder columns: metadata first, then embeddings
+        emb_cols = [f"emb_{i}" for i in range(128)]
+        metadata_cols = [col for col in results_df.columns if col not in emb_cols]
+        results_df = results_df[metadata_cols + emb_cols]
+
+        if progressbar:
+            print(
+                f"Successfully extracted embeddings for {len(results_df)}/{len(points_df)} points"
+            )
+
+        return results_df
+
+    def get_tile_bounds(
+        self, lat: float, lon: float
+    ) -> Tuple[float, float, float, float]:
+        """Get the geographic bounds (west, south, east, north) of a tile in EPSG:4326.
+
+        Args:
+            lat: Tile latitude (lower-left corner)
+            lon: Tile longitude (lower-left corner)
+
+        Returns:
+            Tuple of (west, south, east, north) bounds
+        """
+        return (lon, lat, lon + 0.1, lat + 0.1)
+
+    def get_tile_crs(self, lat: float, lon: float) -> str:
+        """Get the CRS of a specific tile.
+
+        Args:
+            lat: Tile latitude
+            lon: Tile longitude
+
+        Returns:
+            CRS string (e.g., 'EPSG:32630')
+        """
+        import rasterio
+
+        landmask_path = self._fetch_landmask(lat, lon, progressbar=False)
+        with rasterio.open(landmask_path) as src:
+            return str(src.crs)
+
+    def get_tile_transform(self, lat: float, lon: float):
+        """Get the rasterio transform for georeferencing a tile.
+
+        Args:
+            lat: Tile latitude
+            lon: Tile longitude
+
+        Returns:
+            rasterio Affine transform
+        """
+        import rasterio
+
+        landmask_path = self._fetch_landmask(lat, lon, progressbar=False)
+        with rasterio.open(landmask_path) as src:
+            return src.transform
