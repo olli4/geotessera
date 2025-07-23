@@ -31,6 +31,13 @@ dependencies = [
     "rich",
 ]
 
+[project.urls]
+Homepage = "https://github.com/ucam-eo/geotessera"
+Documentation = "https://geotessera.readthedocs.io"
+Repository = "https://github.com/ucam-eo/geotessera"
+Issues = "https://github.com/ucam-eo/geotessera/issues"
+Changelog = "https://github.com/ucam-eo/geotessera/blob/main/CHANGES.md"
+
 [project.scripts]
 geotessera = "geotessera.cli:main"
 geotessera-registry = "geotessera.registry_cli:main"
