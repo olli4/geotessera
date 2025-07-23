@@ -28,8 +28,6 @@ import os
 from urllib.parse import urlparse
 from .core import GeoTessera
 from .io import load_roi
-from .export import embeddings_to_geotiff
-from .spatial import stitch_rasters
 
 
 def list_embeddings_command(args):
@@ -103,31 +101,31 @@ def info_command(args):
     print(f"Version: {tessera.version}")
     print(f"Base URL: {tessera._pooch.base_url}")
     print(f"Cache directory: {tessera._pooch.path}")
-    
+
     # Enhanced embedding information
     total_embeddings = tessera.count_available_embeddings()
     print(f"Total embeddings: {total_embeddings:,}")
-    
+
     # Show available years
     try:
         available_years = tessera.get_available_years()
         print(f"Available years: {', '.join(map(str, available_years))}")
     except Exception:
         print("Available years: Loading...")
-    
+
     # Enhanced land mask information
     landmask_count = tessera._count_available_landmasks()
     print(f"Land masks available: {landmask_count:,}")
     print(
         f"Land mask Base URL: {tessera._landmask_pooch.base_url if tessera._landmask_pooch else 'Not loaded'}"
     )
-    
+
     # Show registry information
     if tessera._registry_dir:
         print(f"Using local registry: {tessera._registry_dir}")
     else:
         print("Using remote registry (auto-downloaded)")
-    
+
     # Show loaded blocks information
     if tessera._loaded_blocks:
         print(f"Registry blocks loaded: {len(tessera._loaded_blocks)}")
@@ -176,7 +174,7 @@ def map_command(args):
         return
 
     print(f"Processing {len(embeddings)} embedding tiles...")
-    
+
     # Extract unique coordinates (lat, lon) from embeddings with better performance
     coordinates = set()
     years_found = set()
@@ -184,7 +182,9 @@ def map_command(args):
         coordinates.add((lat, lon))
         years_found.add(year)
 
-    print(f"Found {len(coordinates)} unique grid points across {len(years_found)} years: {sorted(years_found)}")
+    print(
+        f"Found {len(coordinates)} unique grid points across {len(years_found)} years: {sorted(years_found)}"
+    )
 
     # Convert to DataFrame with better column naming
     coords_list = list(coordinates)
@@ -312,16 +312,16 @@ def visualize_command(args):
 
         # Enhanced merging with better error handling and format support
         normalize = not args.no_normalize
-        
+
         # Find tiles intersecting with the region for better progress reporting
         tiles = tessera.find_tiles_for_geometry(gdf, year=args.year)
-        
+
         if not tiles:
             print("No tiles found for the specified region")
             sys.exit(1)
-        
+
         print(f"Found {len(tiles)} tiles covering the region")
-        
+
         # Use the enhanced merge method
         output_path = tessera.merge_embeddings_for_region(
             bounds=(min_lon, min_lat, max_lon, max_lat),
@@ -332,13 +332,13 @@ def visualize_command(args):
             year=args.year,
         )
 
-        print(
-            f"Created merged embedding visualization for region: {output_path}"
-        )
+        print(f"Created merged embedding visualization for region: {output_path}")
 
     except Exception as e:
         print(f"Error processing region file: {e}")
-        print("Supported formats: GeoJSON, TopoJSON, Shapefile (.shp), GeoPackage (.gpkg)")
+        print(
+            "Supported formats: GeoJSON, TopoJSON, Shapefile (.shp), GeoPackage (.gpkg)"
+        )
         sys.exit(1)
 
 
@@ -791,7 +791,9 @@ def generate_static_tessera_tiles(
         print(f"Region contains {len(gdf)} feature(s)")
     except Exception as e:
         print(f"Error reading region file: {e}")
-        print("Supported formats: GeoJSON, TopoJSON, Shapefile (.shp), GeoPackage (.gpkg)")
+        print(
+            "Supported formats: GeoJSON, TopoJSON, Shapefile (.shp), GeoPackage (.gpkg)"
+        )
         return None
 
     # Create output directory if it doesn't exist
@@ -893,12 +895,14 @@ def serve_command(args):
         # Load as GeoDataFrame first to validate
         gdf = load_roi(str(region_path))
         print(f"Loaded region data from: {region_path} ({len(gdf)} features)")
-        
+
         # Convert to GeoJSON format for web serving
         geojson_data = json.loads(gdf.to_json())
     except Exception as e:
         print(f"Error loading region file: {e}")
-        print("Supported formats: GeoJSON, TopoJSON, Shapefile (.shp), GeoPackage (.gpkg)")
+        print(
+            "Supported formats: GeoJSON, TopoJSON, Shapefile (.shp), GeoPackage (.gpkg)"
+        )
         sys.exit(1)
 
     # Generate static tessera tiles (always enabled now)
@@ -1053,7 +1057,9 @@ Note: The 'visualize' command creates false-color visualizations from numpy embe
     list_parser.set_defaults(func=list_embeddings_command)
 
     # Info command
-    info_parser = subparsers.add_parser("info", help="Show comprehensive dataset information")
+    info_parser = subparsers.add_parser(
+        "info", help="Show comprehensive dataset information"
+    )
     info_parser.set_defaults(func=info_command)
 
     # Map command
@@ -1115,7 +1121,10 @@ Note: The 'visualize' command creates false-color visualizations from numpy embe
         help="Start HTTP server with Leaflet.js to display region overlay with tessera false color tiles",
     )
     serve_parser.add_argument(
-        "--region", type=str, required=True, help="Region file to display (GeoJSON, TopoJSON, Shapefile, GeoPackage)"
+        "--region",
+        type=str,
+        required=True,
+        help="Region file to display (GeoJSON, TopoJSON, Shapefile, GeoPackage)",
     )
     serve_parser.add_argument(
         "--port", type=int, default=8000, help="Port for HTTP server (default: 8000)"

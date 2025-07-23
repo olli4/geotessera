@@ -740,7 +740,6 @@ class GeoTessera:
 
         return dequantized
 
-
     def _fetch_landmask(self, lat: float, lon: float, progressbar: bool = True) -> str:
         """Download land mask GeoTIFF for coordinate reference information.
 
@@ -928,14 +927,14 @@ class GeoTessera:
     ) -> List[Tuple[float, float, str]]:
         """Find all embedding tiles that intersect with region geometries.
 
-        Analyzes a region file (GeoJSON, TopoJSON, Shapefile, GeoPackage) containing 
-        geographic features and identifies which Tessera embedding tiles overlap with 
-        those features. Uses improved geometry-based intersection without grid rounding 
+        Analyzes a region file (GeoJSON, TopoJSON, Shapefile, GeoPackage) containing
+        geographic features and identifies which Tessera embedding tiles overlap with
+        those features. Uses improved geometry-based intersection without grid rounding
         that could miss edge tiles.
 
         Args:
-            topojson_path: Path to a region file containing one or more geographic 
-                          features. Supports GeoJSON, TopoJSON, Shapefile (.shp), 
+            topojson_path: Path to a region file containing one or more geographic
+                          features. Supports GeoJSON, TopoJSON, Shapefile (.shp),
                           and GeoPackage (.gpkg) formats.
 
         Returns:
@@ -950,33 +949,35 @@ class GeoTessera:
             >>> print(f"Need {len(tiles)} tiles to cover the region")
 
         Note:
-            This method now uses precise geometric intersection testing without 
+            This method now uses precise geometric intersection testing without
             grid rounding that could cause edge clipping issues. It returns tiles
             for all available years - use find_tiles_for_geometry() if you need
             year-specific filtering.
         """
         # Load region using general I/O utility
         gdf = gpd.read_file(topojson_path)
-        
+
         # Ensure it's in the correct CRS
         if gdf.crs != "EPSG:4326":
             gdf = gdf.to_crs("EPSG:4326")
-        
+
         # Create a unified geometry (union of all features)
         unified_geom = gdf.unary_union
         from shapely.geometry import box
-        
+
         # Find intersecting tiles across all available years
         overlapping_tiles = []
         for year, lat, lon in self.list_available_embeddings():
             # Create tile bounding box (tile coordinates represent center, so extend ±0.05°)
             tile_box = box(lon - 0.05, lat - 0.05, lon + 0.05, lat + 0.05)
-            
+
             # Check intersection with precise geometry testing
             if unified_geom.intersects(tile_box):
-                tile_path = f"{year}/grid_{lon:.2f}_{lat:.2f}/grid_{lon:.2f}_{lat:.2f}.npy"
+                tile_path = (
+                    f"{year}/grid_{lon:.2f}_{lat:.2f}/grid_{lon:.2f}_{lat:.2f}.npy"
+                )
                 overlapping_tiles.append((lat, lon, tile_path))
-                
+
         return overlapping_tiles
 
     def visualize_topojson_as_tiff(
