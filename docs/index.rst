@@ -41,7 +41,7 @@ Basic usage example::
     gt = GeoTessera()
     
     # Fetch embeddings for a location (Cambridge, UK)
-    embedding = gt.get_embedding(lat=52.2053, lon=0.1218)
+    embedding = gt.fetch_embedding(lat=52.2053, lon=0.1218)
     print(f"Embedding shape: {embedding.shape}")  # (height, width, 128)
     
     # Create false-color visualization
@@ -60,10 +60,10 @@ GeoTessera includes a comprehensive CLI::
     geotessera list-embeddings --limit 10
     
     # Create visualization for a region
-    geotessera visualize --topojson region.json --output viz.tiff
+    geotessera visualize --region region.json --output viz.tiff
     
     # Launch interactive web map
-    geotessera serve --geojson boundary.json --open
+    geotessera serve --region boundary.json --open
 
 Understanding Tessera Embeddings
 --------------------------------
@@ -88,8 +88,8 @@ Embeddings are organized by:
 * **Location**: Global 0.1-degree grid system
 * **Format**: NumPy arrays with shape (height, width, 128)
 
-Files are fetched on-demand from ``https://dl-1.tessera.wiki/`` and
-cached locally for subsequent use.
+Files are fetched on-demand from the Tessera servers via
+HTTPS and cached locally for subsequent use.
 
 .. toctree::
    :maxdepth: 2

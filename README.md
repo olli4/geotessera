@@ -126,14 +126,14 @@ uvx geotessera \
 ```bash
 # Create false-color visualization for a region
 uvx geotessera visualize \
-  --topojson example/CB.geojson --output cambridge_viz.tiff
+  --region example/CB.geojson --output cambridge_viz.tiff
 
 # Serve interactive web map
-uvx geotessera serve --geojson example/CB.geojson --open
+uvx geotessera serve --region example/CB.geojson --open
 
 # Serve with custom band selection (e.g., bands 30, 60, 90)
 uvx geotessera serve \
-  --geojson example/CB.geojson --bands 30 60 90 --open
+  --region example/CB.geojson --bands 30 60 90 --open
 ```
 
 If you have the repository checked out, use `--from .` instead.
@@ -165,12 +165,52 @@ tessera = GeoTessera(
 )
 
 # Download and get dequantized embedding for specific coordinates
-embedding = tessera.get_embedding(lat=52.05, lon=0.15, year=2024)
+embedding = tessera.fetch_embedding(lat=52.05, lon=0.15, year=2024)
 print(f"Embedding shape: {embedding.shape}")  # (height, width, 128)
 
 # List available embeddings for exploration
 for year, lat, lon in tessera.list_available_embeddings():
     print(f"Year {year}: ({lat:.2f}, {lon:.2f})")
+
+# Get available years
+years = tessera.get_available_years()
+print(f"Available years: {years}")
+
+# Find tiles that intersect with a geometry
+from shapely.geometry import box
+geometry = box(-0.2, 51.9, 0.3, 52.3)  # Cambridge area
+tiles = tessera.find_tiles_for_geometry(geometry, year=2024)
+print(f"Found {len(tiles)} tiles for the geometry")
+
+# Extract embeddings at specific points
+points = [(52.2053, 0.1218), (52.1951, 0.1313)]  # Cambridge locations
+embeddings_df = tessera.extract_points(points, year=2024, include_coords=True)
+print(f"Extracted embeddings shape: {embeddings_df.shape}")
+
+# Get tile metadata
+bounds = tessera.get_tile_bounds(lat=52.05, lon=0.15)
+crs = tessera.get_tile_crs(lat=52.05, lon=0.15)
+transform = tessera.get_tile_transform(lat=52.05, lon=0.15)
+print(f"Tile bounds: {bounds}")
+print(f"Tile CRS: {crs}")
+
+# Export single tile as GeoTIFF
+tessera.export_single_tile_as_tiff(
+    lat=52.05, lon=0.15, 
+    output_path="tile.tiff",
+    year=2024,
+    bands=[0, 1, 2]  # RGB visualization
+)
+
+# Merge embeddings for a region
+bounds = (-0.2, 51.9, 0.3, 52.3)  # (west, south, east, north)
+tessera.merge_embeddings_for_region(
+    bounds=bounds,
+    output_path="region.tiff",
+    target_crs="EPSG:4326",
+    bands=[0, 1, 2],
+    year=2024
+)
 ```
 
 ## Registry Architecture
