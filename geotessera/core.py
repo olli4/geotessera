@@ -969,8 +969,8 @@ class GeoTessera:
         # Find intersecting tiles across all available years
         overlapping_tiles = []
         for year, lat, lon in self.list_available_embeddings():
-            # Create tile bounding box
-            tile_box = box(lon, lat, lon + 0.1, lat + 0.1)
+            # Create tile bounding box (tile coordinates represent center, so extend ±0.05°)
+            tile_box = box(lon - 0.05, lat - 0.05, lon + 0.05, lat + 0.05)
             
             # Check intersection with precise geometry testing
             if unified_geom.intersects(tile_box):
@@ -1777,8 +1777,8 @@ class GeoTessera:
             if tile_year != year:
                 continue
 
-            # Create tile bounding box
-            tile_box = box(lon, lat, lon + 0.1, lat + 0.1)
+            # Create tile bounding box (tile coordinates represent center, so extend ±0.05°)
+            tile_box = box(lon - 0.05, lat - 0.05, lon + 0.05, lat + 0.05)
 
             # Check intersection
             if unified_geom.intersects(tile_box):
