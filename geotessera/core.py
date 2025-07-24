@@ -1042,10 +1042,10 @@ class GeoTessera:
             return output_path
 
         # Calculate bounding box for all tiles
-        lon_min = min(lon for _, lon, _ in tiles)
-        lat_min = min(lat for lat, _, _ in tiles)
-        lon_max = max(lon for _, lon, _ in tiles) + 0.1
-        lat_max = max(lat for lat, _, _ in tiles) + 0.1
+        lon_min = min(lon - 0.05 for _, lon, _ in tiles)
+        lat_min = min(lat - 0.05 for lat, _, _ in tiles)
+        lon_max = max(lon + 0.05 for _, lon, _ in tiles)
+        lat_max = max(lat + 0.05 for lat, _, _ in tiles)
 
         # Download and process each tile
         tile_data_dict = {}
@@ -1250,10 +1250,10 @@ class GeoTessera:
         height, width = vis_data.shape[:2]
 
         # Calculate geographic bounds (each tile covers 0.1 degrees)
-        lon_min = lon
-        lat_min = lat
-        lon_max = lon + 0.1
-        lat_max = lat + 0.1
+        lon_min = lon - 0.05
+        lat_min = lat - 0.05
+        lon_max = lon + 0.05
+        lat_max = lat + 0.05
 
         # Create georeferencing transform
         transform = from_bounds(lon_min, lat_min, lon_max, lat_max, width, height)
@@ -1338,8 +1338,8 @@ class GeoTessera:
         tiles_to_merge = []
         for lat, lon in self._list_available_landmasks():
             # Check if tile intersects with bounds (0.1 degree grid)
-            tile_min_lon, tile_min_lat = lon, lat
-            tile_max_lon, tile_max_lat = lon + 0.1, lat + 0.1
+            tile_min_lon, tile_min_lat = lon - 0.05, lat - 0.05
+            tile_max_lon, tile_max_lat = lon + 0.05, lat + 0.05
 
             if (
                 tile_min_lon < max_lon
@@ -1544,8 +1544,8 @@ class GeoTessera:
                 continue
 
             # Check if tile intersects with bounds (0.1 degree grid)
-            tile_min_lon, tile_min_lat = lon, lat
-            tile_max_lon, tile_max_lat = lon + 0.1, lat + 0.1
+            tile_min_lon, tile_min_lat = lon - 0.05, lat - 0.05
+            tile_max_lon, tile_max_lat = lon + 0.05, lat + 0.05
 
             if (
                 tile_min_lon < max_lon
@@ -1949,7 +1949,7 @@ class GeoTessera:
         Returns:
             Tuple of (west, south, east, north) bounds
         """
-        return (lon, lat, lon + 0.1, lat + 0.1)
+        return (lon - 0.05, lat - 0.05, lon + 0.05, lat + 0.05)
 
     def get_tile_crs(self, lat: float, lon: float) -> str:
         """Get the CRS of a specific tile.
