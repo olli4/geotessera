@@ -126,14 +126,14 @@ uvx geotessera \
 ```bash
 # Create false-color visualization for a region
 uvx geotessera visualize \
-  --region example/CB.geojson --output cambridge_viz.tiff
+  --topojson example/CB.geojson --output cambridge_viz.tiff
 
 # Serve interactive web map
-uvx geotessera serve --region example/CB.geojson --open
+uvx geotessera serve --geojson example/CB.geojson --open
 
 # Serve with custom band selection (e.g., bands 30, 60, 90)
 uvx geotessera serve \
-  --region example/CB.geojson --bands 30 60 90 --open
+  --geojson example/CB.geojson --bands 30 60 90 --open
 ```
 
 If you have the repository checked out, use `--from .` instead.
