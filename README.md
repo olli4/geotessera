@@ -25,7 +25,7 @@ GeoTessera provides access to geospatial embeddings from the [Tessera foundation
 ## Installation
 
 ```bash
-pip install git+https://github.com/ucam-eo/geotessera
+pip install geotessera
 ```
 
 ## Configuration
