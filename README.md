@@ -318,3 +318,7 @@ GeoTessera now provides robust error handling to ensure data integrity:
 Tessera is a foundation model for Earth observation developed by the University of Cambridge. It learns temporal-spectral features from multi-source satellite data to enable advanced geospatial analysis including land classification and canopy height prediction.
 
 For more information about the Tessera project, visit: https://github.com/ucam-eo/tessera
+
+## Related Tools
+
+For a higher-level, interactive interface for point-and-click land cover classification built on top of `GeoTessera`, check out the [Interactive Map Classifier](https://github.com/ucam-eo/tessera-interactive-map) as an example.
