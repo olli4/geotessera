@@ -68,6 +68,7 @@ geotessera.registry_utils module
    :show-inheritance:
    :undoc-members:
 
+
 Module contents
 ---------------
 
