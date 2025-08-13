@@ -1179,6 +1179,7 @@ class GeoTessera:
         output_path: str,
         year: int = 2024,
         bands: List[int] = [0, 1, 2],
+
         normalize: bool = True,
     ) -> str:
         """Export a single Tessera embedding tile as a georeferenced GeoTIFF.
@@ -1192,7 +1193,7 @@ class GeoTessera:
             lon: Longitude of tile in decimal degrees (rounded to 0.1° grid).
             output_path: Filename for the output GeoTIFF.
             year: Year of embeddings to export (2017-2024).
-            bands: Three channel indices to map to RGB. Each index must be
+            bands: Channel indices to map to RGB. Default is Each index must be
                    between 0-127. Different combinations highlight different
                    features (e.g., vegetation, water, urban areas).
             normalize: If True, stretches values to use full 0-255 range for
@@ -1203,7 +1204,6 @@ class GeoTessera:
 
         Raises:
             ImportError: If rasterio is not installed.
-            ValueError: If bands list doesn't contain exactly 3 indices.
 
         Example:
             >>> gt = GeoTessera()
@@ -1266,16 +1266,17 @@ class GeoTessera:
             driver="GTiff",
             height=height,
             width=width,
-            count=3,
+            count=len(bands),  # Number of bands to write
             dtype="uint8",
             crs="EPSG:4326",  # WGS84
             transform=transform,
             compress="lzw",
         ) as dst:
             # Write RGB bands
-            for i in range(3):
+            for i in range(len(bands)):
                 dst.write(vis_data_uint8[:, :, i], i + 1)
 
+        print(f"Bands used: {bands}")
         print(f"Exported tile to {output_path}")
         print(f"Dimensions: {width}x{height} pixels")
         print(
