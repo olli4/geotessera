@@ -1,3 +1,12 @@
+## v0.3.0 (dev)
+
+- Moved the map updating CI to https://github.com/ucam-eo/tessera-coverage.
+  This results in a reset main branch with a cleaner git history.
+- Modified `export_single_tile_to_tiff` so it can take not just 3 bands,
+  allowing exporting of all 128 bands to a TIFF (@epingchris #3)
+- Fix degrees for georeferencing (#3 @nkarasiak and @avsm)
+- Improve GDAL compatibility with different versions (#3 @nkarasiak)
+
 ## v0.2.0
 
 ### Breaking Changes
