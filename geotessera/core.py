@@ -288,9 +288,6 @@ class GeoTessera:
         if self._registry_dir:
             # Use local registry directory (already normalized to point to registry files)
             registry_path = Path(self._registry_dir)
-            if not registry_path.exists():
-                raise ValueError(f"Registry directory not found: {registry_path}")
-
             self._registry_base_dir = str(registry_path)
 
             # Look for master registry file in the local directory

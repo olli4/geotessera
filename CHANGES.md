@@ -7,6 +7,7 @@
 - Fix degrees for georeferencing (#3 @nkarasiak and @avsm)
 - Improve GDAL compatibility with different versions (#3 @nkarasiak)
 - Fix map coverage generation with geopandas>1.0 (#4 @avsm, reported by @epingchris)
+- Remove unnecessary registry directory existence check that prevented custom TESSERA_REGISTRY_DIR usage (#5 @avsm, reported by @epingchris)
 
 ## v0.2.0
 
