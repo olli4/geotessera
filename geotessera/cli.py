@@ -201,8 +201,10 @@ def map_command(args):
     # Check if world map shapefile exists
     world_map_path = Path("world_map/ne_110m_admin_0_countries.shp")
     if not world_map_path.exists():
-        print("Using built-in world map.")
-        world = geopandas.read_file(geopandas.datasets.get_path("naturalearth_lowres"))
+        print("Using Natural Earth world map from online source.")
+        # Use Natural Earth data directly from their URL
+        world_url = "https://www.naturalearthdata.com/http//www.naturalearthdata.com/download/110m/cultural/ne_110m_admin_0_countries.zip"
+        world = geopandas.read_file(world_url)
     else:
         world = geopandas.read_file(world_map_path)
 
