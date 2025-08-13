@@ -28,6 +28,7 @@ import os
 from urllib.parse import urlparse
 from .core import GeoTessera
 from .io import load_roi
+from . import __version__
 
 
 def list_embeddings_command(args):
@@ -51,7 +52,7 @@ def list_embeddings_command(args):
           ... and 49998 more
     """
     tessera = GeoTessera(
-        version=args.version,
+        version=args.dataset_version,
         registry_dir=args.registry_dir,
         auto_update=args.auto_update,
         manifests_repo_url=args.manifests_repo_url,
@@ -91,7 +92,7 @@ def info_command(args):
         - Count of auxiliary land mask files
     """
     tessera = GeoTessera(
-        version=args.version,
+        version=args.dataset_version,
         registry_dir=args.registry_dir,
         auto_update=args.auto_update,
         manifests_repo_url=args.manifests_repo_url,
@@ -157,7 +158,7 @@ def map_command(args):
         as it processes all available tile locations.
     """
     tessera = GeoTessera(
-        version=args.version,
+        version=args.dataset_version,
         registry_dir=args.registry_dir,
         auto_update=args.auto_update,
         manifests_repo_url=args.manifests_repo_url,
@@ -202,9 +203,30 @@ def map_command(args):
     world_map_path = Path("world_map/ne_110m_admin_0_countries.shp")
     if not world_map_path.exists():
         print("Using Natural Earth world map from online source.")
-        # Use Natural Earth data directly from their URL
+        # Use Natural Earth data directly from their URL with custom user agent
+        import requests
+        import tempfile
+        
         world_url = "https://www.naturalearthdata.com/http//www.naturalearthdata.com/download/110m/cultural/ne_110m_admin_0_countries.zip"
-        world = geopandas.read_file(world_url)
+        
+        # Get version for user agent
+        from . import __version__
+        user_agent = f"GeoTessera/{__version__}"
+        
+        headers = {'User-Agent': user_agent}
+        
+        # Download with custom user agent
+        with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as temp_file:
+            response = requests.get(world_url, headers=headers)
+            response.raise_for_status()
+            temp_file.write(response.content)
+            temp_file_path = temp_file.name
+        
+        try:
+            world = geopandas.read_file(temp_file_path)
+        finally:
+            # Clean up temporary file
+            Path(temp_file_path).unlink(missing_ok=True)
     else:
         world = geopandas.read_file(world_map_path)
 
@@ -257,40 +279,41 @@ def map_command(args):
     plt.close()
 
 
+
+
 def visualize_command(args):
-    """Create false-color GeoTIFF visualization from Tessera embeddings.
+    """Create GeoTIFF from Tessera embeddings.
 
     Generates a georeferenced image by mosaicking embedding tiles that
-    overlap with a TopoJSON/GeoJSON region. Allows custom band selection
-    for highlighting different features in the 128-channel embeddings.
+    overlap with a region file. Outputs float32 data preserving the
+    dequantized embedding values.
 
     Args:
         args: Parsed command line arguments containing:
-            - topojson: Path to TopoJSON/GeoJSON file defining the region
+            - region: Path to region file defining the area
             - output: Output GeoTIFF filename
             - target_crs: Coordinate reference system for output
-            - bands: Three channel indices for RGB mapping (0-127)
-            - no_normalize: Flag to skip value normalization
+            - bands: Channel indices to include (0-127)
             - year: Year of embeddings to use
-            - version: Dataset version
+            - dataset_version: Dataset version
 
     Process:
-        1. Reads geographic bounds from TopoJSON/GeoJSON
+        1. Reads geographic bounds from region file
         2. Identifies all embedding tiles overlapping the region
         3. Downloads and merges tiles with proper alignment
-        4. Maps selected channels to RGB for visualization
-        5. Exports georeferenced GeoTIFF with metadata
+        4. Exports georeferenced GeoTIFF with metadata
 
-    Example band combinations:
-        - [0, 1, 2]: First three channels (default)
+    Example band selections:
+        - None: All 128 channels (default)
+        - [0, 1, 2]: First three channels
         - [10, 20, 30]: Mid-range channels
         - [25, 50, 75]: Distributed sampling
 
     Raises:
-        SystemExit: If TopoJSON file is missing or invalid
+        SystemExit: If region file is missing or invalid
     """
     tessera = GeoTessera(
-        version=args.version,
+        version=args.dataset_version,
         registry_dir=args.registry_dir,
         auto_update=args.auto_update,
         manifests_repo_url=args.manifests_repo_url,
@@ -301,46 +324,21 @@ def visualize_command(args):
         sys.exit(1)
 
     print(f"Analyzing region file: {args.region}")
-
-    # Load region of interest using enhanced I/O utility (supports more formats)
-    try:
-        gdf = load_roi(args.region)
-        bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
-        min_lon, min_lat, max_lon, max_lat = bounds
-
-        print(
-            f"Region bounds: ({min_lon:.4f}, {min_lat:.4f}, {max_lon:.4f}, {max_lat:.4f})"
-        )
-
-        # Enhanced merging with better error handling and format support
-        normalize = not args.no_normalize
-
-        # Find tiles intersecting with the region for better progress reporting
-        tiles = tessera.find_tiles_for_geometry(gdf, year=args.year)
-
-        if not tiles:
-            print("No tiles found for the specified region")
-            sys.exit(1)
-
-        print(f"Found {len(tiles)} tiles covering the region")
-
-        # Use the enhanced merge method
-        output_path = tessera.merge_embeddings_for_region(
-            bounds=(min_lon, min_lat, max_lon, max_lat),
-            output_path=args.output,
-            target_crs=args.target_crs,
-            bands=args.bands,
-            normalize=normalize,
-            year=args.year,
-        )
-
+    
+    # Use core library method to create merged TIFF
+    output_path = tessera.merge_embeddings_for_region_file(
+        region_path=args.region,
+        output_path=args.output,
+        bands=args.bands,
+        year=args.year,
+        target_crs=args.target_crs
+    )
+    
+    if output_path:
         print(f"Created merged embedding visualization for region: {output_path}")
-
-    except Exception as e:
-        print(f"Error processing region file: {e}")
-        print(
-            "Supported formats: GeoJSON, TopoJSON, Shapefile (.shp), GeoPackage (.gpkg)"
-        )
+    else:
+        print("Failed to create visualization")
+        print("Supported formats: GeoJSON, TopoJSON, Shapefile (.shp), GeoPackage (.gpkg)")
         sys.exit(1)
 
 
@@ -782,45 +780,53 @@ def generate_static_tessera_tiles(
         manifests_repo_url=manifests_repo_url,
     )
 
-    # Read region file to get bounds using enhanced I/O utility
-    try:
-        gdf = load_roi(region_path)
-        bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
-        min_lon, min_lat, max_lon, max_lat = bounds
-        print(
-            f"Region bounds: ({min_lon:.4f}, {min_lat:.4f}, {max_lon:.4f}, {max_lat:.4f})"
-        )
-        print(f"Region contains {len(gdf)} feature(s)")
-    except Exception as e:
-        print(f"Error reading region file: {e}")
-        print(
-            "Supported formats: GeoJSON, TopoJSON, Shapefile (.shp), GeoPackage (.gpkg)"
-        )
-        return None
-
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
 
+    # Generate tessera visualization TIFF using core library method
+    print("Merging tessera embeddings for region...")
+    temp_tiff = os.path.join(output_dir, "tessera_viz.tiff")
+    
+    output_path = tessera.merge_embeddings_for_region_file(
+        region_path=region_path,
+        output_path=temp_tiff,
+        bands=bands,
+        year=year,
+        target_crs="EPSG:4326"
+    )
+    
+    if not output_path:
+        print("Failed to generate tessera visualization")
+        return None
+    
+    print(f"Generated tessera visualization: {output_path}")
+    
     try:
-        # Generate tessera visualization TIFF
-        print("Merging tessera embeddings for region...")
-        temp_tiff = os.path.join(output_dir, "tessera_viz.tiff")
 
-        output_path = tessera.merge_embeddings_for_region(
-            bounds=(min_lon, min_lat, max_lon, max_lat),
-            output_path=temp_tiff,
-            target_crs="EPSG:4326",
-            bands=bands,
-            normalize=True,
-            year=year,
-        )
+        # Convert float32 TIFF to 8-bit for gdal2tiles compatibility
+        print("Converting to 8-bit for tile generation...")
+        temp_vrt = os.path.join(output_dir, "tessera_viz_8bit.vrt")
+        
+        # Use gdal_translate to convert to 8-bit with automatic scaling
+        translate_cmd = [
+            "gdal_translate",
+            "-of", "VRT",
+            "-ot", "Byte", 
+            "-scale",
+            output_path,
+            temp_vrt
+        ]
+        
+        result = subprocess.run(translate_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"Error converting to 8-bit: {result.stderr}")
+            return None
+        
+        print(f"Created 8-bit VRT: {temp_vrt}")
 
-        print(f"Generated tessera visualization: {output_path}")
-
-        # Generate tiles using gdal2tiles
+        # Generate tiles using gdal2tiles with the 8-bit VRT
         print("Generating tiles with gdal2tiles...")
 
-        # Run gdal2tiles.py
         cmd = [
             "gdal2tiles.py",
             "--zoom=1-15",
@@ -828,7 +834,7 @@ def generate_static_tessera_tiles(
             "--webviewer=none",
             "--tiledriver=PNG",
             "--xyz",  # Generate tiles in XYZ format for Leaflet compatibility
-            output_path,
+            temp_vrt,  # Use the 8-bit VRT instead of the original TIFF
             tiles_output_dir,
         ]
 
@@ -839,10 +845,13 @@ def generate_static_tessera_tiles(
 
         print(f"Static tiles generated successfully in: {tiles_output_dir}")
 
-        # Clean up the intermediate TIFF file
+        # Clean up the intermediate files
         if os.path.exists(temp_tiff):
             os.remove(temp_tiff)
-            print(f"Cleaned up intermediate file: {temp_tiff}")
+            print(f"Cleaned up intermediate TIFF: {temp_tiff}")
+        if os.path.exists(temp_vrt):
+            os.remove(temp_vrt)
+            print(f"Cleaned up intermediate VRT: {temp_vrt}")
 
         return tiles_output_dir
 
@@ -925,7 +934,7 @@ def serve_command(args):
     tiles_dir = generate_static_tessera_tiles(
         str(region_path),
         str(tiles_output_base),
-        tessera_version=args.version,
+        tessera_version=args.dataset_version,
         year=args.year,
         bands=args.bands,
         registry_dir=args.registry_dir,
@@ -1003,10 +1012,12 @@ Examples:
   # Generate a world map showing all available embedding grid points
   geotessera map --output coverage_map.png
   
-  # Create a false-color visualization from embeddings for a region (multiple formats supported)
-  geotessera visualize --region region.geojson --output region_viz.tiff --bands 0 1 2
-  geotessera visualize --region boundary.shp --output area_viz.tiff --bands 10 20 30
-  geotessera visualize --region study_area.gpkg --output study_viz.tiff
+  # Create full 128-band GeoTIFF (default behavior)
+  geotessera visualize --region region.geojson --output full_128band.tif
+  
+  # Create GeoTIFF with specific bands
+  geotessera visualize --region boundary.shp --output subset.tif --bands 0 1 2
+  geotessera visualize --region study_area.gpkg --output selected_bands.tif --bands 10 20 30
   
   # Start HTTP server with Leaflet.js to display region overlay with tessera false color tiles
   geotessera serve --region example/CB.geojson --port 8000 --open
@@ -1028,11 +1039,17 @@ Valid Target CRS Values:
   EPSG:3995     - Arctic Polar Stereographic (for areas north of 70°N)
   EPSG:3031     - Antarctic Polar Stereographic (for areas south of 70°S)
 
-Note: The 'visualize' command creates false-color visualizations from numpy embeddings.
+Note: The 'visualize' command creates GeoTIFFs from embeddings. Default behavior exports 
+      all 128 bands. Use --bands to export only selected channels. All outputs are float32.
         """,
     )
 
-    parser.add_argument("--version", default="v1", help="Dataset version (default: v1)")
+    parser.add_argument(
+        "--version", 
+        action="version", 
+        version=f"geotessera {__version__}"
+    )
+    parser.add_argument("--dataset-version", default="v1", help="Dataset version (default: v1)")
     parser.add_argument(
         "--registry-dir",
         type=str,
@@ -1079,7 +1096,7 @@ Note: The 'visualize' command creates false-color visualizations from numpy embe
     # Visualize command (embedding visualization)
     viz_parser = subparsers.add_parser(
         "visualize",
-        help="Create false-color visualization from embeddings for a region (supports multiple formats)",
+        help="Create GeoTIFF from embeddings - full 128-band or selected bands (float32)",
     )
     viz_parser.add_argument(
         "--region",
@@ -1102,12 +1119,8 @@ Note: The 'visualize' command creates false-color visualizations from numpy embe
     viz_parser.add_argument(
         "--bands",
         type=int,
-        nargs=3,
-        default=[0, 1, 2],
-        help="Three band indices to use for RGB visualization (default: 0 1 2)",
-    )
-    viz_parser.add_argument(
-        "--no-normalize", action="store_true", help="Skip normalization of band values"
+        nargs='+',
+        help="Band indices to include in output. If not specified, exports all 128 bands. For specific band selection, e.g., --bands 0 1 2",
     )
     viz_parser.add_argument(
         "--year",
@@ -1142,9 +1155,9 @@ Note: The 'visualize' command creates false-color visualizations from numpy embe
     serve_parser.add_argument(
         "--bands",
         type=int,
-        nargs=3,
+        nargs='+',
         default=[0, 1, 2],
-        help="Three band indices for tessera visualization (default: 0 1 2)",
+        help="Band indices for tessera visualization. Default is RGB visualization with bands 0, 1, 2",
     )
     serve_parser.add_argument(
         "--year",
