@@ -48,6 +48,7 @@ from . import export
 
 try:
     import importlib.metadata
+
     __version__ = importlib.metadata.version("geotessera")
 except importlib.metadata.PackageNotFoundError:
     # Fallback for development installs

@@ -589,9 +589,12 @@ class GeoTessera:
                     )
 
         # Calculate how many blocks are actually available
-        blocks_available = sum(1 for block_lon, block_lat in required_blocks 
-                              if (year, block_lon, block_lat) in self._loaded_blocks)
-        
+        blocks_available = sum(
+            1
+            for block_lon, block_lat in required_blocks
+            if (year, block_lon, block_lat) in self._loaded_blocks
+        )
+
         if blocks_loaded > 0:
             print(
                 f"Successfully loaded {blocks_loaded} new registry blocks ({blocks_available}/{len(required_blocks)} total available)"
@@ -969,7 +972,6 @@ class GeoTessera:
 
         # Create a unified geometry (union of all features)
         unified_geom = gdf.unary_union
-        from shapely.geometry import box
 
         # Find intersecting tiles across all available years
         overlapping_tiles = []
@@ -1514,7 +1516,7 @@ class GeoTessera:
             ...     bounds=(-0.2, 51.4, 0.1, 51.6),
             ...     output_path="london_full_128band.tif"
             ... )
-            
+
             >>> # Create selected band subset
             >>> gt.merge_embeddings_for_region(
             ...     bounds=(-122.6, 37.2, -121.7, 38.0),
@@ -1542,7 +1544,7 @@ class GeoTessera:
             )
 
         min_lon, min_lat, max_lon, max_lat = bounds
-        
+
         # Determine output configuration based on bands parameter
         if bands is None:
             # All 128 bands
@@ -1554,11 +1556,11 @@ class GeoTessera:
             output_bands = bands
             num_bands = len(bands)
             print(f"Exporting {num_bands} selected bands")
-            
+
             # Validate band indices
             if any(b < 0 or b > 127 for b in bands):
                 raise ValueError("All band indices must be in range 0-127")
-        
+
         # Load only the registry blocks needed for this region (much more efficient)
         self._load_blocks_for_region(bounds, year)
 
@@ -1733,7 +1735,7 @@ class GeoTessera:
                 print(
                     f"Dimensions: {final_array.shape[2]}x{final_array.shape[1]} pixels, {final_array.shape[0]} bands"
                 )
-                print(f"Data type: float32")
+                print("Data type: float32")
 
                 return output_path
 
@@ -1760,7 +1762,6 @@ class GeoTessera:
         Returns:
             List of (lat, lon) tuples for tiles that intersect the geometry
         """
-        from shapely.geometry import box
 
         # Convert to GeoDataFrame if needed
         if isinstance(geometry, gpd.GeoDataFrame):
@@ -1775,15 +1776,16 @@ class GeoTessera:
 
         # Get unified geometry
         unified_geom = gdf.unary_union
-        
+
         # Get bounds of the geometry for efficient registry loading
         bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
         min_lon, min_lat, max_lon, max_lat = bounds
-        
+
         # Load only the registry blocks needed for this geometry
         from .registry_utils import get_all_blocks_in_range
+
         required_blocks = get_all_blocks_in_range(min_lon, max_lon, min_lat, max_lat)
-        
+
         # Load required blocks (same approach as merge_embeddings_for_region)
         for block_lon, block_lat in required_blocks:
             block_key = (year, block_lon, block_lat)
@@ -1794,8 +1796,10 @@ class GeoTessera:
                 try:
                     self._ensure_block_loaded(year, center_lon, center_lat)
                 except Exception as e:
-                    print(f"Warning: Could not load registry block ({block_lon}, {block_lat}): {e}")
-        
+                    print(
+                        f"Warning: Could not load registry block ({block_lon}, {block_lat}): {e}"
+                    )
+
         # Find intersecting tiles from the available embeddings in loaded blocks
         tiles = []
         for tile_year, lat, lon in self._available_embeddings:
@@ -1813,28 +1817,28 @@ class GeoTessera:
 
     def merge_embeddings_for_region_file(
         self,
-        region_path: Union[str, "pathlib.Path"],
+        region_path: Union[str, Path],
         output_path: str,
         target_crs: str = "EPSG:4326",
         bands: Optional[List[int]] = None,
         year: int = 2024,
     ) -> Optional[str]:
         """Create a seamless mosaic of Tessera embeddings for a region file.
-        
+
         Convenience method that loads a region from a file and creates a merged
         GeoTIFF. Supports all formats that GeoPandas can read including GeoJSON,
         Shapefile, GeoPackage, etc.
-        
+
         Args:
             region_path: Path to region file (GeoJSON, Shapefile, etc.)
             output_path: Output path for the merged GeoTIFF
             target_crs: Target coordinate system (default: "EPSG:4326")
             bands: Band indices to include, or None for all bands
             year: Year of embeddings to use
-            
+
         Returns:
             Path to created TIFF file, or None on error
-            
+
         Example:
             >>> tessera = GeoTessera()
             >>> result = tessera.merge_embeddings_for_region_file(
@@ -1845,15 +1849,17 @@ class GeoTessera:
         """
         try:
             from .io import load_roi
-            
+
             # Load region using the robust load_roi function
             gdf = load_roi(region_path)
             bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
             min_lon, min_lat, max_lon, max_lat = bounds
-            
-            print(f"Region bounds: ({min_lon:.4f}, {min_lat:.4f}, {max_lon:.4f}, {max_lat:.4f})")
+
+            print(
+                f"Region bounds: ({min_lon:.4f}, {min_lat:.4f}, {max_lon:.4f}, {max_lat:.4f})"
+            )
             print(f"Region contains {len(gdf)} feature(s)")
-            
+
             # Use the existing merge method with bounds
             output = self.merge_embeddings_for_region(
                 bounds=(min_lon, min_lat, max_lon, max_lat),
@@ -1862,12 +1868,13 @@ class GeoTessera:
                 bands=bands,
                 year=year,
             )
-            
+
             return output
-            
+
         except Exception as e:
             print(f"Error processing region file: {e}")
             import traceback
+
             traceback.print_exc()
             return None
 
@@ -2025,7 +2032,7 @@ class GeoTessera:
         self, lat: float, lon: float
     ) -> Tuple[float, float, float, float]:
         """Get the geographic bounds (west, south, east, north) of a tile in EPSG:4326.
-        
+
         IMPORTANT: Tile coordinates (lat, lon) represent the CENTER of the tile.
         Each tile covers a 0.1° x 0.1° area, so bounds extend ±0.05° from center.
         Tiles are on a 0.05° offset grid (e.g., 0.05, 0.15, 0.25, ...).
@@ -2038,21 +2045,22 @@ class GeoTessera:
             Tuple of (west, south, east, north) bounds
         """
         return (lon - 0.05, lat - 0.05, lon + 0.05, lat + 0.05)
-    
+
     def get_tile_box(self, lat: float, lon: float):
         """Create a Shapely box geometry for a tile.
-        
+
         IMPORTANT: Tile coordinates (lat, lon) represent the CENTER of the tile.
         Each tile covers a 0.1° x 0.1° area, so bounds extend ±0.05° from center.
-        
+
         Args:
             lat: Tile latitude (center)
             lon: Tile longitude (center)
-            
+
         Returns:
             Shapely box geometry representing the tile bounds
         """
         from shapely.geometry import box
+
         west, south, east, north = self.get_tile_bounds(lat, lon)
         return box(west, south, east, north)
 

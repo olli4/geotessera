@@ -206,22 +206,23 @@ def map_command(args):
         # Use Natural Earth data directly from their URL with custom user agent
         import requests
         import tempfile
-        
+
         world_url = "https://www.naturalearthdata.com/http//www.naturalearthdata.com/download/110m/cultural/ne_110m_admin_0_countries.zip"
-        
+
         # Get version for user agent
         from . import __version__
+
         user_agent = f"GeoTessera/{__version__}"
-        
-        headers = {'User-Agent': user_agent}
-        
+
+        headers = {"User-Agent": user_agent}
+
         # Download with custom user agent
-        with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as temp_file:
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as temp_file:
             response = requests.get(world_url, headers=headers)
             response.raise_for_status()
             temp_file.write(response.content)
             temp_file_path = temp_file.name
-        
+
         try:
             world = geopandas.read_file(temp_file_path)
         finally:
@@ -279,8 +280,6 @@ def map_command(args):
     plt.close()
 
 
-
-
 def visualize_command(args):
     """Create GeoTIFF from Tessera embeddings.
 
@@ -324,21 +323,23 @@ def visualize_command(args):
         sys.exit(1)
 
     print(f"Analyzing region file: {args.region}")
-    
+
     # Use core library method to create merged TIFF
     output_path = tessera.merge_embeddings_for_region_file(
         region_path=args.region,
         output_path=args.output,
         bands=args.bands,
         year=args.year,
-        target_crs=args.target_crs
+        target_crs=args.target_crs,
     )
-    
+
     if output_path:
         print(f"Created merged embedding visualization for region: {output_path}")
     else:
         print("Failed to create visualization")
-        print("Supported formats: GeoJSON, TopoJSON, Shapefile (.shp), GeoPackage (.gpkg)")
+        print(
+            "Supported formats: GeoJSON, TopoJSON, Shapefile (.shp), GeoPackage (.gpkg)"
+        )
         sys.exit(1)
 
 
@@ -786,42 +787,43 @@ def generate_static_tessera_tiles(
     # Generate tessera visualization TIFF using core library method
     print("Merging tessera embeddings for region...")
     temp_tiff = os.path.join(output_dir, "tessera_viz.tiff")
-    
+
     output_path = tessera.merge_embeddings_for_region_file(
         region_path=region_path,
         output_path=temp_tiff,
         bands=bands,
         year=year,
-        target_crs="EPSG:4326"
+        target_crs="EPSG:4326",
     )
-    
+
     if not output_path:
         print("Failed to generate tessera visualization")
         return None
-    
-    print(f"Generated tessera visualization: {output_path}")
-    
-    try:
 
+    print(f"Generated tessera visualization: {output_path}")
+
+    try:
         # Convert float32 TIFF to 8-bit for gdal2tiles compatibility
         print("Converting to 8-bit for tile generation...")
         temp_vrt = os.path.join(output_dir, "tessera_viz_8bit.vrt")
-        
+
         # Use gdal_translate to convert to 8-bit with automatic scaling
         translate_cmd = [
             "gdal_translate",
-            "-of", "VRT",
-            "-ot", "Byte", 
+            "-of",
+            "VRT",
+            "-ot",
+            "Byte",
             "-scale",
             output_path,
-            temp_vrt
+            temp_vrt,
         ]
-        
+
         result = subprocess.run(translate_cmd, capture_output=True, text=True)
         if result.returncode != 0:
             print(f"Error converting to 8-bit: {result.stderr}")
             return None
-        
+
         print(f"Created 8-bit VRT: {temp_vrt}")
 
         # Generate tiles using gdal2tiles with the 8-bit VRT
@@ -1045,11 +1047,11 @@ Note: The 'visualize' command creates GeoTIFFs from embeddings. Default behavior
     )
 
     parser.add_argument(
-        "--version", 
-        action="version", 
-        version=f"geotessera {__version__}"
+        "--version", action="version", version=f"geotessera {__version__}"
     )
-    parser.add_argument("--dataset-version", default="v1", help="Dataset version (default: v1)")
+    parser.add_argument(
+        "--dataset-version", default="v1", help="Dataset version (default: v1)"
+    )
     parser.add_argument(
         "--registry-dir",
         type=str,
@@ -1119,7 +1121,7 @@ Note: The 'visualize' command creates GeoTIFFs from embeddings. Default behavior
     viz_parser.add_argument(
         "--bands",
         type=int,
-        nargs='+',
+        nargs="+",
         help="Band indices to include in output. If not specified, exports all 128 bands. For specific band selection, e.g., --bands 0 1 2",
     )
     viz_parser.add_argument(
@@ -1155,7 +1157,7 @@ Note: The 'visualize' command creates GeoTIFFs from embeddings. Default behavior
     serve_parser.add_argument(
         "--bands",
         type=int,
-        nargs='+',
+        nargs="+",
         default=[0, 1, 2],
         help="Band indices for tessera visualization. Default is RGB visualization with bands 0, 1, 2",
     )
