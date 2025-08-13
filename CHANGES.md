@@ -1,4 +1,4 @@
-## v0.3.0 (dev)
+## v0.3.0
 
 - Moved the map updating CI to https://github.com/ucam-eo/tessera-coverage.
   This results in a reset main branch with a cleaner git history.
