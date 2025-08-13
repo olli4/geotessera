@@ -338,6 +338,7 @@ def create_vrt(
     raster_paths: List[Union[str, Path]],
     output_path: Union[str, Path],
     relative: bool = True,
+    **kwargs
 ) -> str:
     """Create a GDAL Virtual Raster (VRT) from multiple rasters.
 
@@ -349,6 +350,7 @@ def create_vrt(
         raster_paths: List of raster file paths
         output_path: Path for output VRT file
         relative: Use relative paths in VRT (more portable)
+        kwargs : to pass for BuildVrtOptions
 
     Returns:
         Path to created VRT file
@@ -361,6 +363,7 @@ def create_vrt(
         >>> # Open in QGIS or with rasterio
         >>> with rasterio.open("classification.vrt") as src:
         ...     print(src.bounds)
+        
     """
     from osgeo import gdal
 
@@ -371,7 +374,14 @@ def create_vrt(
     raster_paths = [str(Path(p).absolute()) for p in raster_paths]
 
     # Create VRT
-    vrt_options = gdal.BuildVRTOptions(relative=relative)
+    try:
+        vrt_options = gdal.BuildVRTOptions(relative=True)
+    except TypeError as e:
+        # as it is not available in from at least gdal>=3.10
+        print(f"Parameter not available: {e}")
+        # Fall back to basic options
+        vrt_options = gdal.BuildVRTOptions(kwargs)
+
     gdal.BuildVRT(str(output_path), raster_paths, options=vrt_options)
 
     return str(output_path)

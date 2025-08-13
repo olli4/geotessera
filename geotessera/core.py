@@ -1042,10 +1042,10 @@ class GeoTessera:
             return output_path
 
         # Calculate bounding box for all tiles
-        lon_min = min(lon for _, lon, _ in tiles)
-        lat_min = min(lat for lat, _, _ in tiles)
-        lon_max = max(lon for _, lon, _ in tiles) + 0.1
-        lat_max = max(lat for lat, _, _ in tiles) + 0.1
+        lon_min = min(lon - 0.05 for _, lon, _ in tiles)
+        lat_min = min(lat - 0.05 for lat, _, _ in tiles)
+        lon_max = max(lon + 0.05 for _, lon, _ in tiles)
+        lat_max = max(lat + 0.05 for lat, _, _ in tiles)
 
         # Download and process each tile
         tile_data_dict = {}
