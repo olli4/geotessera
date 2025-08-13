@@ -968,8 +968,8 @@ class GeoTessera:
         # Find intersecting tiles across all available years
         overlapping_tiles = []
         for year, lat, lon in self.list_available_embeddings():
-            # Create tile bounding box (tile coordinates represent center, so extend ±0.05°)
-            tile_box = box(lon - 0.05, lat - 0.05, lon + 0.05, lat + 0.05)
+            # Create tile bounding box (tile coordinates represent center)
+            tile_box = self.get_tile_box(lat, lon)
 
             # Check intersection with precise geometry testing
             if unified_geom.intersects(tile_box):
@@ -1081,6 +1081,7 @@ class GeoTessera:
             except Exception as e:
                 print(f"WARNING: Failed to download tile ({lat:.2f}, {lon:.2f}): {e}")
                 tile_data_dict[(lat, lon)] = None
+                # CR:avsm TODO raise error
 
         # Determine the resolution based on the first valid tile
         tile_height, tile_width = None, None
@@ -1249,7 +1250,7 @@ class GeoTessera:
         # Get dimensions
         height, width = vis_data.shape[:2]
 
-        # Calculate geographic bounds (each tile covers 0.1 degrees)
+        # Calculate geographic bounds (tiles are centered, covering 0.1 degrees)
         lon_min = lon - 0.05
         lat_min = lat - 0.05
         lon_max = lon + 0.05
@@ -1337,7 +1338,7 @@ class GeoTessera:
         # Find all land mask tiles that intersect with the bounds
         tiles_to_merge = []
         for lat, lon in self._list_available_landmasks():
-            # Check if tile intersects with bounds (0.1 degree grid)
+            # Check if tile intersects with bounds (tiles are centered on 0.05 grid)
             tile_min_lon, tile_min_lat = lon - 0.05, lat - 0.05
             tile_max_lon, tile_max_lat = lon + 0.05, lat + 0.05
 
@@ -1543,7 +1544,7 @@ class GeoTessera:
             if emb_year != year:
                 continue
 
-            # Check if tile intersects with bounds (0.1 degree grid)
+            # Check if tile intersects with bounds (tiles are centered on 0.05 grid)
             tile_min_lon, tile_min_lat = lon - 0.05, lat - 0.05
             tile_max_lon, tile_max_lat = lon + 0.05, lat + 0.05
 
@@ -1778,8 +1779,8 @@ class GeoTessera:
             if tile_year != year:
                 continue
 
-            # Create tile bounding box (tile coordinates represent center, so extend ±0.05°)
-            tile_box = box(lon - 0.05, lat - 0.05, lon + 0.05, lat + 0.05)
+            # Create tile bounding box (tile coordinates represent center)
+            tile_box = self.get_tile_box(lat, lon)
 
             # Check intersection
             if unified_geom.intersects(tile_box):
@@ -1941,15 +1942,36 @@ class GeoTessera:
         self, lat: float, lon: float
     ) -> Tuple[float, float, float, float]:
         """Get the geographic bounds (west, south, east, north) of a tile in EPSG:4326.
+        
+        IMPORTANT: Tile coordinates (lat, lon) represent the CENTER of the tile.
+        Each tile covers a 0.1° x 0.1° area, so bounds extend ±0.05° from center.
+        Tiles are on a 0.05° offset grid (e.g., 0.05, 0.15, 0.25, ...).
 
         Args:
-            lat: Tile latitude (lower-left corner)
-            lon: Tile longitude (lower-left corner)
+            lat: Tile latitude (center)
+            lon: Tile longitude (center)
 
         Returns:
             Tuple of (west, south, east, north) bounds
         """
         return (lon - 0.05, lat - 0.05, lon + 0.05, lat + 0.05)
+    
+    def get_tile_box(self, lat: float, lon: float):
+        """Create a Shapely box geometry for a tile.
+        
+        IMPORTANT: Tile coordinates (lat, lon) represent the CENTER of the tile.
+        Each tile covers a 0.1° x 0.1° area, so bounds extend ±0.05° from center.
+        
+        Args:
+            lat: Tile latitude (center)
+            lon: Tile longitude (center)
+            
+        Returns:
+            Shapely box geometry representing the tile bounds
+        """
+        from shapely.geometry import box
+        west, south, east, north = self.get_tile_bounds(lat, lon)
+        return box(west, south, east, north)
 
     def get_tile_crs(self, lat: float, lon: float) -> str:
         """Get the CRS of a specific tile.

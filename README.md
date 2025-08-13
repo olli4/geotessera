@@ -25,7 +25,7 @@ GeoTessera provides access to geospatial embeddings from the [Tessera foundation
 ## Installation
 
 ```bash
-pip install git+https://github.com/ucam-eo/geotessera
+pip install geotessera
 ```
 
 ## Configuration
@@ -126,14 +126,14 @@ uvx geotessera \
 ```bash
 # Create false-color visualization for a region
 uvx geotessera visualize \
-  --region example/CB.geojson --output cambridge_viz.tiff
+  --topojson example/CB.geojson --output cambridge_viz.tiff
 
 # Serve interactive web map
-uvx geotessera serve --region example/CB.geojson --open
+uvx geotessera serve --geojson example/CB.geojson --open
 
 # Serve with custom band selection (e.g., bands 30, 60, 90)
 uvx geotessera serve \
-  --region example/CB.geojson --bands 30 60 90 --open
+  --geojson example/CB.geojson --bands 30 60 90 --open
 ```
 
 If you have the repository checked out, use `--from .` instead.
@@ -318,3 +318,7 @@ GeoTessera now provides robust error handling to ensure data integrity:
 Tessera is a foundation model for Earth observation developed by the University of Cambridge. It learns temporal-spectral features from multi-source satellite data to enable advanced geospatial analysis including land classification and canopy height prediction.
 
 For more information about the Tessera project, visit: https://github.com/ucam-eo/tessera
+
+## Related Tools
+
+For a higher-level, interactive interface for point-and-click land cover classification built on top of `GeoTessera`, check out the [Interactive Map Classifier](https://github.com/ucam-eo/tessera-interactive-map) as an example.
