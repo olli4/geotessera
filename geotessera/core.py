@@ -1179,7 +1179,6 @@ class GeoTessera:
         output_path: str,
         year: int = 2024,
         bands: List[int] = [0, 1, 2],
-
         normalize: bool = True,
     ) -> str:
         """Export a single Tessera embedding tile as a georeferenced GeoTIFF.
@@ -1193,7 +1192,7 @@ class GeoTessera:
             lon: Longitude of tile in decimal degrees (rounded to 0.1° grid).
             output_path: Filename for the output GeoTIFF.
             year: Year of embeddings to export (2017-2024).
-            bands: Channel indices to map to RGB. Default is Each index must be
+            bands: Channel indices to map to RGB. Default is [0, 1, 2]. Each index must be
                    between 0-127. Different combinations highlight different
                    features (e.g., vegetation, water, urban areas).
             normalize: If True, stretches values to use full 0-255 range for
