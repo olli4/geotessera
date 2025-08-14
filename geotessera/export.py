@@ -338,7 +338,7 @@ def create_vrt(
     raster_paths: List[Union[str, Path]],
     output_path: Union[str, Path],
     relative: bool = True,
-    **kwargs
+    **kwargs,
 ) -> str:
     """Create a GDAL Virtual Raster (VRT) from multiple rasters.
 
@@ -363,7 +363,7 @@ def create_vrt(
         >>> # Open in QGIS or with rasterio
         >>> with rasterio.open("classification.vrt") as src:
         ...     print(src.bounds)
-        
+
     """
     from osgeo import gdal
 

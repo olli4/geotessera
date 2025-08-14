@@ -1,3 +1,38 @@
+## v0.4.0 (dev)
+
+### Enhanced Full-Band GeoTIFF Support
+
+- **Simplified GeoTIFF export**: Always uses float32 precision without normalization
+  - **Removed normalization logic**: All outputs preserve dequantized embedding values exactly
+  - **Consistent data type**: Always float32 to maintain precision regardless of band count
+  - **Band selection**: Still supports selecting specific bands (e.g., `--bands 0 1 2`) while preserving raw values
+  - **Backward compatible**: Existing scripts continue to work unchanged
+- **Enhanced CLI**: `geotessera visualize` now defaults to full 128-band export when `--bands` is not specified
+  - Default: `geotessera visualize --region area.json --output full.tif` (128 bands, float32)
+  - Selected bands: `geotessera visualize --region area.json --bands 0 1 2 --output subset.tif` (3 bands, float32)
+
+### CLI Improvements and Bug Fixes
+
+- **Fixed `visualize` command**: Resolved "Unknown geometry type: 'featurecollection'" error
+  - Fixed condition order bug in `find_tiles_for_geometry()` that incorrectly handled GeoDataFrames
+  - Command now works reliably with GeoJSON, Shapefile, GeoPackage, and other region file formats
+- **Improved performance**: Made `find_tiles_for_geometry()` efficient by loading only needed registry blocks
+  - Previously loaded entire 400+ block registry, now loads only 1-4 blocks for typical regions
+  - Faster startup and reduced memory usage for both `visualize` and `serve` commands
+- **Enhanced tile generation**: Fixed `serve` command's gdal2tiles compatibility
+  - Automatically converts float32 TIFF to 8-bit using `gdal_translate -scale` before tile generation
+- **Better logging**: Improved registry loading messages
+  - Clear distinction between newly loaded vs. already cached registry blocks
+  - More informative progress reporting during region processing
+- **Code rationalization**: Created shared logic between `visualize` and `serve` commands
+  - Added `merge_embeddings_for_region_file()` method to core library for region file handling
+  - Eliminated code duplication while maintaining full functionality
+
+### Infrastructure Improvements
+
+- **Natural Earth integration**: Set proper user agent when downloading world map data
+- **Cleanup**: Removed accidentally committed world map files to reduce repository size
+
 ## v0.3.0
 
 - Moved the map updating CI to https://github.com/ucam-eo/tessera-coverage.

@@ -46,5 +46,11 @@ from . import spatial
 from . import parallel
 from . import export
 
-__version__ = "0.1.0"
+try:
+    import importlib.metadata
+
+    __version__ = importlib.metadata.version("geotessera")
+except importlib.metadata.PackageNotFoundError:
+    # Fallback for development installs
+    __version__ = "unknown"
 __all__ = ["GeoTessera", "io", "spatial", "parallel", "export"]
