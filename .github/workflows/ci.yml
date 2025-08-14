@@ -15,9 +15,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: trundev/setup-gdal@main
-        with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install GDAL (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gdal-bin libgdal-dev
+        if: runner.os == 'Linux'
+
+      - name: Install GDAL (macOS)
+        run: brew install gdal
+        if: runner.os == 'macOS'
+
+      - name: Install GDAL (Windows)
+        run: choco install gdal
+        if: runner.os == 'Windows'
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
