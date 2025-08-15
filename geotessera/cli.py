@@ -1,1182 +1,951 @@
-"""Command-line interface for accessing and visualizing Tessera embeddings.
+"""Simplified GeoTessera command-line interface.
 
-This module provides CLI commands for:
-- Listing and exploring available embedding tiles
-- Creating visualizations from embeddings as GeoTIFF files
-- Generating interactive web maps with Leaflet.js
-- Serving embedding tiles as web map tiles for visualization
-
-The CLI supports multiple visualization modes including false-color composites
-from different embedding channels and interactive web-based exploration.
+Focused on downloading tiles and creating visualizations from the generated GeoTIFFs.
 """
 
-import argparse
+# Will configure pooch logging after imports
+
 import sys
-from pathlib import Path
-import pandas as pd
-import geopandas
-import matplotlib.pyplot as plt
-import datetime
-import json
+import webbrowser
+import threading
+import time
 import http.server
 import socketserver
-import webbrowser
-import tempfile
-import shutil
-import subprocess
-import os
-from urllib.parse import urlparse
+import json
+from pathlib import Path
+from typing import Optional, List, Callable
+from typing_extensions import Annotated
+
+import numpy as np
+import typer
+from rich.console import Console
+from rich.progress import Progress, TaskID, BarColumn, TextColumn, TimeRemainingColumn
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+from rich import print as rprint
+
 from .core import GeoTessera
-from .io import load_roi
-from . import __version__
-
-
-def list_embeddings_command(args):
-    """List available Tessera embedding tiles with optional limit.
-
-    Displays all available embedding tiles in the dataset, showing year,
-    latitude, and longitude for each tile. Useful for exploring coverage
-    and finding specific regions.
-
-    Args:
-        args: Parsed command line arguments containing:
-            - version: Dataset version to use
-            - registry_dir: Optional local registry directory
-            - limit: Optional maximum number of tiles to display
-
-    Example output::
-
-        Available embeddings (50000 total):
-          - Year 2024: (51.50, -0.10)
-          - Year 2024: (51.50, -0.00)
-          ... and 49998 more
-    """
-    tessera = GeoTessera(
-        version=args.dataset_version,
-        registry_dir=args.registry_dir,
-        auto_update=args.auto_update,
-        manifests_repo_url=args.manifests_repo_url,
-    )
-
-    embeddings = list(tessera.list_available_embeddings())
-    print(f"Available embeddings ({len(embeddings)} total):")
-
-    if args.limit:
-        embeddings = embeddings[: args.limit]
-
-    for year, lat, lon in embeddings:
-        print(f"  - Year {year}: ({lat:.2f}, {lon:.2f})")
-
-    total_count = tessera.count_available_embeddings()
-    if args.limit and args.limit < total_count:
-        print(f"  ... and {total_count - args.limit} more")
-
-
-def info_command(args):
-    """Display comprehensive information about the GeoTessera dataset.
-
-    Shows dataset metadata including version, data URLs, cache locations,
-    and counts of available embeddings and land masks. Useful for debugging
-    and understanding the current configuration.
-
-    Args:
-        args: Parsed command line arguments containing:
-            - version: Dataset version to query
-            - registry_dir: Optional local registry directory
-
-    Information displayed:
-        - Dataset version identifier
-        - Remote data URLs for embeddings and land masks
-        - Local cache directory path
-        - Total count of available embeddings
-        - Count of auxiliary land mask files
-    """
-    tessera = GeoTessera(
-        version=args.dataset_version,
-        registry_dir=args.registry_dir,
-        auto_update=args.auto_update,
-        manifests_repo_url=args.manifests_repo_url,
-    )
-
-    print("=== GeoTessera Dataset Information ===")
-    print(f"Version: {tessera.version}")
-    print(f"Base URL: {tessera._pooch.base_url}")
-    print(f"Cache directory: {tessera._pooch.path}")
-
-    # Enhanced embedding information
-    total_embeddings = tessera.count_available_embeddings()
-    print(f"Total embeddings: {total_embeddings:,}")
-
-    # Show available years
-    try:
-        available_years = tessera.get_available_years()
-        print(f"Available years: {', '.join(map(str, available_years))}")
-    except Exception:
-        print("Available years: Loading...")
-
-    # Enhanced land mask information
-    landmask_count = tessera._count_available_landmasks()
-    print(f"Land masks available: {landmask_count:,}")
-    print(
-        f"Land mask Base URL: {tessera._landmask_pooch.base_url if tessera._landmask_pooch else 'Not loaded'}"
-    )
-
-    # Show registry information
-    if tessera._registry_dir:
-        print(f"Using local registry: {tessera._registry_dir}")
-    else:
-        print("Using remote registry (auto-downloaded)")
-
-    # Show loaded blocks information
-    if tessera._loaded_blocks:
-        print(f"Registry blocks loaded: {len(tessera._loaded_blocks)}")
-    else:
-        print("Registry blocks: None loaded (will load on-demand)")
-
-
-def map_command(args):
-    """Generate a world map visualization showing Tessera embedding coverage.
-
-    Creates a high-resolution map image displaying all available embedding
-    tile locations as red dots on a world map background. Useful for
-    understanding global coverage and identifying data-rich regions.
-
-    Args:
-        args: Parsed command line arguments containing:
-            - version: Dataset version to map
-            - output: Output filename for the map image (PNG format)
-
-    Output:
-        Saves a PNG image with:
-        - World map base layer with country boundaries
-        - Red dots marking each available 0.1° embedding tile
-        - Legend and grid lines for reference
-        - Timestamp and total tile count
-
-    Note:
-        The map generation may take several seconds for large datasets
-        as it processes all available tile locations.
-    """
-    tessera = GeoTessera(
-        version=args.dataset_version,
-        registry_dir=args.registry_dir,
-        auto_update=args.auto_update,
-        manifests_repo_url=args.manifests_repo_url,
-    )
-
-    print("Generating coverage map from embedding registry data...")
-
-    # Get all available embeddings from the library (enhanced with progress reporting)
-    print("Loading embedding registry data...")
-    embeddings = list(tessera.list_available_embeddings())
-
-    if not embeddings:
-        print("No embeddings available. Check registry loading.")
-        return
-
-    print(f"Processing {len(embeddings)} embedding tiles...")
-
-    # Extract unique coordinates (lat, lon) from embeddings with better performance
-    coordinates = set()
-    years_found = set()
-    for year, lat, lon in embeddings:
-        coordinates.add((lat, lon))
-        years_found.add(year)
-
-    print(
-        f"Found {len(coordinates)} unique grid points across {len(years_found)} years: {sorted(years_found)}"
-    )
-
-    # Convert to DataFrame with better column naming
-    coords_list = list(coordinates)
-    df = pd.DataFrame(coords_list, columns=["Latitude", "Longitude"])
-
-    # Convert pandas DataFrame to GeoDataFrame
-    print("Creating GeoDataFrame...")
-    gdf = geopandas.GeoDataFrame(
-        df, geometry=geopandas.points_from_xy(df.Longitude, df.Latitude)
-    )
-    gdf.set_crs("EPSG:4326", inplace=True)  # Set the coordinate system to WGS84
-
-    # Plot the map
-    # Check if world map shapefile exists
-    world_map_path = Path("world_map/ne_110m_admin_0_countries.shp")
-    if not world_map_path.exists():
-        print("Using Natural Earth world map from online source.")
-        # Use Natural Earth data directly from their URL with custom user agent
-        import requests
-        import tempfile
-
-        world_url = "https://www.naturalearthdata.com/http//www.naturalearthdata.com/download/110m/cultural/ne_110m_admin_0_countries.zip"
-
-        # Get version for user agent
-        from . import __version__
-
-        user_agent = f"GeoTessera/{__version__}"
-
-        headers = {"User-Agent": user_agent}
-
-        # Download with custom user agent
-        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as temp_file:
-            response = requests.get(world_url, headers=headers)
-            response.raise_for_status()
-            temp_file.write(response.content)
-            temp_file_path = temp_file.name
-
-        try:
-            world = geopandas.read_file(temp_file_path)
-        finally:
-            # Clean up temporary file
-            Path(temp_file_path).unlink(missing_ok=True)
-    else:
-        world = geopandas.read_file(world_map_path)
-
-    # Create the plotting area
-    print("Creating map...")
-    fig, ax = plt.subplots(1, 1, figsize=(20, 12))
-
-    # Plot the world map base layer
-    world.plot(ax=ax, color="lightgray", edgecolor="black", linewidth=0.5)
-
-    # Plot grid points on the map with smaller markers
-    gdf.plot(
-        ax=ax,
-        marker="o",
-        color="red",
-        markersize=2,
-        alpha=0.8,
-        label="Available Embeddings",
-    )
-
-    # Add a title with the current time and grid count
-    current_time_utc = datetime.datetime.now(datetime.timezone.utc).strftime(
-        "%Y-%m-%d %H:%M:%S UTC"
-    )
-    # Enhanced title with more information
-    years_str = ", ".join(map(str, sorted(years_found)))
-    ax.set_title(
-        f"GeoTessera Embedding Coverage Map\nGrid Points: {len(df):,} | Years: {years_str}\nGenerated: {current_time_utc}",
-        fontdict={"fontsize": "16", "fontweight": "bold"},
-    )
-
-    # Add legend
-    ax.legend(loc="lower left", frameon=True, fancybox=True, shadow=True, fontsize=12)
-
-    # Set axis labels
-    ax.set_xlabel("Longitude", fontsize=14)
-    ax.set_ylabel("Latitude", fontsize=14)
-
-    # Add grid for better readability
-    ax.grid(True, alpha=0.3, linestyle="--")
-
-    # Save the map as an image file
-    plt.tight_layout()
-    output_path = args.output
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    print(f"Coverage map saved to {output_path}")
-    print(f"Map shows {len(df):,} unique grid points across {len(years_found)} years")
-
-    # Close the plot to free memory
-    plt.close()
-
-
-def visualize_command(args):
-    """Create GeoTIFF from Tessera embeddings.
-
-    Generates a georeferenced image by mosaicking embedding tiles that
-    overlap with a region file. Outputs float32 data preserving the
-    dequantized embedding values.
-
-    Args:
-        args: Parsed command line arguments containing:
-            - region: Path to region file defining the area
-            - output: Output GeoTIFF filename
-            - target_crs: Coordinate reference system for output
-            - bands: Channel indices to include (0-127)
-            - year: Year of embeddings to use
-            - dataset_version: Dataset version
-
-    Process:
-        1. Reads geographic bounds from region file
-        2. Identifies all embedding tiles overlapping the region
-        3. Downloads and merges tiles with proper alignment
-        4. Exports georeferenced GeoTIFF with metadata
-
-    Example band selections:
-        - None: All 128 channels (default)
-        - [0, 1, 2]: First three channels
-        - [10, 20, 30]: Mid-range channels
-        - [25, 50, 75]: Distributed sampling
-
-    Raises:
-        SystemExit: If region file is missing or invalid
-    """
-    tessera = GeoTessera(
-        version=args.dataset_version,
-        registry_dir=args.registry_dir,
-        auto_update=args.auto_update,
-        manifests_repo_url=args.manifests_repo_url,
-    )
-
-    if not args.region:
-        print("Error: --region is required for visualization")
-        sys.exit(1)
-
-    print(f"Analyzing region file: {args.region}")
-
-    # Use core library method to create merged TIFF
-    output_path = tessera.merge_embeddings_for_region_file(
-        region_path=args.region,
-        output_path=args.output,
-        bands=args.bands,
-        year=args.year,
-        target_crs=args.target_crs,
-    )
-
-    if output_path:
-        print(f"Created merged embedding visualization for region: {output_path}")
-    else:
-        print("Failed to create visualization")
-        print(
-            "Supported formats: GeoJSON, TopoJSON, Shapefile (.shp), GeoPackage (.gpkg)"
-        )
-        sys.exit(1)
-
-
-class GeoJSONRequestHandler(http.server.SimpleHTTPRequestHandler):
-    """HTTP request handler for interactive Tessera embedding visualization.
-
-    Serves a Leaflet.js-based web interface that displays:
-    - GeoJSON/TopoJSON features as vector overlays
-    - Tessera embedding tiles as false-color base layers
-    - Interactive controls for opacity and layer switching
-
-    The handler manages three main endpoints:
-    - /: Main HTML page with Leaflet map
-    - /geojson: GeoJSON data for vector overlay
-    - /tiles/{z}/{x}/{y}.png: Tessera visualization tiles
-
-    Attributes:
-        geojson_data: Parsed GeoJSON data to serve
-        tiles_dir: Directory containing pre-generated tiles
-        tile_bounds: Geographic bounds extracted from tile metadata
-    """
-
-    def __init__(self, *args, geojson_data=None, tiles_dir=None, **kwargs):
-        self.geojson_data = geojson_data
-        self.tiles_dir = tiles_dir
-        self.tile_bounds = self._get_tile_bounds() if tiles_dir else None
-        super().__init__(*args, **kwargs)
-
-    def _get_tile_bounds(self):
-        """Extract geographic bounds from tile metadata.
-
-        Parses the tilemapresource.xml file generated by gdal2tiles
-        to determine the geographic extent of available tiles. This
-        helps Leaflet optimize tile loading and set appropriate bounds.
-
-        Returns:
-            list or None: Bounds as [[south, west], [north, east]] for
-                         Leaflet, or None if metadata is unavailable.
-
-        Note:
-            Gracefully handles missing or malformed metadata files.
-        """
-        if not self.tiles_dir:
-            return None
-
-        tilemapresource_path = os.path.join(self.tiles_dir, "tilemapresource.xml")
-        if not os.path.exists(tilemapresource_path):
-            return None
-
-        try:
-            import xml.etree.ElementTree as ET
-
-            tree = ET.parse(tilemapresource_path)
-            root = tree.getroot()
-
-            # Find BoundingBox element
-            bbox_elem = root.find("BoundingBox")
-            if bbox_elem is not None:
-                minx = float(bbox_elem.get("minx"))
-                miny = float(bbox_elem.get("miny"))
-                maxx = float(bbox_elem.get("maxx"))
-                maxy = float(bbox_elem.get("maxy"))
-                return [
-                    [miny, minx],
-                    [maxy, maxx],
-                ]  # Format for Leaflet: [[south, west], [north, east]]
-        except Exception as e:
-            print(f"Warning: Could not parse tile bounds: {e}")
-
-        return None
-
-    def do_GET(self):
-        """Handle HTTP GET requests for map interface and data.
-
-        Routes requests to appropriate handlers:
-        - Root path serves the interactive map HTML
-        - /geojson endpoint serves vector data as JSON
-        - /tiles/* paths serve pre-generated PNG tiles
-        - Other paths use default file serving
-
-        Tile requests that 404 are handled gracefully as this is
-        expected behavior for areas without data coverage.
-        """
-        parsed_path = urlparse(self.path)
-
-        if parsed_path.path == "/":
-            # Serve the main HTML page
-            self.send_response(200)
-            self.send_header("Content-type", "text/html")
-            self.end_headers()
-            html_content = self.generate_html()
-            self.wfile.write(html_content.encode("utf-8"))
-        elif parsed_path.path == "/geojson":
-            # Serve the GeoJSON data
-            self.send_response(200)
-            self.send_header("Content-type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(self.geojson_data).encode("utf-8"))
-        elif parsed_path.path.startswith("/tiles/") and self.tiles_dir:
-            # Serve custom tiles
-            tile_path = parsed_path.path[7:]  # Remove '/tiles/' prefix
-            full_tile_path = os.path.join(self.tiles_dir, tile_path)
-            if os.path.exists(full_tile_path) and os.path.isfile(full_tile_path):
-                try:
-                    with open(full_tile_path, "rb") as tile_file:
-                        self.send_response(200)
-                        if full_tile_path.endswith(".png"):
-                            self.send_header("Content-type", "image/png")
-                        elif full_tile_path.endswith(".jpg") or full_tile_path.endswith(
-                            ".jpeg"
-                        ):
-                            self.send_header("Content-type", "image/jpeg")
-                        else:
-                            self.send_header("Content-type", "application/octet-stream")
-                        self.send_header("Cache-Control", "public, max-age=86400")
-                        self.end_headers()
-                        self.wfile.write(tile_file.read())
-                except Exception as e:
-                    print(f"Error serving tile {tile_path}: {e}")
-                    self.send_error(500, f"Error serving tile: {e}")
-            else:
-                # Return 404 without verbose logging for missing tiles (expected behavior)
-                self.send_response(404)
-                self.send_header("Content-type", "text/plain")
-                self.end_headers()
-                self.wfile.write(b"Tile not found")
-        else:
-            # Default handler for other requests
-            super().do_GET()
-
-    def generate_html(self):
-        """Generate interactive map HTML with Leaflet.js integration.
-
-        Creates a complete HTML page featuring:
-        - Leaflet.js map with OpenStreetMap base layer
-        - Optional Tessera false-color tile overlay
-        - GeoJSON feature rendering with popups
-        - Opacity slider for tile layer control
-        - Layer switcher for base/overlay selection
-        - Responsive design for various screen sizes
-
-        Returns:
-            str: Complete HTML document as a string
-
-        Note:
-            The generated HTML uses CDN-hosted Leaflet.js libraries
-            and includes all necessary CSS and JavaScript inline.
-        """
-        tessera_meta = (
-            '<meta name="tessera-tiles" content="true">' if self.tiles_dir else ""
-        )
-        tile_bounds_js = (
-            f"var tileBounds = {json.dumps(self.tile_bounds)};"
-            if self.tile_bounds
-            else "var tileBounds = null;"
-        )
-
-        html_template = """<!DOCTYPE html>
-<html>
-<head>
-    <title>GeoTessera Map Viewer</title>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    {tessera_meta}
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <style>
-        body {{ margin: 0; padding: 0; font-family: Arial, sans-serif; }}
-        #map {{ height: 100vh; width: 100vw; }}
-        .info {{
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            background: white;
-            padding: 10px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-            z-index: 1000;
-        }}
-        .legend {{
-            position: absolute;
-            bottom: 20px;
-            left: 10px;
-            background: white;
-            padding: 10px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-            z-index: 1000;
-            max-width: 200px;
-        }}
-        .legend h4 {{ margin: 0 0 10px 0; }}
-        .legend-item {{
-            display: flex;
-            align-items: center;
-            margin: 5px 0;
-        }}
-        .legend-color {{
-            width: 20px;
-            height: 20px;
-            margin-right: 10px;
-            border: 1px solid #ccc;
-        }}
-        .opacity-control {{
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            background: white;
-            padding: 15px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-            z-index: 1000;
-            width: 200px;
-        }}
-        .opacity-control h4 {{
-            margin: 0 0 10px 0;
-            font-size: 14px;
-        }}
-        .opacity-slider {{
-            width: 100%;
-            margin: 10px 0;
-        }}
-        .opacity-value {{
-            text-align: center;
-            font-size: 12px;
-            color: #666;
-        }}
-    </style>
-</head>
-<body>
-    <div class="info">
-        <h3>GeoTessera Map Viewer</h3>
-        <p>Interactive map with tessera false color visualization</p>
-    </div>
+from .country import get_country_lookup, get_country_bbox, get_country_tiles
+from .visualization import (
+    calculate_bbox_from_file,
+    calculate_bbox_from_points,
+    create_rgb_mosaic_from_geotiffs,
+    geotiff_to_web_tiles,
+    create_simple_web_viewer,
+    create_coverage_summary_map,
+    analyze_geotiff_coverage
+)
+
+
+def format_bbox(bbox_coords) -> str:
+    """Format bounding box coordinates for pretty display.
     
-    <div class="legend">
-        <h4>Legend</h4>
-        <div class="legend-item">
-            <div class="legend-color" style="background-color: transparent; border: 2px solid #ff0000;"></div>
-            <span>GeoJSON Outline</span>
-        </div>
-    </div>
-    
-    <div class="opacity-control" id="opacityControl" style="display: none;">
-        <h4>Tessera Layer Opacity</h4>
-        <input type="range" min="0" max="100" value="70" class="opacity-slider" id="opacitySlider">
-        <div class="opacity-value" id="opacityValue">70%</div>
-    </div>
-    
-    <div id="map"></div>
-
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script>
-        // Initialize the map
-        var map = L.map('map').setView([51.505, -0.09], 2);
-
-        // Add OpenStreetMap tile layer
-        var osmLayer = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-            attribution: '© OpenStreetMap contributors'
-        }});
-        
-        // Add custom tessera tiles layer (if available)
-        var tesseraLayer = null;
-        if (window.location.pathname === '/' && document.querySelector('meta[name="tessera-tiles"]')) {{
-            var tileOptions = {{
-                attribution: 'Tessera False Color Visualization',
-                opacity: 0.7,
-                maxNativeZoom: 15,  // Maximum zoom level of actual tiles
-                maxZoom: 20         // Allow zooming beyond native zoom (will scale tiles)
-            }};
-            
-            // Add bounds if available
-            {tile_bounds_js}
-            if (tileBounds) {{
-                tileOptions.bounds = tileBounds;
-            }}
-            
-            tesseraLayer = L.tileLayer('/tiles/{{z}}/{{x}}/{{y}}.png', tileOptions);
-        }}
-        
-        // Create base layers object
-        var baseLayers = {{
-            "OpenStreetMap": osmLayer
-        }};
-        
-        // Create overlay layers object
-        var overlayLayers = {{}};
-        if (tesseraLayer) {{
-            overlayLayers["Tessera Visualization"] = tesseraLayer;
-        }}
-        
-        // Add default layer
-        osmLayer.addTo(map);
-        
-        // Add tessera layer by default if available
-        if (tesseraLayer) {{
-            tesseraLayer.addTo(map);
-            
-            // Show opacity control
-            document.getElementById('opacityControl').style.display = 'block';
-            
-            // Set up opacity slider
-            var opacitySlider = document.getElementById('opacitySlider');
-            var opacityValue = document.getElementById('opacityValue');
-            
-            opacitySlider.addEventListener('input', function(e) {{
-                var opacity = e.target.value / 100;
-                tesseraLayer.setOpacity(opacity);
-                opacityValue.textContent = e.target.value + '%';
-            }});
-        }}
-        
-        // Add layer control if we have tessera tiles
-        if (tesseraLayer) {{
-            L.control.layers(baseLayers, overlayLayers, {{
-                position: 'topright'
-            }}).addTo(map);
-        }}
-
-        // Function to get random color
-        function getRandomColor() {{
-            const colors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#f9ca24', '#6c5ce7', '#a29bfe', '#fd79a8', '#00b894'];
-            return colors[Math.floor(Math.random() * colors.length)];
-        }}
-
-        // Function to style GeoJSON features
-        function style(feature) {{
-            return {{
-                fillColor: 'transparent',
-                weight: 2,
-                opacity: 1,
-                color: '#ff0000',
-                dashArray: '',
-                fillOpacity: 0
-            }};
-        }}
-
-        // Function to handle feature clicks
-        function onEachFeature(feature, layer) {{
-            if (feature.properties) {{
-                let popupContent = '<h4>Feature Properties</h4>';
-                for (let key in feature.properties) {{
-                    popupContent += '<b>' + key + ':</b> ' + feature.properties[key] + '<br>';
-                }}
-                layer.bindPopup(popupContent);
-            }}
-        }}
-
-        // Fetch and display GeoJSON data
-        fetch('/geojson')
-            .then(response => response.json())
-            .then(data => {{
-                const geojsonLayer = L.geoJSON(data, {{
-                    style: style,
-                    onEachFeature: onEachFeature
-                }}).addTo(map);
-                
-                // Fit map to GeoJSON bounds
-                if (geojsonLayer.getBounds().isValid()) {{
-                    map.fitBounds(geojsonLayer.getBounds());
-                }}
-            }})
-            .catch(error => {{
-                console.error('Error loading GeoJSON data:', error);
-                alert('Error loading GeoJSON data. Please check the console for details.');
-            }});
-
-        // Add scale control
-        L.control.scale().addTo(map);
-    </script>
-</body>
-</html>"""
-
-        return html_template.format(
-            tessera_meta=tessera_meta, tile_bounds_js=tile_bounds_js
-        )
-
-
-def generate_static_tessera_tiles(
-    region_path,
-    output_dir,
-    tessera_version="v1",
-    year=2024,
-    bands=[0, 1, 2],
-    registry_dir=None,
-    auto_update=False,
-    manifests_repo_url="https://github.com/ucam-eo/tessera-manifests.git",
-):
-    """Generate web map tiles from Tessera embeddings for a region.
-
-    Creates a pyramid of PNG tiles suitable for web mapping applications
-    by processing Tessera embeddings into false-color visualizations and
-    tiling them using gdal2tiles. Tiles follow the XYZ/Slippy map standard.
-
     Args:
-        region_path: Path to region file defining the area of interest (supports multiple formats)
-        output_dir: Directory to store generated tiles and metadata
-        tessera_version: Dataset version to use (default: "v1")
-        year: Year of embeddings to process (default: 2024)
-        bands: Three channel indices for RGB visualization (default: [0,1,2])
-        registry_dir: Local directory containing registry files (optional)
-        auto_update: Update tessera-manifests repository to latest version
-
+        bbox_coords: Tuple of (min_lon, min_lat, max_lon, max_lat)
+        
     Returns:
-        str or None: Path to tiles directory if successful, None on error
-
-    Process:
-        1. Checks if tiles already exist (skips regeneration)
-        2. Reads region bounds from region file
-        3. Merges Tessera embeddings into single GeoTIFF
-        4. Runs gdal2tiles to create tile pyramid (zoom 1-15)
-        5. Cleans up intermediate files
-
-    Note:
-        Requires GDAL tools to be installed (specifically gdal2tiles.py).
-        Tile generation can be time-consuming for large regions.
+        Compact human-readable string representation of bbox with degree symbols
     """
-    # Check if tiles already exist FIRST
-    tiles_output_dir = os.path.join(output_dir, "tiles")
-    if os.path.exists(tiles_output_dir) and os.path.isdir(tiles_output_dir):
-        # Check if tiles directory has content (at least one .png file)
-        has_tiles = False
-        for root, dirs, files in os.walk(tiles_output_dir):
-            if any(f.endswith(".png") for f in files):
-                has_tiles = True
-                break
+    min_lon, min_lat, max_lon, max_lat = bbox_coords
+    
+    # Format longitude with E/W direction
+    min_lon_str = f"{abs(min_lon):.6f}°{'W' if min_lon < 0 else 'E'}"
+    max_lon_str = f"{abs(max_lon):.6f}°{'W' if max_lon < 0 else 'E'}"
+    
+    # Format latitude with N/S direction  
+    min_lat_str = f"{abs(min_lat):.6f}°{'S' if min_lat < 0 else 'N'}"
+    max_lat_str = f"{abs(max_lat):.6f}°{'S' if max_lat < 0 else 'N'}"
+    
+    return f"[{min_lon_str}, {min_lat_str}] - [{max_lon_str}, {max_lat_str}]"
 
-        if has_tiles:
-            print(f"Tiles already exist in: {tiles_output_dir}")
-            print("Skipping tile generation. Delete the tiles directory to regenerate.")
-            return tiles_output_dir
+app = typer.Typer(
+    name="geotessera",
+    help="GeoTessera: Download satellite embedding tiles as GeoTIFFs",
+    add_completion=False,
+    rich_markup_mode="rich"
+)
 
-    print("Generating static tessera false color visualization tiles...")
-
-    # Initialize tessera
-    tessera = GeoTessera(
-        version=tessera_version,
-        registry_dir=registry_dir,
-        auto_update=auto_update,
-        manifests_repo_url=manifests_repo_url,
-    )
-
-    # Create output directory if it doesn't exist
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Generate tessera visualization TIFF using core library method
-    print("Merging tessera embeddings for region...")
-    temp_tiff = os.path.join(output_dir, "tessera_viz.tiff")
-
-    output_path = tessera.merge_embeddings_for_region_file(
-        region_path=region_path,
-        output_path=temp_tiff,
-        bands=bands,
-        year=year,
-        target_crs="EPSG:4326",
-    )
-
-    if not output_path:
-        print("Failed to generate tessera visualization")
-        return None
-
-    print(f"Generated tessera visualization: {output_path}")
-
-    try:
-        # Convert float32 TIFF to 8-bit for gdal2tiles compatibility
-        print("Converting to 8-bit for tile generation...")
-        temp_vrt = os.path.join(output_dir, "tessera_viz_8bit.vrt")
-
-        # Use gdal_translate to convert to 8-bit with automatic scaling
-        translate_cmd = [
-            "gdal_translate",
-            "-of",
-            "VRT",
-            "-ot",
-            "Byte",
-            "-scale",
-            output_path,
-            temp_vrt,
-        ]
-
-        result = subprocess.run(translate_cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"Error converting to 8-bit: {result.stderr}")
-            return None
-
-        print(f"Created 8-bit VRT: {temp_vrt}")
-
-        # Generate tiles using gdal2tiles with the 8-bit VRT
-        print("Generating tiles with gdal2tiles...")
-
-        cmd = [
-            "gdal2tiles.py",
-            "--zoom=1-15",
-            "--processes=4",
-            "--webviewer=none",
-            "--tiledriver=PNG",
-            "--xyz",  # Generate tiles in XYZ format for Leaflet compatibility
-            temp_vrt,  # Use the 8-bit VRT instead of the original TIFF
-            tiles_output_dir,
-        ]
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"Error running gdal2tiles: {result.stderr}")
-            return None
-
-        print(f"Static tiles generated successfully in: {tiles_output_dir}")
-
-        # Clean up the intermediate files
-        if os.path.exists(temp_tiff):
-            os.remove(temp_tiff)
-            print(f"Cleaned up intermediate TIFF: {temp_tiff}")
-        if os.path.exists(temp_vrt):
-            os.remove(temp_vrt)
-            print(f"Cleaned up intermediate VRT: {temp_vrt}")
-
-        return tiles_output_dir
-
-    except Exception as e:
-        print(f"Error generating static tessera tiles: {e}")
-        return None
+console = Console()
 
 
-def serve_command(args):
-    """Launch interactive web server for Tessera embedding visualization.
+def create_progress_callback(progress: Progress, task_id: TaskID) -> Callable:
+    """Create a progress callback for core library operations."""
+    def progress_callback(current: int, total: int, status: str = None):
+        if status:
+            progress.update(task_id, completed=current, total=total, status=status)
+        else:
+            progress.update(task_id, completed=current, total=total)
+    return progress_callback
 
-    Starts a local HTTP server that serves an interactive map interface
-    combining GeoJSON vector features with Tessera embedding tiles as
-    false-color base layers. Supports real-time opacity adjustment and
-    layer switching.
 
-    Args:
-        args: Parsed command line arguments containing:
-            - geojson: Path to GeoJSON file (required)
-            - port: HTTP server port (default: 8000)
-            - open: Whether to auto-open browser
-            - tiles_output: Directory for tile storage (optional)
-            - bands: Channel indices for visualization
-            - year: Year of embeddings to use
-            - version: Dataset version
-
-    Features:
-        - Automatic tile generation from embeddings
-        - Interactive web map with multiple layers
-        - GeoJSON feature popups with properties
-        - Opacity control for embedding overlay
-        - Persistent or temporary tile storage
-
-    Example:
-        geotessera serve --region city.json --open --bands 30 60 90
-
-    Note:
-        Press Ctrl+C to stop the server. Temporary tiles are
-        automatically cleaned up on exit.
+def create_download_progress_callback(progress: Progress, task_id: TaskID) -> Callable:
+    """Create a progress callback specifically for download operations.
+    
+    This callback handles both high-level tile progress and individual file downloads.
     """
-    if not args.region:
-        print("Error: --region is required for serve command")
-        sys.exit(1)
+    def progress_callback(current: int, total: int, status: str = None):
+        if status:
+            # Update with status message
+            progress.update(task_id, completed=current, total=total, status=status)
+        else:
+            # Simple numeric progress update
+            progress.update(task_id, completed=current, total=total)
+    return progress_callback
 
-    # Load region data using enhanced I/O utility (supports multiple formats)
-    region_path = Path(args.region)
-    if not region_path.exists():
-        print(f"Error: Region file not found: {region_path}")
-        sys.exit(1)
 
-    try:
-        # Load as GeoDataFrame first to validate
-        gdf = load_roi(str(region_path))
-        print(f"Loaded region data from: {region_path} ({len(gdf)} features)")
-
-        # Convert to GeoJSON format for web serving
-        geojson_data = json.loads(gdf.to_json())
-    except Exception as e:
-        print(f"Error loading region file: {e}")
-        print(
-            "Supported formats: GeoJSON, TopoJSON, Shapefile (.shp), GeoPackage (.gpkg)"
-        )
-        sys.exit(1)
-
-    # Generate static tessera tiles (always enabled now)
-    tiles_dir = None
-    temp_tiles_dir = None
-
-    if args.tiles_output:
-        # Use specified output directory
-        tiles_output_base = Path(args.tiles_output)
-        tiles_output_base.mkdir(parents=True, exist_ok=True)
-        print(f"Generating static tiles to: {tiles_output_base}")
-    else:
-        # Use temporary directory
-        temp_tiles_dir = tempfile.mkdtemp(prefix="tessera_static_tiles_")
-        tiles_output_base = Path(temp_tiles_dir)
-        print(f"Generating static tiles to temporary directory: {tiles_output_base}")
-
-    tiles_dir = generate_static_tessera_tiles(
-        str(region_path),
-        str(tiles_output_base),
-        tessera_version=args.dataset_version,
-        year=args.year,
-        bands=args.bands,
-        registry_dir=args.registry_dir,
-        auto_update=args.auto_update,
-        manifests_repo_url=args.manifests_repo_url,
+@app.command()
+def download(
+    output: Annotated[Path, typer.Option(
+        "--output", "-o",
+        help="Output directory"
+    )],
+    bbox: Annotated[Optional[str], typer.Option(
+        "--bbox",
+        help="Bounding box: 'min_lon,min_lat,max_lon,max_lat'"
+    )] = None,
+    region_file: Annotated[Optional[Path], typer.Option(
+        "--region-file",
+        help="GeoJSON/Shapefile to define region",
+        exists=True
+    )] = None,
+    country: Annotated[Optional[str], typer.Option(
+        "--country",
+        help="Country name (e.g., 'United Kingdom', 'UK', 'GB')"
+    )] = None,
+    format: Annotated[str, typer.Option(
+        "--format", "-f",
+        help="Output format: 'tiff' (georeferenced) or 'npy' (raw arrays)"
+    )] = "tiff",
+    year: Annotated[int, typer.Option(
+        "--year",
+        help="Year of embeddings"
+    )] = 2024,
+    bands: Annotated[Optional[str], typer.Option(
+        "--bands",
+        help="Comma-separated band indices (default: all 128)"
+    )] = None,
+    compress: Annotated[str, typer.Option(
+        "--compress",
+        help="Compression method (tiff format only)"
+    )] = "lzw",
+    list_files: Annotated[bool, typer.Option(
+        "--list-files",
+        help="List all created files with details"
+    )] = False,
+    dataset_version: Annotated[str, typer.Option(
+        "--dataset-version",
+        help="Tessera dataset version (e.g., v1, v2)"
+    )] = "v1",
+    cache_dir: Annotated[Optional[Path], typer.Option(
+        "--cache-dir",
+        help="Cache directory"
+    )] = None,
+    registry_dir: Annotated[Optional[Path], typer.Option(
+        "--registry-dir",
+        help="Registry directory"
+    )] = None,
+    verbose: Annotated[bool, typer.Option(
+        "--verbose", "-v",
+        help="Verbose output"
+    )] = False
+):
+    """Download embeddings as numpy arrays or GeoTIFF files.
+    
+    Supports two output formats:
+    - tiff: Georeferenced GeoTIFF files with proper CRS metadata (default)
+    - npy: Raw numpy arrays with accompanying metadata JSON files
+    
+    For GeoTIFF format, each tile preserves the original UTM coordinate system.
+    For numpy format, arrays are saved with metadata including coordinates and shape.
+    """
+    
+    # Initialize GeoTessera
+    gt = GeoTessera(
+        dataset_version=dataset_version,
+        cache_dir=str(cache_dir) if cache_dir else None,
+        registry_dir=str(registry_dir) if registry_dir else None
     )
-
-    if not tiles_dir:
-        print("Warning: Failed to generate tessera tiles, continuing without them")
+    
+    # Parse bounding box
+    if bbox:
+        try:
+            bbox_coords = tuple(map(float, bbox.split(',')))
+            if len(bbox_coords) != 4:
+                rprint("[red]Error: bbox must be 'min_lon,min_lat,max_lon,max_lat'[/red]")
+                raise typer.Exit(1)
+            rprint(f"[green]Using bounding box:[/green] {format_bbox(bbox_coords)}")
+        except ValueError:
+            rprint("[red]Error: Invalid bbox format. Use: 'min_lon,min_lat,max_lon,max_lat'[/red]")
+            raise typer.Exit(1)
+    elif region_file:
+        try:
+            bbox_coords = calculate_bbox_from_file(region_file)
+            rprint(f"[green]Calculated bbox from {region_file}:[/green] {format_bbox(bbox_coords)}")
+        except Exception as e:
+            rprint(f"[red]Error reading region file: {e}[/red]")
+            rprint("Supported formats: GeoJSON, Shapefile, etc.")
+            raise typer.Exit(1)
+    elif country:
+        # Create progress bar for country data download
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("•"),
+            TextColumn("[dim]{task.fields[status]}", justify="left"),
+            TimeRemainingColumn(),
+            console=console
+        ) as progress:
+            
+            country_task = progress.add_task("🌍 Loading country data...", total=100, status="Checking cache...")
+            
+            def country_progress_callback(current: int, total: int, status: str = None):
+                progress.update(country_task, completed=current, total=total, status=status or "Processing...")
+            
+            try:
+                bbox_coords = get_country_bbox(country, progress_callback=country_progress_callback)
+                progress.update(country_task, completed=100, status="Complete")
+                rprint(f"[green]Using country '{country}':[/green] {format_bbox(bbox_coords)}")
+            except ValueError as e:
+                rprint(f"[red]Error: {e}[/red]")
+                rprint("[blue]Use 'geotessera countries list' to see available countries[/blue]")
+                raise typer.Exit(1)
+            except Exception as e:
+                rprint(f"[red]Error fetching country data: {e}[/red]")
+                raise typer.Exit(1)
     else:
-        print("Static tessera tiles ready for serving")
-
-    # Create custom handler with GeoJSON data and tiles
-    def handler_factory(*args, **kwargs):
-        return GeoJSONRequestHandler(
-            *args, geojson_data=geojson_data, tiles_dir=tiles_dir, **kwargs
-        )
-
-    # Start HTTP server
-    port = args.port
+        rprint("[red]Error: Must specify either --bbox, --region-file, or --country[/red]")
+        rprint("Examples:")
+        rprint("  --bbox '-0.2,51.4,0.1,51.6'  # London area")
+        rprint("  --region-file london.geojson  # From GeoJSON file")
+        rprint("  --country 'United Kingdom'    # Country by name")
+        raise typer.Exit(1)
+    
+    # Parse bands
+    bands_list = None
+    if bands:
+        try:
+            bands_list = list(map(int, bands.split(',')))
+            rprint(f"[blue]Exporting {len(bands_list)} selected bands:[/blue] {bands_list}")
+        except ValueError:
+            rprint("[red]Error: bands must be comma-separated integers (0-127)[/red]")
+            rprint("Example: --bands '0,1,2' for first 3 bands")
+            raise typer.Exit(1)
+    else:
+        rprint("[blue]Exporting all 128 bands[/blue]")
+    
+    # Validate format
+    if format not in ['tiff', 'npy']:
+        rprint(f"[red]Error: Invalid format '{format}'. Must be 'tiff' or 'npy'[/red]")
+        raise typer.Exit(1)
+    
+    # Display export info
+    info_table = Table(show_header=False, box=None)
+    info_table.add_row("Format:", format.upper())
+    info_table.add_row("Year:", str(year))
+    info_table.add_row("Output directory:", str(output))
+    if format == 'tiff':
+        info_table.add_row("Compression:", compress)
+    info_table.add_row("Dataset version:", dataset_version)
+    
+    rprint(Panel(info_table, title="[bold]Region of Interest Download[/bold]", border_style="blue"))
+    
     try:
-        with socketserver.TCPServer(("", port), handler_factory) as httpd:
-            print(f"Server started at http://localhost:{port}")
-            if tiles_dir:
-                print(f"Serving tessera tiles from: {tiles_dir}")
-            print("Press Ctrl+C to stop the server")
-
-            # Open browser if requested
-            if args.open:
-                webbrowser.open(f"http://localhost:{port}")
-
-            httpd.serve_forever()
-    except KeyboardInterrupt:
-        print("\nServer stopped.")
+        # Export tiles with progress tracking
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("•"),
+            TextColumn("[dim]{task.fields[status]}", justify="left"),
+            TimeRemainingColumn(),
+            console=console
+        ) as progress:
+            
+            task = progress.add_task("🔄 Processing tiles...", total=100, status="Starting...")
+            
+            if format == 'tiff':
+                # Export as GeoTIFF files
+                files = gt.export_embedding_geotiffs(
+                    bbox=bbox_coords,
+                    output_dir=output,
+                    year=year,
+                    bands=bands_list,
+                    compress=compress,
+                    progress_callback=create_download_progress_callback(progress, task)
+                )
+                
+                if not files:
+                    rprint("[yellow]⚠️  No tiles found in the specified region.[/yellow]")
+                    rprint("Try expanding your bounding box or checking data availability.")
+                    return
+                
+                rprint(f"\n[green]✅ SUCCESS: Exported {len(files)} GeoTIFF files[/green]")
+                rprint("   Each file preserves its native UTM projection from landmask tiles")
+                rprint("   Files can be individually inspected and processed")
+                
+            else:  # format == 'npy'
+                # Export as numpy arrays
+                # Fetch embeddings as numpy arrays
+                embeddings = gt.fetch_embeddings(
+                    bbox=bbox_coords,
+                    year=year,
+                    progress_callback=create_download_progress_callback(progress, task)
+                )
+                
+                if not embeddings:
+                    rprint("[yellow]⚠️  No tiles found in the specified region.[/yellow]")
+                    rprint("Try expanding your bounding box or checking data availability.")
+                    return
+                
+                # Create output directory
+                output.mkdir(parents=True, exist_ok=True)
+                
+                files = []
+                metadata = {"tiles": [], "year": year, "bbox": bbox_coords}
+                
+                for tile_lat, tile_lon, embedding_array in embeddings:
+                    # Apply band selection if specified
+                    if bands_list:
+                        embedding_array = embedding_array[:, :, bands_list]
+                    
+                    # Save numpy array
+                    filename = f"embedding_{tile_lat:.2f}_{tile_lon:.2f}.npy"
+                    filepath = output / filename
+                    np.save(filepath, embedding_array)
+                    files.append(str(filepath))
+                    
+                    # Add to metadata
+                    metadata["tiles"].append({
+                        "lat": tile_lat,
+                        "lon": tile_lon,
+                        "filename": filename,
+                        "shape": embedding_array.shape,
+                        "bands": bands_list if bands_list else list(range(128))
+                    })
+                
+                # Save metadata
+                metadata_path = output / "metadata.json"
+                with open(metadata_path, 'w') as f:
+                    json.dump(metadata, f, indent=2)
+                files.append(str(metadata_path))
+                
+                rprint(f"\n[green]✅ SUCCESS: Exported {len(embeddings)} numpy arrays[/green]")
+                rprint(f"   Metadata saved to: metadata.json")
+                rprint(f"   Arrays contain {'selected bands' if bands_list else 'all 128 bands'}")
+        
+        if verbose or list_files:
+            rprint(f"\n[blue]📁 Created files:[/blue]")
+            file_table = Table(show_header=True, header_style="bold blue")
+            file_table.add_column("#", style="dim", width=3)
+            file_table.add_column("Filename")
+            file_table.add_column("Size", justify="right")
+            
+            for i, f in enumerate(files, 1):
+                file_path = Path(f)
+                file_size = file_path.stat().st_size if file_path.exists() else 0
+                file_table.add_row(str(i), file_path.name, f"{file_size:,} bytes")
+            
+            console.print(file_table)
+        elif len(files) > 0:
+            rprint(f"\n[blue]📁 Sample files (use --verbose or --list-files to see all):[/blue]")
+            for f in files[:3]:
+                file_path = Path(f)
+                file_size = file_path.stat().st_size if file_path.exists() else 0
+                rprint(f"     {file_path.name} ({file_size:,} bytes)")
+            if len(files) > 3:
+                rprint(f"     ... and {len(files) - 3} more files")
+        
+        # Show spatial information
+        rprint(f"\n[blue]🗺️  Spatial Information:[/blue]")
+        if verbose:
+            try:
+                import rasterio
+                with rasterio.open(files[0]) as src:
+                    rprint(f"   CRS: {src.crs}")
+                    rprint(f"   Transform: {src.transform}")
+                    rprint(f"   Dimensions: {src.width} x {src.height} pixels")
+                    rprint(f"   Data type: {src.dtypes[0]}")
+            except Exception:
+                pass
+        
+        rprint(f"   Output directory: {Path(output).resolve()}")
+        
+        tips_table = Table(show_header=False, box=None)
+        tips_table.add_row("• Inspect individual tiles with QGIS, GDAL, or rasterio")
+        tips_table.add_row("• Use 'gdalinfo <filename>' to see projection details")
+        tips_table.add_row("• Process tiles individually or in groups as needed")
+        
+        rprint(Panel(tips_table, title="[bold]💡 Next steps[/bold]", border_style="green"))
+                
     except Exception as e:
-        print(f"Error starting server: {e}")
-        sys.exit(1)
-    finally:
-        # Clean up temporary tiles directory only if we created one
-        if temp_tiles_dir and os.path.exists(temp_tiles_dir):
-            print(f"Cleaning up temporary tiles directory: {temp_tiles_dir}")
-            shutil.rmtree(temp_tiles_dir)
-            print("Temporary tiles directory cleaned up")
+        rprint(f"\n[red]❌ Error: {e}[/red]")
+        if verbose:
+            import traceback
+            rprint("\n[dim]Full traceback:[/dim]")
+            console.print_exception()
+        raise typer.Exit(1)
+
+
+@app.command()
+def visualize(
+    input_path: Annotated[Path, typer.Argument(
+        help="Input GeoTIFF file or directory"
+    )],
+    output: Annotated[Path, typer.Option(
+        "--output", "-o",
+        help="Output directory"
+    )],
+    vis_type: Annotated[str, typer.Option(
+        "--type",
+        help="Visualization type"
+    )] = "rgb",
+    bands: Annotated[Optional[str], typer.Option(
+        "--bands",
+        help="Comma-separated band indices"
+    )] = None,
+    normalize: Annotated[bool, typer.Option(
+        "--normalize",
+        help="Normalize bands"
+    )] = False,
+    min_zoom: Annotated[int, typer.Option(
+        "--min-zoom",
+        help="Min zoom for web tiles"
+    )] = 8,
+    max_zoom: Annotated[int, typer.Option(
+        "--max-zoom",
+        help="Max zoom for web tiles"
+    )] = 15,
+    initial_zoom: Annotated[int, typer.Option(
+        "--initial-zoom",
+        help="Initial zoom level"
+    )] = 10,
+    force_regenerate: Annotated[bool, typer.Option(
+        "--force/--no-force",
+        help="Force regeneration of tiles even if they exist"
+    )] = False
+):
+    """Create visualizations from GeoTIFF files."""
+    
+    # Validate visualization type
+    if vis_type not in ['rgb', 'web', 'coverage']:
+        rprint(f"[red]Error: Invalid visualization type '{vis_type}'. Must be one of: rgb, web, coverage[/red]")
+        raise typer.Exit(1)
+    
+    # Find GeoTIFF files
+    if input_path.is_file():
+        geotiff_paths = [str(input_path)]
+    else:
+        geotiff_paths = list(map(str, input_path.glob("*.tif")))
+        geotiff_paths.extend(map(str, input_path.glob("*.tiff")))
+    
+    if not geotiff_paths:
+        rprint(f"[red]No GeoTIFF files found in {input_path}[/red]")
+        raise typer.Exit(1)
+        
+    rprint(f"[blue]Found {len(geotiff_paths)} GeoTIFF files[/blue]")
+    
+    output.mkdir(parents=True, exist_ok=True)
+    
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TextColumn("•"),
+        TextColumn("[dim]{task.fields[status]}", justify="left"),
+        TimeRemainingColumn(),
+        console=console
+    ) as progress:
+        
+        if vis_type == 'rgb':
+            # Create RGB mosaic
+            bands_list = [0, 1, 2]  # Default RGB bands
+            if bands:
+                bands_list = list(map(int, bands.split(',')))
+                if len(bands_list) != 3:
+                    rprint("[red]Error: RGB visualization requires exactly 3 bands[/red]")
+                    raise typer.Exit(1)
+                    
+            output_path = output / "rgb_mosaic.tif"
+            
+            task = progress.add_task("Creating RGB mosaic...", total=100, status="Starting...")
+            
+            try:
+                created_file = create_rgb_mosaic_from_geotiffs(
+                    geotiff_paths=geotiff_paths,
+                    output_path=str(output_path),
+                    bands=tuple(bands_list),
+                    normalize=normalize,
+                    progress_callback=create_download_progress_callback(progress, task)
+                )
+                rprint(f"[green]Created RGB mosaic: {created_file}[/green]")
+                
+            except Exception as e:
+                rprint(f"[red]Error creating RGB mosaic: {e}[/red]")
+                raise typer.Exit(1)
+                
+        elif vis_type == 'web':
+            # Create web tiles
+            if len(geotiff_paths) > 1:
+                # First create RGB mosaic
+                mosaic_path = output / "temp_mosaic.tif"
+                bands_list = [0, 1, 2]
+                if bands:
+                    bands_list = list(map(int, bands.split(',')))[:3]
+                    
+                task1 = progress.add_task("Creating mosaic for web tiles...", total=50, status="Starting...")
+                
+                try:
+                    # Create wrapper callback for the first phase (0-50%)
+                    def mosaic_progress_callback(current: int, total: int, status: str = None):
+                        overall_progress = int((current / total) * 50)
+                        create_progress_callback(progress, task1)(overall_progress, 50, status)
+                    
+                    create_rgb_mosaic_from_geotiffs(
+                        geotiff_paths=geotiff_paths,
+                        output_path=str(mosaic_path),
+                        bands=tuple(bands_list),
+                        normalize=normalize,
+                        progress_callback=mosaic_progress_callback
+                    )
+                    progress.update(task1, completed=50)
+                    source_file = str(mosaic_path)
+                    
+                except Exception as e:
+                    rprint(f"[red]Error creating mosaic for web tiles: {e}[/red]")
+                    raise typer.Exit(1)
+            else:
+                source_file = geotiff_paths[0]
+                
+            # Generate web tiles
+            tiles_dir = output / "tiles"
+            
+            # Check if tiles already exist and we're not forcing regeneration
+            if not force_regenerate and tiles_dir.exists() and any(tiles_dir.iterdir()):
+                task2 = progress.add_task("Using existing web tiles...", total=100, status="Found existing tiles")
+                progress.update(task2, completed=80)
+                rprint(f"[green]Found existing tiles in: {tiles_dir}[/green]")
+                rprint("[blue]Skipping tile generation (use --force to regenerate)[/blue]")
+            else:
+                if force_regenerate and tiles_dir.exists():
+                    import shutil
+                    rprint(f"[yellow]Removing existing tiles directory: {tiles_dir}[/yellow]")
+                    shutil.rmtree(tiles_dir)
+                task2 = progress.add_task("Generating web tiles...", total=100, status="Starting...")
+                
+                try:
+                    geotiff_to_web_tiles(
+                        geotiff_path=source_file,
+                        output_dir=str(tiles_dir),
+                        zoom_levels=(min_zoom, max_zoom)
+                    )
+                    progress.update(task2, completed=80)
+                except Exception as e:
+                    rprint(f"[red]Error generating web tiles: {e}[/red]")
+                    raise typer.Exit(1)
+            
+            # Create HTML viewer (always run this part)
+            html_path = output / "viewer.html"
+            
+            # Calculate center from coverage
+            coverage = analyze_geotiff_coverage(geotiff_paths)
+            bounds = coverage["bounds"]
+            center_lat = (bounds["min_lat"] + bounds["max_lat"]) / 2
+            center_lon = (bounds["min_lon"] + bounds["max_lon"]) / 2
+            
+            create_simple_web_viewer(
+                tiles_dir=str(tiles_dir),
+                output_html=str(html_path),
+                center_lat=center_lat,
+                center_lon=center_lon,
+                zoom=initial_zoom,
+                title=f"GeoTessera - {input_path}"
+            )
+            
+            progress.update(task2, completed=100)
+            
+            rprint(f"[green]Created web tiles in: {tiles_dir}[/green]")
+            rprint(f"[green]Created viewer: {html_path}[/green]")
+            rprint(f"[blue]To view the map, start a web server:[/blue]")
+            rprint(f"[cyan]  geotessera serve {output}[/cyan]")
+                
+        elif vis_type == 'coverage':
+            # Create coverage map
+            html_path = output / "coverage.html"
+            
+            task = progress.add_task("Creating coverage map...", total=100, status="Starting...")
+            
+            try:
+                create_coverage_summary_map(
+                    geotiff_paths=geotiff_paths,
+                    output_html=str(html_path),
+                    title=f"Coverage Map - {input_path}"
+                )
+                
+                progress.update(task, completed=100)
+                
+                rprint(f"[green]Created coverage map: {html_path}[/green]")
+                rprint(f"[blue]To view the map, start a web server:[/blue]")
+                rprint(f"[cyan]  geotessera serve {output}[/cyan]")
+                
+            except Exception as e:
+                rprint(f"[red]Error creating coverage map: {e}[/red]")
+                raise typer.Exit(1)
+
+
+@app.command()
+def serve(
+    directory: Annotated[Path, typer.Argument(help="Directory containing web visualization files")],
+    port: Annotated[int, typer.Option(
+        "--port", "-p",
+        help="Port number for web server"
+    )] = 8000,
+    open_browser: Annotated[bool, typer.Option(
+        "--open/--no-open",
+        help="Automatically open browser"
+    )] = True,
+    html_file: Annotated[Optional[str], typer.Option(
+        "--html",
+        help="Specific HTML file to serve (relative to directory)"
+    )] = None
+):
+    """Start a web server to serve visualization files.
+    
+    This is needed for leaflet-based web visualizations to work properly
+    since they require HTTP access to load tiles and other resources.
+    """
+    if not directory.exists():
+        rprint(f"[red]Error: Directory {directory} does not exist[/red]")
+        raise typer.Exit(1)
+        
+    if not directory.is_dir():
+        rprint(f"[red]Error: {directory} is not a directory[/red]")
+        raise typer.Exit(1)
+    
+    # Change to the directory to serve
+    original_dir = Path.cwd()
+    
+    class QuietHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, format, *args):
+            # Only log errors, not every request
+            if args[1] != '200':
+                super().log_message(format, *args)
+    
+    try:
+        # Find available port
+        while True:
+            try:
+                with socketserver.TCPServer(("", port), QuietHTTPRequestHandler) as httpd:
+                    break
+            except OSError:
+                port += 1
+                if port > 9000:
+                    rprint("[red]Error: Could not find available port[/red]")
+                    raise typer.Exit(1)
+        
+        rprint(f"[green]Starting web server on port {port}[/green]")
+        rprint(f"[blue]Serving directory: {directory.absolute()}[/blue]")
+        
+        # Debug: Show directory contents
+        try:
+            contents = list(directory.iterdir())
+            rprint(f"[yellow]Directory contains: {[p.name for p in contents[:10]]}{'...' if len(contents) > 10 else ''}[/yellow]")
+        except Exception as e:
+            rprint(f"[yellow]Could not list directory contents: {e}[/yellow]")
+        
+        # Determine what to open in browser
+        if html_file:
+            html_path = directory / html_file
+            if not html_path.exists():
+                rprint(f"[yellow]Warning: HTML file {html_file} not found[/yellow]")
+                browser_url = f"http://localhost:{port}/"
+            else:
+                browser_url = f"http://localhost:{port}/{html_file}"
+        else:
+            # Look for common HTML files
+            common_names = ["index.html", "viewer.html", "map.html", "coverage.html"]
+            found_html = None
+            for name in common_names:
+                if (directory / name).exists():
+                    found_html = name
+                    break
+            
+            if found_html:
+                browser_url = f"http://localhost:{port}/{found_html}"
+                rprint(f"[blue]Found HTML file: {found_html}[/blue]")
+            else:
+                browser_url = f"http://localhost:{port}/"
+        
+        # Start server in background thread
+        def start_server():
+            import os
+            os.chdir(directory)
+            try:
+                with socketserver.TCPServer(("", port), QuietHTTPRequestHandler) as httpd:
+                    httpd.serve_forever()
+            except KeyboardInterrupt:
+                pass
+            finally:
+                os.chdir(original_dir)
+        
+        server_thread = threading.Thread(target=start_server, daemon=True)
+        server_thread.start()
+        
+        # Give server a moment to start
+        time.sleep(0.5)
+        
+        rprint(f"[green]✅ Web server running at: http://localhost:{port}/[/green]")
+        
+        if open_browser:
+            rprint(f"[blue]Opening browser: {browser_url}[/blue]")
+            webbrowser.open(browser_url)
+        else:
+            rprint(f"[blue]Open in browser: {browser_url}[/blue]")
+        
+        rprint("\n[yellow]Press Ctrl+C to stop the server[/yellow]")
+        
+        try:
+            # Keep main thread alive
+            while server_thread.is_alive():
+                time.sleep(1)
+        except KeyboardInterrupt:
+            rprint("\n[green]Stopping web server...[/green]")
+            raise typer.Exit(0)
+            
+    except Exception as e:
+        rprint(f"[red]Error starting web server: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def info(
+    geotiffs: Annotated[Optional[Path], typer.Option(
+        "--geotiffs",
+        help="Analyze GeoTIFF files/directory"
+    )] = None,
+    dataset_version: Annotated[str, typer.Option(
+        "--dataset-version",
+        help="Tessera dataset version (e.g., v1, v2)"
+    )] = "v1",
+    verbose: Annotated[bool, typer.Option(
+        "--verbose", "-v",
+        help="Verbose output"
+    )] = False
+):
+    """Show information about GeoTIFF files or library."""
+    
+    if geotiffs:
+        # Analyze GeoTIFF files
+        if geotiffs.is_file():
+            geotiff_paths = [str(geotiffs)]
+        else:
+            geotiff_paths = list(map(str, geotiffs.glob("*.tif")))
+            geotiff_paths.extend(map(str, geotiffs.glob("*.tiff")))
+            
+        if not geotiff_paths:
+            rprint(f"[red]No GeoTIFF files found in {geotiffs}[/red]")
+            raise typer.Exit(1)
+            
+        coverage = analyze_geotiff_coverage(geotiff_paths)
+        
+        # Create analysis table
+        analysis_table = Table(show_header=False, box=None)
+        analysis_table.add_row("Total files:", str(coverage['total_files']))
+        analysis_table.add_row("Years:", ', '.join(coverage['years']))
+        analysis_table.add_row("CRS:", ', '.join(coverage['crs']))
+        
+        rprint(Panel(analysis_table, title="[bold]📊 GeoTIFF Analysis[/bold]", border_style="blue"))
+        
+        bounds = coverage['bounds']
+        
+        bounds_table = Table(show_header=False, box=None)
+        bounds_table.add_row("Longitude:", f"{bounds['min_lon']:.6f} to {bounds['max_lon']:.6f}")
+        bounds_table.add_row("Latitude:", f"{bounds['min_lat']:.6f} to {bounds['max_lat']:.6f}")
+        
+        rprint(Panel(bounds_table, title="[bold]🗺️ Bounding Box[/bold]", border_style="green"))
+        
+        bands_table = Table(show_header=True, header_style="bold blue")
+        bands_table.add_column("Band Count")
+        bands_table.add_column("Files", justify="right")
+        
+        for bands_count, count in coverage['band_counts'].items():
+            bands_table.add_row(f"{bands_count} bands", str(count))
+            
+        rprint(Panel(bands_table, title="[bold]🎵 Band Information[/bold]", border_style="cyan"))
+            
+        if verbose:
+            tiles_table = Table(show_header=True, header_style="bold blue")
+            tiles_table.add_column("Filename")
+            tiles_table.add_column("Coordinates")
+            tiles_table.add_column("Bands", justify="right")
+            
+            for tile in coverage['tiles'][:10]:
+                tiles_table.add_row(
+                    Path(tile['path']).name,
+                    f"({tile['tile_lat']}, {tile['tile_lon']})",
+                    str(tile['bands'])
+                )
+                
+            rprint(Panel(tiles_table, title="[bold]📁 First 10 Tiles[/bold]", border_style="yellow"))
+                
+    else:
+        # Show library info
+        gt = GeoTessera(dataset_version=dataset_version)
+        years = gt.get_available_years()
+        
+        info_table = Table(show_header=False, box=None)
+        info_table.add_row("Version:", gt.version)
+        info_table.add_row("Available years:", ', '.join(map(str, years)))
+        info_table.add_row("Registry loaded blocks:", str(len(gt.registry.loaded_blocks)))
+        
+        rprint(Panel(info_table, title="[bold]🌍 GeoTessera Library Info[/bold]", border_style="blue"))
+
+
+@app.command()
+def coverage(
+    output: Annotated[Path, typer.Option(
+        "--output", "-o",
+        help="Output PNG file path"
+    )] = Path("tessera_coverage.png"),
+    year: Annotated[Optional[int], typer.Option(
+        "--year",
+        help="Specific year to visualize (e.g., 2024). If not specified, shows all years."
+    )] = None,
+    tile_color: Annotated[str, typer.Option(
+        "--tile-color",
+        help="Color for tile rectangles"
+    )] = "red",
+    tile_alpha: Annotated[float, typer.Option(
+        "--tile-alpha",
+        help="Transparency of tiles (0.0-1.0)"
+    )] = 0.6,
+    tile_size: Annotated[float, typer.Option(
+        "--tile-size",
+        help="Size multiplier for tiles (1.0 = actual size)"
+    )] = 1.0,
+    dpi: Annotated[int, typer.Option(
+        "--dpi",
+        help="Output resolution in dots per inch"
+    )] = 100,
+    width: Annotated[int, typer.Option(
+        "--width",
+        help="Figure width in inches"
+    )] = 20,
+    height: Annotated[int, typer.Option(
+        "--height",
+        help="Figure height in inches"
+    )] = 10,
+    no_countries: Annotated[bool, typer.Option(
+        "--no-countries",
+        help="Don't show country boundaries"
+    )] = False,
+    dataset_version: Annotated[str, typer.Option(
+        "--dataset-version",
+        help="Tessera dataset version"
+    )] = "v1",
+    cache_dir: Annotated[Optional[Path], typer.Option(
+        "--cache-dir",
+        help="Cache directory"
+    )] = None,
+    registry_dir: Annotated[Optional[Path], typer.Option(
+        "--registry-dir",
+        help="Registry directory"
+    )] = None,
+    verbose: Annotated[bool, typer.Option(
+        "--verbose", "-v",
+        help="Verbose output"
+    )] = False
+):
+    """Generate a world map showing Tessera embedding coverage.
+    
+    Creates a PNG visualization with available tiles overlaid on a world map,
+    helping users understand data availability for their regions of interest.
+    
+    Examples:
+        # Show all available tiles across all years
+        geotessera coverage
+        
+        # Show tiles for a specific year
+        geotessera coverage --year 2024
+        
+        # Customize visualization
+        geotessera coverage --tile-color blue --tile-alpha 0.3 --dpi 150
+    """
+    from .visualization import visualize_global_coverage
+    
+    # Initialize GeoTessera
+    if verbose:
+        rprint("[blue]Initializing GeoTessera...[/blue]")
+    
+    gt = GeoTessera(
+        dataset_version=dataset_version,
+        cache_dir=str(cache_dir) if cache_dir else None,
+        registry_dir=str(registry_dir) if registry_dir else None
+    )
+    
+    # Generate coverage map
+    try:
+        from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
+        
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("•"),
+            TextColumn("[dim]{task.fields[status]}", justify="left"),
+            TimeRemainingColumn(),
+            console=console
+        ) as progress:
+            
+            task = progress.add_task("🔄 Generating coverage map...", total=100, status="Starting...")
+            
+            if verbose:
+                rprint(f"[blue]Generating coverage map for year: {year if year else 'All years'}[/blue]")
+            
+            output_path = visualize_global_coverage(
+                tessera_client=gt,
+                output_path=str(output),
+                year=year,
+                figsize=(width, height),
+                dpi=dpi,
+                show_countries=not no_countries,
+                tile_color=tile_color,
+                tile_alpha=tile_alpha,
+                tile_size=tile_size,
+                progress_callback=create_progress_callback(progress, task)
+            )
+        
+        rprint(f"[green]✅ Coverage map saved to: {output_path}[/green]")
+        
+        # Show summary statistics
+        available_embeddings = gt.registry.get_available_embeddings()
+        if available_embeddings:
+            if year:
+                tile_count = len([(y, lat, lon) for y, lat, lon in available_embeddings if y == year])
+                rprint(f"[cyan]📊 Tiles shown: {tile_count:,} (year {year})[/cyan]")
+            else:
+                unique_tiles = len(set((lat, lon) for _, lat, lon in available_embeddings))
+                years = sorted(set(y for y, _, _ in available_embeddings))
+                rprint(f"[cyan]📊 Unique tile locations: {unique_tiles:,}[/cyan]")
+                if years:
+                    rprint(f"[cyan]📅 Years covered: {min(years)}-{max(years)}[/cyan]")
+        
+    except ImportError as e:
+        rprint(f"[red]Error: Missing required dependencies[/red]")
+        rprint(f"[yellow]Please install: pip install matplotlib geodatasets[/yellow]")
+        raise typer.Exit(1)
+    except Exception as e:
+        rprint(f"[red]Error generating coverage map: {e}[/red]")
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        raise typer.Exit(1)
 
 
 def main():
-    """Main entry point for the GeoTessera command-line interface.
-
-    Parses command line arguments and routes to appropriate subcommands.
-    Provides comprehensive help text with examples and usage instructions.
-
-    Available commands:
-        - list-embeddings: Browse available embedding tiles
-        - info: Display dataset information
-        - map: Generate coverage map visualization
-        - visualize: Create GeoTIFF from embeddings
-        - serve: Launch interactive web interface
-
-    For checksum management, use: geotessera-registry hash
-
-    Each command has its own help accessible via:
-        geotessera <command> --help
-    """
-    parser = argparse.ArgumentParser(
-        description="GeoTessera - Access geospatial embeddings and create land masks for alignment",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # List available embeddings
-  geotessera list-embeddings --limit 10
-  
-  # Get information about the dataset
-  geotessera info
-  
-  # Generate a world map showing all available embedding grid points
-  geotessera map --output coverage_map.png
-  
-  # Create full 128-band GeoTIFF (default behavior)
-  geotessera visualize --region region.geojson --output full_128band.tif
-  
-  # Create GeoTIFF with specific bands
-  geotessera visualize --region boundary.shp --output subset.tif --bands 0 1 2
-  geotessera visualize --region study_area.gpkg --output selected_bands.tif --bands 10 20 30
-  
-  # Start HTTP server with Leaflet.js to display region overlay with tessera false color tiles
-  geotessera serve --region example/CB.geojson --port 8000 --open
-  geotessera serve --region boundary.shp --port 8080 --bands 25 50 75 --open
-  
-  # Serve with custom band selection for tessera visualization
-  geotessera serve --region example/CB.geojson --bands 0 1 2 --year 2024 --open
-  
-  # Generate static tiles to a specific directory and serve them
-  geotessera serve --region example/CB.geojson --tiles-output ./static_tiles --open
-  
-  # Generate SHA256 checksums (use geotessera-registry instead)
-  geotessera-registry hash /path/to/data
-
-Valid Target CRS Values:
-  EPSG:4326     - WGS84 Geographic (lat/lon) - good for global/large areas
-  EPSG:326XX    - UTM Northern Hemisphere (XX = zone 01-60, e.g., EPSG:32630)
-  EPSG:327XX    - UTM Southern Hemisphere (XX = zone 01-60, e.g., EPSG:32730)  
-  EPSG:3995     - Arctic Polar Stereographic (for areas north of 70°N)
-  EPSG:3031     - Antarctic Polar Stereographic (for areas south of 70°S)
-
-Note: The 'visualize' command creates GeoTIFFs from embeddings. Default behavior exports 
-      all 128 bands. Use --bands to export only selected channels. All outputs are float32.
-        """,
-    )
-
-    parser.add_argument(
-        "--version", action="version", version=f"geotessera {__version__}"
-    )
-    parser.add_argument(
-        "--dataset-version", default="v1", help="Dataset version (default: v1)"
-    )
-    parser.add_argument(
-        "--registry-dir",
-        type=str,
-        help="Local directory containing registry files (if not specified, uses TESSERA_REGISTRY_DIR env var or auto-clones tessera-manifests)",
-    )
-    parser.add_argument(
-        "--auto-update",
-        action="store_true",
-        help="Update tessera-manifests repository to latest version before use",
-    )
-    parser.add_argument(
-        "--manifests-repo-url",
-        default="https://github.com/ucam-eo/tessera-manifests.git",
-        help="Git repository URL for tessera-manifests (default: official repository)",
-    )
-
-    subparsers = parser.add_subparsers(dest="command", help="Available commands")
-
-    # List embeddings command
-    list_parser = subparsers.add_parser(
-        "list-embeddings", help="List available embeddings"
-    )
-    list_parser.add_argument("--limit", type=int, help="Limit number of results shown")
-    list_parser.set_defaults(func=list_embeddings_command)
-
-    # Info command
-    info_parser = subparsers.add_parser(
-        "info", help="Show comprehensive dataset information"
-    )
-    info_parser.set_defaults(func=info_command)
-
-    # Map command
-    map_parser = subparsers.add_parser(
-        "map", help="Generate a world map showing all available embedding grid points"
-    )
-    map_parser.add_argument(
-        "--output",
-        type=str,
-        default="embedding_coverage_map.png",
-        help="Output map file path (default: embedding_coverage_map.png)",
-    )
-    map_parser.set_defaults(func=map_command)
-
-    # Visualize command (embedding visualization)
-    viz_parser = subparsers.add_parser(
-        "visualize",
-        help="Create GeoTIFF from embeddings - full 128-band or selected bands (float32)",
-    )
-    viz_parser.add_argument(
-        "--region",
-        type=str,
-        required=True,
-        help="Region file to visualize (GeoJSON, TopoJSON, Shapefile, GeoPackage)",
-    )
-    viz_parser.add_argument(
-        "--output",
-        type=str,
-        default="region_visualization.tiff",
-        help="Output visualization file path",
-    )
-    viz_parser.add_argument(
-        "--target-crs",
-        type=str,
-        default="EPSG:4326",
-        help="Target CRS (default: EPSG:4326). See help for valid values.",
-    )
-    viz_parser.add_argument(
-        "--bands",
-        type=int,
-        nargs="+",
-        help="Band indices to include in output. If not specified, exports all 128 bands. For specific band selection, e.g., --bands 0 1 2",
-    )
-    viz_parser.add_argument(
-        "--year",
-        type=int,
-        default=2024,
-        help="Year of embeddings to visualize (default: 2024)",
-    )
-    viz_parser.set_defaults(func=visualize_command)
-
-    # Serve command (HTTP server with Leaflet.js)
-    serve_parser = subparsers.add_parser(
-        "serve",
-        help="Start HTTP server with Leaflet.js to display region overlay with tessera false color tiles",
-    )
-    serve_parser.add_argument(
-        "--region",
-        type=str,
-        required=True,
-        help="Region file to display (GeoJSON, TopoJSON, Shapefile, GeoPackage)",
-    )
-    serve_parser.add_argument(
-        "--port", type=int, default=8000, help="Port for HTTP server (default: 8000)"
-    )
-    serve_parser.add_argument(
-        "--open", action="store_true", help="Open browser automatically"
-    )
-    serve_parser.add_argument(
-        "--tiles-output",
-        type=str,
-        help="Directory to save generated tiles (default: temporary directory)",
-    )
-    serve_parser.add_argument(
-        "--bands",
-        type=int,
-        nargs="+",
-        default=[0, 1, 2],
-        help="Band indices for tessera visualization. Default is RGB visualization with bands 0, 1, 2",
-    )
-    serve_parser.add_argument(
-        "--year",
-        type=int,
-        default=2024,
-        help="Year of embeddings for tessera visualization (default: 2024)",
-    )
-    serve_parser.set_defaults(func=serve_command)
-
-    args = parser.parse_args()
-
-    if not args.command:
-        parser.print_help()
-        sys.exit(1)
-
-    # Execute the command
-    args.func(args)
+    """Main CLI entry point."""
+    app()
 
 
 if __name__ == "__main__":

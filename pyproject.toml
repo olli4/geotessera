@@ -29,6 +29,8 @@ dependencies = [
     "rasterio",
     "sphinx>=8.2.3",
     "rich",
+    "typer",
+    "geodatasets>=2024.8.0",
 ]
 
 [project.urls]
@@ -51,5 +53,6 @@ include = ["geotessera*"]
 
 [dependency-groups]
 dev = [
+    "pytest>=8.4.1",
     "ruff>=0.12.8",
 ]
