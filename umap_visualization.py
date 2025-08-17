@@ -108,7 +108,7 @@ def apply_umap_projection(data: np.ndarray, n_components: int = 3, random_state:
         min_dist=0.1,
         metric='euclidean',
         verbose=True,
-        n_epochs=100
+        n_epochs=500
     )
     
     embedding = reducer.fit_transform(data_scaled)
