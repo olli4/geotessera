@@ -242,6 +242,9 @@ def geotiff_to_web_tiles(
 ) -> str:
     """Convert GeoTIFF to web tiles for interactive display.
     
+    Uses the faster 'gdal raster tile' command if available, falling back
+    to the traditional gdal2tiles.py for compatibility.
+    
     Args:
         geotiff_path: Path to input GeoTIFF
         output_dir: Directory for web tiles output
@@ -260,7 +263,58 @@ def geotiff_to_web_tiles(
     
     min_zoom, max_zoom = zoom_levels
     
-    # Run gdal2tiles
+    # Check if the modern gdal binary with 'raster tile' is available
+    def _has_gdal_raster_tile() -> bool:
+        """Check if 'gdal raster tile' command is available."""
+        try:
+            result = subprocess.run(['gdal', 'raster', 'tile', '--help'], 
+                                  capture_output=True, text=True, timeout=10)
+            return result.returncode == 0
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+            return False
+    
+    # Try the faster gdal raster tile first
+    if _has_gdal_raster_tile():
+        cmd = [
+            'gdal', 'raster', 'tile',
+            '--min-zoom', str(min_zoom),
+            '--max-zoom', str(max_zoom),
+            '--tiling-scheme', 'WebMercatorQuad',
+            '--resampling', 'bilinear',
+            '--webviewer', 'leaflet',
+            '--num-threads', 'ALL_CPUS',
+            geotiff_path,
+            str(output_dir)
+        ]
+        
+        try:
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            return str(output_dir)
+        except subprocess.CalledProcessError as e:
+            # Log the error details for debugging
+            print(f"gdal raster tile failed (return code {e.returncode}):")
+            print(f"Command: {' '.join(cmd)}")
+            print(f"Stdout: {e.stdout}")
+            print(f"Stderr: {e.stderr}")
+            
+            # Check for common issues and provide helpful error messages
+            if "Only up to 4 bands supported for PNG" in e.stderr:
+                raise RuntimeError(
+                    "GeoTIFF has too many bands for web tiles. "
+                    "Create a 3-band RGB mosaic first using: "
+                    "geotessera visualize --type rgb --bands 0,1,2 --normalize"
+                )
+            elif "Only Byte and UInt16 data types supported for PNG" in e.stderr:
+                raise RuntimeError(
+                    "GeoTIFF data type not supported for web tiles. "
+                    "Create a normalized RGB mosaic first using: "
+                    "geotessera visualize --type rgb --bands 0,1,2 --normalize"
+                )
+            else:
+                # For other gdal raster tile errors, fall back to gdal2tiles
+                pass
+    
+    # Fall back to traditional gdal2tiles.py
     cmd = [
         'gdal2tiles.py',
         '-z', f'{min_zoom}-{max_zoom}',
@@ -275,9 +329,9 @@ def geotiff_to_web_tiles(
         subprocess.run(cmd, check=True, capture_output=True)
         return str(output_dir)
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"gdal2tiles failed: {e}")
+        raise RuntimeError(f"Tile generation failed: {e}")
     except FileNotFoundError:
-        raise RuntimeError("gdal2tiles.py not found. Install GDAL tools.")
+        raise RuntimeError("Neither 'gdal raster tile' nor 'gdal2tiles.py' found. Install GDAL tools.")
 
 
 def create_simple_web_viewer(

@@ -486,66 +486,59 @@ def visualize(
                 raise typer.Exit(1)
                 
         elif vis_type == 'web':
-            # Create web tiles
-            if len(geotiff_paths) > 1:
-                # First create RGB mosaic
-                mosaic_path = output / "temp_mosaic.tif"
-                bands_list = [0, 1, 2]
-                if bands:
-                    bands_list = list(map(int, bands.split(',')))[:3]
-                    
-                task1 = progress.add_task("Creating mosaic for web tiles...", total=50, status="Starting...")
+            # Simplified web tiles: Always create 3-band mosaic first, then generate web tiles
+            
+            # Step 1: Create 3-band RGB mosaic
+            mosaic_path = output / "rgb_mosaic.tif"
+            bands_list = [0, 1, 2]  # Always use first 3 bands for web visualization
+            if bands:
+                bands_list = list(map(int, bands.split(',')))[:3]  # Limit to 3 bands max
                 
-                try:
-                    # Create wrapper callback for the first phase (0-50%)
-                    def mosaic_progress_callback(current: int, total: int, status: str = None):
-                        overall_progress = int((current / total) * 50)
-                        create_progress_callback(progress, task1)(overall_progress, 50, status)
-                    
-                    create_rgb_mosaic_from_geotiffs(
-                        geotiff_paths=geotiff_paths,
-                        output_path=str(mosaic_path),
-                        bands=tuple(bands_list),
-                        normalize=normalize,
-                        progress_callback=mosaic_progress_callback
-                    )
-                    progress.update(task1, completed=50)
-                    source_file = str(mosaic_path)
-                    
-                except Exception as e:
-                    rprint(f"[red]Error creating mosaic for web tiles: {e}[/red]")
-                    raise typer.Exit(1)
-            else:
-                source_file = geotiff_paths[0]
+            task1 = progress.add_task("Creating 3-band RGB mosaic...", total=100, status="Starting...")
+            
+            try:
+                create_rgb_mosaic_from_geotiffs(
+                    geotiff_paths=geotiff_paths,
+                    output_path=str(mosaic_path),
+                    bands=tuple(bands_list),
+                    normalize=True,  # Always normalize for web display
+                    progress_callback=create_progress_callback(progress, task1)
+                )
+                rprint(f"[green]Created RGB mosaic: {mosaic_path}[/green]")
                 
-            # Generate web tiles
+            except Exception as e:
+                rprint(f"[red]Error creating RGB mosaic: {e}[/red]")
+                raise typer.Exit(1)
+                
+            # Step 2: Generate web tiles from the 3-band mosaic
             tiles_dir = output / "tiles"
             
-            # Check if tiles already exist and we're not forcing regeneration
-            if not force_regenerate and tiles_dir.exists() and any(tiles_dir.iterdir()):
-                task2 = progress.add_task("Using existing web tiles...", total=100, status="Found existing tiles")
-                progress.update(task2, completed=80)
-                rprint(f"[green]Found existing tiles in: {tiles_dir}[/green]")
-                rprint("[blue]Skipping tile generation (use --force to regenerate)[/blue]")
-            else:
-                if force_regenerate and tiles_dir.exists():
-                    import shutil
-                    rprint(f"[yellow]Removing existing tiles directory: {tiles_dir}[/yellow]")
-                    shutil.rmtree(tiles_dir)
+            # Check if we should regenerate tiles
+            if force_regenerate and tiles_dir.exists():
+                import shutil
+                rprint(f"[yellow]Removing existing tiles directory: {tiles_dir}[/yellow]")
+                shutil.rmtree(tiles_dir)
+                
+            if not tiles_dir.exists() or not any(tiles_dir.iterdir()):
                 task2 = progress.add_task("Generating web tiles...", total=100, status="Starting...")
                 
                 try:
-                    geotiff_to_web_tiles(
-                        geotiff_path=source_file,
+                    result_dir = geotiff_to_web_tiles(
+                        geotiff_path=str(mosaic_path),
                         output_dir=str(tiles_dir),
                         zoom_levels=(min_zoom, max_zoom)
                     )
-                    progress.update(task2, completed=80)
+                    progress.update(task2, completed=100)
+                    rprint(f"[green]Created web tiles in: {result_dir}[/green]")
+                    
                 except Exception as e:
                     rprint(f"[red]Error generating web tiles: {e}[/red]")
                     raise typer.Exit(1)
+            else:
+                rprint(f"[green]Using existing tiles in: {tiles_dir}[/green]")
+                rprint("[blue]Use --force to regenerate tiles[/blue]")
             
-            # Create HTML viewer (always run this part)
+            # Step 3: Create HTML viewer
             html_path = output / "viewer.html"
             
             # Calculate center from coverage
@@ -563,9 +556,6 @@ def visualize(
                 title=f"GeoTessera - {input_path}"
             )
             
-            progress.update(task2, completed=100)
-            
-            rprint(f"[green]Created web tiles in: {tiles_dir}[/green]")
             rprint(f"[green]Created viewer: {html_path}[/green]")
             rprint(f"[blue]To view the map, start a web server:[/blue]")
             rprint(f"[cyan]  geotessera serve {output}[/cyan]")
