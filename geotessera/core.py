@@ -161,6 +161,48 @@ class GeoTessera:
         
         return dequantized, crs, transform
 
+    def find_tile_for_point(self, lat: float, lon: float, year: int) -> Optional[Tuple[float, float]]:
+        """Find which tile contains a specific point using coordinate math.
+        
+        Tessera tiles are on a regular 0.1-degree grid, so we can calculate
+        the tile coordinates directly. Optionally checks registry for existence.
+        
+        Args:
+            lat: Point latitude in decimal degrees
+            lon: Point longitude in decimal degrees  
+            year: Year of embeddings (used for optional registry availability check)
+            
+        Returns:
+            Tuple of (tile_lat, tile_lon) if tile exists, None otherwise
+        """
+        from .registry import world_to_tile_coords
+        
+        # Calculate which tile this point should belong to
+        tile_lat, tile_lon = world_to_tile_coords(lat, lon)
+        
+        # Optional: Check if this tile actually exists in the registry
+        # You could skip this check for maximum performance if you trust the data
+        try:
+            # Create a small bbox around the calculated tile
+            buffer = 0.01
+            bbox = (tile_lon - buffer, tile_lat - buffer, 
+                   tile_lon + buffer, tile_lat + buffer)
+            
+            available_tiles = self.registry.load_blocks_for_region(bbox, year)
+            
+            # Check if our calculated tile is in the available tiles
+            for avail_lat, avail_lon in available_tiles:
+                if (abs(avail_lat - tile_lat) < 0.001 and 
+                    abs(avail_lon - tile_lon) < 0.001):
+                    return (tile_lat, tile_lon)  # Return the rounded version for consistency
+            
+            return None
+                
+        except Exception:
+            # If registry check fails, you might want to return the calculated tile anyway
+            # or return None to be safe - depends on your use case
+            return None
+
     def _get_utm_projection_from_landmask(self, lat: float, lon: float):
         """Get UTM projection info from corresponding landmask tile.
         

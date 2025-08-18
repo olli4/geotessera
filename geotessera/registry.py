@@ -109,7 +109,6 @@ def get_all_blocks_in_range(
     return blocks
 
 
-# Tile coordinate utility functions
 def parse_grid_coordinates(filename: str) -> Tuple[Optional[float], Optional[float]]:
     """Extract longitude and latitude from a grid filename.
 
@@ -144,8 +143,6 @@ def world_to_tile_coords(lat: float, lon: float) -> Tuple[float, float]:
     Tessera tiles are on a 0.1-degree grid with centers at 0.05-degree offsets
     (e.g., -0.05, 0.05, 0.15, 0.25, etc.).
     
-    This fixes the bug from issue #10 where coordinates were incorrectly calculated.
-    
     Args:
         lat: World latitude in decimal degrees
         lon: World longitude in decimal degrees
@@ -159,10 +156,9 @@ def world_to_tile_coords(lat: float, lon: float) -> Tuple[float, float]:
         >>> world_to_tile_coords(-0.03, -0.12)
         (-0.05, -0.15)
     """
-    # Fix for issue #10: tiles are offset by 0.05 degrees from the 0.1-degree grid
     tile_lat = np.floor(lat * 10) / 10 + 0.05
     tile_lon = np.floor(lon * 10) / 10 + 0.05
-    return tile_lat, tile_lon
+    return round(float(tile_lat), 2), round(float(tile_lon), 2)
 
 
 def tile_to_embedding_path(lat: float, lon: float, year: int) -> Tuple[str, str]:
