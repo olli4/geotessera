@@ -33,14 +33,13 @@ class TestVersionMetadata:
         
         gt = GeoTessera()
         
-        # Mock the UTM projection method directly to avoid rasterio complexity
+        # Create mock CRS and transform
         utm_crs = CRS.from_epsg(32630)  # UTM 30N
         utm_transform = Affine(10.0, 0.0, 500000, 0.0, -10.0, 4000000)
-        gt._get_utm_projection_from_landmask = Mock(return_value=(utm_crs, utm_transform))
         
         # Create mock embedding data
         mock_embedding = np.random.rand(256, 256, 128).astype(np.float32)
-        gt.fetch_embedding = Mock(return_value=mock_embedding)
+        gt.fetch_embedding = Mock(return_value=(mock_embedding, utm_crs, utm_transform))
         
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "test_tile.tif"
@@ -89,14 +88,13 @@ class TestVersionMetadata:
         # Mock registry components
         gt.registry.get_tiles_in_bbox = Mock(return_value=[(51.55, 0.05)])
         
-        # Mock the UTM projection method directly
+        # Create mock CRS and transform
         utm_crs = CRS.from_epsg(32630)  # UTM 30N
         utm_transform = Affine(10.0, 0.0, 500000, 0.0, -10.0, 4000000)
-        gt._get_utm_projection_from_landmask = Mock(return_value=(utm_crs, utm_transform))
         
         # Create mock embedding data
         mock_embedding = np.random.rand(256, 256, 128).astype(np.float32)
-        gt.fetch_embedding = Mock(return_value=mock_embedding)
+        gt.fetch_embedding = Mock(return_value=(mock_embedding, utm_crs, utm_transform))
         
         with tempfile.TemporaryDirectory() as temp_dir:
             # Export tiles

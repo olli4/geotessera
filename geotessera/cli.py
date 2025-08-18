@@ -305,7 +305,7 @@ def download(
                 files = []
                 metadata = {"tiles": [], "year": year, "bbox": bbox_coords}
                 
-                for tile_lat, tile_lon, embedding_array in embeddings:
+                for tile_lat, tile_lon, embedding_array, crs, transform in embeddings:
                     # Apply band selection if specified
                     if bands_list:
                         embedding_array = embedding_array[:, :, bands_list]
@@ -316,13 +316,15 @@ def download(
                     np.save(filepath, embedding_array)
                     files.append(str(filepath))
                     
-                    # Add to metadata
+                    # Add to metadata including CRS info
                     metadata["tiles"].append({
                         "lat": tile_lat,
                         "lon": tile_lon,
                         "filename": filename,
                         "shape": embedding_array.shape,
-                        "bands": bands_list if bands_list else list(range(128))
+                        "bands": bands_list if bands_list else list(range(128)),
+                        "crs": str(crs) if crs else None,
+                        "transform": list(transform) if transform else None
                     })
                 
                 # Save metadata

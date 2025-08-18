@@ -69,8 +69,8 @@ class GeoTessera:
         bbox: Tuple[float, float, float, float],
         year: int = 2024,
         progress_callback: Optional[callable] = None
-    ) -> List[Tuple[float, float, np.ndarray]]:
-        """Fetch all embedding tiles within a bounding box as numpy arrays.
+    ) -> List[Tuple[float, float, np.ndarray, object, object]]:
+        """Fetch all embedding tiles within a bounding box with CRS information.
         
         Args:
             bbox: Bounding box as (min_lon, min_lat, max_lon, max_lat)
@@ -78,8 +78,12 @@ class GeoTessera:
             progress_callback: Optional callback function(current, total) for progress tracking
             
         Returns:
-            List of (tile_lat, tile_lon, embedding_array) tuples
-            Each embedding_array is shape (H, W, 128) with dequantized values
+            List of (tile_lat, tile_lon, embedding_array, crs, transform) tuples where:
+            - tile_lat: Tile center latitude
+            - tile_lon: Tile center longitude
+            - embedding_array: shape (H, W, 128) with dequantized values
+            - crs: CRS object from rasterio (coordinate reference system)
+            - transform: Affine transform from rasterio
         """
         # Load registry blocks for this region and get available tiles directly
         tiles_to_download = self.registry.load_blocks_for_region(bbox, year)
@@ -98,8 +102,8 @@ class GeoTessera:
                         tile_status = f"Tile {i+1}/{total_tiles}: {status}" if status else f"Fetching tile {i+1}/{total_tiles}"
                         progress_callback(int(tile_progress), 100, tile_status)
                 
-                embedding = self.fetch_embedding(tile_lat, tile_lon, year, tile_progress_callback)
-                results.append((tile_lat, tile_lon, embedding))
+                embedding, crs, transform = self.fetch_embedding(tile_lat, tile_lon, year, tile_progress_callback)
+                results.append((tile_lat, tile_lon, embedding, crs, transform))
                 
                 # Update progress for completed tile
                 if progress_callback:
@@ -113,8 +117,8 @@ class GeoTessera:
                 
         return results
 
-    def fetch_embedding(self, lat: float, lon: float, year: int, progress_callback: Optional[callable] = None) -> np.ndarray:
-        """Fetch and dequantize a single embedding tile.
+    def fetch_embedding(self, lat: float, lon: float, year: int, progress_callback: Optional[callable] = None) -> Tuple[np.ndarray, object, object]:
+        """Fetch and dequantize a single embedding tile with CRS information.
         
         Args:
             lat: Tile center latitude
@@ -123,7 +127,10 @@ class GeoTessera:
             progress_callback: Optional callback for download progress
             
         Returns:
-            Dequantized embedding array of shape (H, W, 128)
+            Tuple of (dequantized_embedding, crs, transform) where:
+            - dequantized_embedding: array of shape (H, W, 128)
+            - crs: CRS object from rasterio (coordinate reference system)
+            - transform: Affine transform from rasterio
         """
         from .registry import tile_to_embedding_path
         
@@ -149,7 +156,10 @@ class GeoTessera:
         
         dequantized = quantized_embedding.astype(np.float32) * scales
         
-        return dequantized
+        # Get CRS and transform from landmask
+        crs, transform = self._get_utm_projection_from_landmask(lat, lon)
+        
+        return dequantized, crs, transform
 
     def _get_utm_projection_from_landmask(self, lat: float, lon: float):
         """Get UTM projection info from corresponding landmask tile.
@@ -231,8 +241,8 @@ class GeoTessera:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Fetch single tile
-        embedding = self.fetch_embedding(lat, lon, year)
+        # Fetch single tile with CRS info
+        embedding, crs, transform = self.fetch_embedding(lat, lon, year)
         
         # Select bands
         if bands is not None:
@@ -244,9 +254,6 @@ class GeoTessera:
             
         # Get dimensions for GeoTIFF
         height, width = data.shape[:2]
-        
-        # Get UTM projection from landmask
-        crs, transform = self._get_utm_projection_from_landmask(lat, lon)
         
         # Write GeoTIFF
         with rasterio.open(
@@ -348,7 +355,7 @@ class GeoTessera:
         created_files = []
         total_tiles = len(tiles)
         
-        for i, (tile_lat, tile_lon, embedding) in enumerate(tiles):
+        for i, (tile_lat, tile_lon, embedding, crs, transform) in enumerate(tiles):
             # Create filename first for progress reporting
             filename = f"tessera_{year}_lat{tile_lat:.2f}_lon{tile_lon:.2f}.tif"
             output_path = output_dir / filename
@@ -368,9 +375,6 @@ class GeoTessera:
             
             # Get dimensions for GeoTIFF
             height, width = data.shape[:2]
-            
-            # Get UTM projection from landmask
-            crs, transform = self._get_utm_projection_from_landmask(tile_lat, tile_lon)
             
             # Write GeoTIFF
             with rasterio.open(

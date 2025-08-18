@@ -178,14 +178,15 @@ from geotessera import GeoTessera
 gt = GeoTessera()
 
 # Method 1: Fetch a single tile
-embedding = gt.fetch_embedding(lat=52.05, lon=0.15, year=2024)
+embedding, crs, transform = gt.fetch_embedding(lat=52.05, lon=0.15, year=2024)
 print(f"Shape: {embedding.shape}")  # e.g., (1200, 1200, 128)
+print(f"CRS: {crs}")  # Coordinate reference system from landmask
 
 # Method 2: Fetch all tiles in a bounding box
 bbox = (-0.2, 51.4, 0.1, 51.6)  # (min_lon, min_lat, max_lon, max_lat)
 embeddings = gt.fetch_embeddings(bbox, year=2024)
 
-for tile_lat, tile_lon, embedding_array in embeddings:
+for tile_lat, tile_lon, embedding_array, crs, transform in embeddings:
     print(f"Tile ({tile_lat}, {tile_lon}): {embedding_array.shape}")
 ```
 
@@ -220,7 +221,7 @@ files = gt.export_embedding_geotiffs(
 # Fetch and process embeddings directly
 embeddings = gt.fetch_embeddings(bbox, year=2024)
 
-for lat, lon, embedding in embeddings:
+for lat, lon, embedding, crs, transform in embeddings:
     # Compute statistics
     mean_values = np.mean(embedding, axis=(0, 1))  # Mean per channel
     std_values = np.std(embedding, axis=(0, 1))    # Std per channel
@@ -377,7 +378,7 @@ embeddings = gt.fetch_embeddings(bbox, year=2024)
 import json
 metadata = {"tiles": [], "bbox": bbox, "year": 2024}
 
-for lat, lon, embedding in embeddings:
+for lat, lon, embedding, crs, transform in embeddings:
     # Save numpy array
     filename = f"tile_{lat:.2f}_{lon:.2f}.npy"
     np.save(filename, embedding)
@@ -446,7 +447,7 @@ embeddings = gt.fetch_embeddings(bbox, year=2024)
 
 # Analyze embeddings
 selected_tiles = []
-for lat, lon, embedding in embeddings:
+for lat, lon, embedding, crs, transform in embeddings:
     # Custom selection criteria
     mean_band_50 = np.mean(embedding[:, :, 50])
     if mean_band_50 > threshold:
