@@ -68,6 +68,19 @@ Download specific bands only::
         --year 2024 \
         --output ./london_rgb
 
+Download by country name::
+
+    geotessera download \
+        --country "United Kingdom" \
+        --year 2024 \
+        --output ./uk_tiles
+
+    # Or use short country codes
+    geotessera download \
+        --country "GB" \
+        --year 2024 \
+        --output ./uk_tiles
+
 Download using a region file::
 
     # Create a GeoJSON file defining your region
@@ -114,21 +127,24 @@ Initialize the client::
     
     gt = GeoTessera()
 
-Fetch a single embedding tile::
+Fetch a single embedding tile with CRS information::
 
-    # Fetch embedding for Cambridge, UK
-    embedding = gt.fetch_embedding(lat=52.05, lon=0.15, year=2024)
+    # Fetch embedding for Cambridge, UK (note: lon, lat order)
+    embedding, crs, transform = gt.fetch_embedding(lon=0.15, lat=52.05, year=2024)
     print(f"Shape: {embedding.shape}")  # e.g., (1200, 1200, 128)
     print(f"Data type: {embedding.dtype}")  # float32
+    print(f"CRS: {crs}")  # UTM projection from landmask
+    print(f"Transform: {transform}")  # Geospatial transform
     print(f"Value range: [{embedding.min():.2f}, {embedding.max():.2f}]")
 
 Fetch multiple tiles in a bounding box::
 
     bbox = (-0.2, 51.4, 0.1, 51.6)  # (min_lon, min_lat, max_lon, max_lat)
-    embeddings = gt.fetch_embeddings(bbox, year=2024)
+    tiles = gt.fetch_embeddings(bbox, year=2024)
     
-    for tile_lat, tile_lon, embedding_array in embeddings:
-        print(f"Tile ({tile_lat}, {tile_lon}): {embedding_array.shape}")
+    for tile_lon, tile_lat, embedding_array, crs, transform in tiles:
+        print(f"Tile ({tile_lon}, {tile_lat}): {embedding_array.shape}")
+        print(f"  CRS: {crs}")
         
         # Compute basic statistics
         mean_values = np.mean(embedding_array, axis=(0, 1))  # Mean per channel
@@ -255,7 +271,7 @@ Complete analysis workflow::
     
     # Analyze each tile
     results = []
-    for lat, lon, embedding in embeddings:
+    for lon, lat, embedding, crs, transform in embeddings:
         # Compute statistics
         mean_per_band = np.mean(embedding, axis=(0, 1))
         std_per_band = np.std(embedding, axis=(0, 1))
@@ -265,7 +281,8 @@ Complete analysis workflow::
             'lon': lon,
             'mean_band_50': mean_per_band[50],
             'std_band_50': std_per_band[50],
-            'total_variance': np.var(embedding)
+            'total_variance': np.var(embedding),
+            'crs': str(crs)
         })
     
     # Print results
@@ -304,21 +321,21 @@ Use both numpy and GeoTIFF formats in the same workflow::
     
     # Step 1: Analyze with numpy arrays
     print("Analyzing embeddings...")
-    embeddings = gt.fetch_embeddings(bbox, year=2024)
+    tiles = gt.fetch_embeddings(bbox, year=2024)
     
     # Custom analysis to select interesting tiles
     selected_coords = []
-    for lat, lon, embedding in embeddings:
+    for lon, lat, embedding, crs, transform in tiles:
         # Example: select tiles with high variance in band 64
         band_64_var = np.var(embedding[:, :, 64])
         if band_64_var > 0.5:  # Threshold
-            selected_coords.append((lat, lon))
+            selected_coords.append((lon, lat))
     
     print(f"Selected {len(selected_coords)} interesting tiles")
     
-    # Step 2: Export selected tiles as GeoTIFF
+    # Step 2: Export selected tiles as GeoTIFF  
     all_files = []
-    for lat, lon in selected_coords:
+    for lon, lat in selected_coords:
         files = gt.export_embedding_geotiffs(
             bbox=(lon-0.05, lat-0.05, lon+0.05, lat+0.05),
             output_dir="./interesting_tiles",

@@ -30,7 +30,7 @@ Create a GeoTessera client::
     gt = GeoTessera()
     
     # Check available years
-    years = gt.get_available_years()
+    years = gt.registry.get_available_years()
     print(f"Available years: {years}")
 
 Explore Data Availability
@@ -57,14 +57,16 @@ Download and Analyze a Single Tile
 
 Start with a single tile for Cambridge, UK::
 
-    # Download embedding for Cambridge
-    lat, lon = 52.05, 0.15
+    # Download embedding for Cambridge (note: lon, lat order)
+    lon, lat = 0.15, 52.05
     year = 2024
     
-    embedding = gt.fetch_embedding(lat=lat, lon=lon, year=year)
+    embedding, crs, transform = gt.fetch_embedding(lon=lon, lat=lat, year=year)
     
     print(f"Embedding shape: {embedding.shape}")
     print(f"Data type: {embedding.dtype}")
+    print(f"CRS: {crs}")
+    print(f"Transform: {transform}")
     print(f"Value range: [{embedding.min():.3f}, {embedding.max():.3f}]")
     print(f"Memory usage: {embedding.nbytes / 1024**2:.1f} MB")
 
@@ -119,14 +121,14 @@ Download and analyze multiple tiles for a region::
     # Define bounding box for Cambridge area
     bbox = (0.0, 52.0, 0.3, 52.2)  # (min_lon, min_lat, max_lon, max_lat)
     
-    # Fetch all tiles in the region
-    embeddings = gt.fetch_embeddings(bbox, year=2024)
+    # Fetch all tiles in the region with projection info
+    tiles = gt.fetch_embeddings(bbox, year=2024)
     
-    print(f"Found {len(embeddings)} tiles in the region")
+    print(f"Found {len(tiles)} tiles in the region")
     
     # Analyze each tile
     tile_stats = []
-    for tile_lat, tile_lon, embedding in embeddings:
+    for tile_lon, tile_lat, embedding, crs, transform in tiles:
         stats = {
             'lat': tile_lat,
             'lon': tile_lon,
@@ -134,10 +136,11 @@ Download and analyze multiple tiles for a region::
             'std_all_channels': np.std(embedding),
             'channel_50_mean': np.mean(embedding[:, :, 50]),
             'channel_50_std': np.std(embedding[:, :, 50]),
+            'crs': str(crs)
         }
         tile_stats.append(stats)
         
-        print(f"Tile ({tile_lat:.2f}, {tile_lon:.2f}): "
+        print(f"Tile ({tile_lon:.2f}, {tile_lat:.2f}): "
               f"overall_mean={stats['mean_all_channels']:.3f}, "
               f"ch50_mean={stats['channel_50_mean']:.3f}")
 
@@ -150,8 +153,8 @@ Save the analysis results for later use::
     with open('cambridge_analysis.json', 'w') as f:
         json.dump(tile_stats, f, indent=2)
     
-    # Save raw embeddings for further analysis
-    for i, (tile_lat, tile_lon, embedding) in enumerate(embeddings):
+    # Save raw embeddings for further analysis  
+    for i, (tile_lon, tile_lat, embedding, crs, transform) in enumerate(tiles):
         filename = f'cambridge_tile_{tile_lat:.2f}_{tile_lon:.2f}.npy'
         np.save(filename, embedding)
         print(f"Saved {filename}")
@@ -313,13 +316,13 @@ When working with large regions, process tiles individually::
         """Process a large region without loading all tiles into memory."""
         
         # Get list of available tiles (metadata only)
-        embeddings = gt.fetch_embeddings(bbox, year)
-        total_tiles = len(embeddings)
+        tiles = gt.fetch_embeddings(bbox, year)
+        total_tiles = len(tiles)
         
         print(f"Processing {total_tiles} tiles...")
         
         results = []
-        for i, (tile_lat, tile_lon, embedding) in enumerate(embeddings):
+        for i, (tile_lon, tile_lat, embedding, crs, transform) in enumerate(tiles):
             # Process one tile at a time
             result = analysis_func(embedding, tile_lat, tile_lon)
             results.append(result)
@@ -435,7 +438,7 @@ Compare embeddings across different years::
         yearly_data = {}
         for year in years:
             try:
-                embedding = gt.fetch_embedding(lat=lat, lon=lon, year=year)
+                embedding, crs, transform = gt.fetch_embedding(lon=lon, lat=lat, year=year)
                 
                 # Compute summary statistics
                 yearly_data[year] = {
@@ -497,7 +500,7 @@ Reduce dimensionality of the 128-channel embeddings::
         all_pixels = []
         tile_info = []
         
-        for tile_lat, tile_lon, embedding in embeddings_list:
+        for tile_lon, tile_lat, embedding, crs, transform in embeddings_list:
             # Reshape from (H, W, 128) to (H*W, 128)
             pixels = embedding.reshape(-1, embedding.shape[-1])
             all_pixels.append(pixels)
@@ -530,9 +533,9 @@ Reduce dimensionality of the 128-channel embeddings::
     # Example usage
     gt = GeoTessera()
     bbox = (-0.1, 51.9, 0.1, 52.1)  # Small region around Cambridge
-    embeddings = gt.fetch_embeddings(bbox, year=2024)
+    tiles = gt.fetch_embeddings(bbox, year=2024)
     
-    X_pca, pca, scaler, tile_info = perform_pca_analysis(embeddings, n_components=5)
+    X_pca, pca, scaler, tile_info = perform_pca_analysis(tiles, n_components=5)
     
     # Visualize first two principal components
     plt.figure(figsize=(12, 5))
@@ -570,7 +573,7 @@ Identify similar regions using clustering::
         tile_features = []
         tile_coords = []
         
-        for tile_lat, tile_lon, embedding in embeddings_list:
+        for tile_lon, tile_lat, embedding, crs, transform in embeddings_list:
             # Use mean values across spatial dimensions
             mean_features = np.mean(embedding, axis=(0, 1))
             tile_features.append(mean_features)
@@ -604,7 +607,7 @@ Identify similar regions using clustering::
         return clusters, kmeans, scaler
     
     # Perform clustering
-    clusters, kmeans, scaler = cluster_embedding_tiles(embeddings, n_clusters=3)
+    clusters, kmeans, scaler = cluster_embedding_tiles(tiles, n_clusters=3)
     
     # Visualize clusters
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
@@ -653,7 +656,7 @@ Analyze temporal patterns in multi-year data::
         
         for year in years:
             try:
-                embedding = gt.fetch_embedding(lat=lat, lon=lon, year=year)
+                embedding, crs, transform = gt.fetch_embedding(lon=lon, lat=lat, year=year)
                 
                 # Extract data for channels of interest
                 year_data = {}

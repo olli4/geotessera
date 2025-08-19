@@ -50,6 +50,7 @@ Download embeddings for a region in numpy or GeoTIFF format.
 
 * ``--bbox TEXT`` - Bounding box: 'min_lon,min_lat,max_lon,max_lat'
 * ``--region-file PATH`` - GeoJSON/Shapefile to define region
+* ``--country TEXT`` - Country name (e.g., 'United Kingdom', 'UK', 'GB')
 
 **Format Options**:
 
@@ -88,6 +89,12 @@ Download embeddings for a region in numpy or GeoTIFF format.
         --year 2024 \
         --output ./london_subset
 
+    # Download by country name
+    geotessera download \
+        --country "United Kingdom" \
+        --year 2024 \
+        --output ./uk_tiles
+
     # Download using a region file
     geotessera download \
         --region-file cambridge.geojson \
@@ -98,18 +105,20 @@ Download embeddings for a region in numpy or GeoTIFF format.
 **Output Formats**:
 
 **TIFF Format** (``--format tiff``):
-    - Creates georeferenced GeoTIFF files
-    - Each tile preserves its native UTM projection
+    - Creates georeferenced GeoTIFF files with native UTM projections
+    - Each tile preserves its native UTM projection from landmask tiles
+    - Includes accurate CRS and transform metadata
     - Suitable for GIS software (QGIS, ArcGIS, etc.)
     - Supports compression (lzw, deflate, none)
-    - Files named by tile coordinates (e.g., ``grid_51.45_-0.05.tif``)
+    - Files named by tile coordinates (e.g., ``tessera_2024_lat52.05_lon0.15.tif``)
 
 **NPY Format** (``--format npy``):
     - Creates raw numpy arrays (.npy files)
-    - Includes metadata.json with tile information
+    - Includes metadata.json with tile information and CRS data
     - Suitable for direct analysis in Python
     - Smaller file sizes than GeoTIFF
-    - Files named by coordinates (e.g., ``embedding_51.45_-0.05.npy``)
+    - Files named by coordinates (e.g., ``embedding_52.05_0.15.npy``)
+    - Metadata includes UTM projection information for each tile
 
 visualize
 ~~~~~~~~~
@@ -463,9 +472,11 @@ Common Issues and Solutions
     - Set custom cache directory: ``--cache-dir /tmp/geotessera``
 
 **GeoTIFF projection issues**:
-    - Files use UTM projection (varies by location)
+    - Files use native UTM projections (varies by location from landmask tiles)
+    - Each tile preserves its original projection for accuracy
     - Most GIS software handles reprojection automatically
-    - Use ``geotessera info --geotiffs`` to check CRS
+    - Use ``geotessera info --geotiffs`` to check CRS for each tile
+    - Different tiles may have different UTM zones
 
 Getting Help
 ~~~~~~~~~~~~

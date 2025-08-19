@@ -14,17 +14,19 @@ Overview
 
 GeoTessera is built around a two-step workflow:
 
-1. **Retrieve embeddings**: Fetch raw numpy arrays for a geographic bounding box
-2. **Export to desired format**: Save as raw numpy arrays or convert to georeferenced GeoTIFF files
+1. **Retrieve embeddings**: Fetch raw numpy arrays with CRS/transform information for a geographic bounding box
+2. **Export to desired format**: Save as raw numpy arrays or convert to georeferenced GeoTIFF files with preserved projections
 
 Key Features
 ------------
 
 * **Global Coverage**: Access embeddings for any terrestrial location worldwide where data exists
 * **Flexible Formats**: Export as numpy arrays for analysis or GeoTIFF for GIS integration
+* **Projection Preservation**: Native UTM projections preserved from landmask tiles
 * **High Resolution**: 10m spatial resolution
 * **Temporal Compression**: Full year of satellite observations in each embedding
 * **Multi-spectral**: Combines Sentinel-1 SAR and Sentinel-2 optical data
+* **Country Support**: Download by country name or custom regions
 * **Efficient Registry**: Block-based lazy loading of only required data
 * **Easy Access**: Python API and CLI with automatic caching
 
@@ -60,7 +62,10 @@ Download embeddings in your preferred format::
     # Download as numpy arrays (for analysis, all 128 bands)
     geotessera download --bbox "-0.2,51.4,0.1,51.6" --format npy --year 2024 --output ./london_arrays
 
-    # Download tiles from a region
+    # Download by country name
+    geotessera download --country "United Kingdom" --year 2024 --output ./uk_tiles
+
+    # Download tiles from a region file
     geotessera download --region-file example/CB.geojson --format npy --year 2024 --output ./cambridge
 
 
@@ -71,15 +76,19 @@ Python API usage::
     # Initialize client
     gt = GeoTessera()
     
-    # Method 1: Fetch a single tile
-    embedding = gt.fetch_embedding(lat=52.05, lon=0.15, year=2024)
+    # Method 1: Fetch a single tile with CRS information
+    embedding, crs, transform = gt.fetch_embedding(lon=0.15, lat=52.05, year=2024)
     print(f"Shape: {embedding.shape}")  # e.g., (1200, 1200, 128)
+    print(f"CRS: {crs}")  # UTM projection
     
     # Method 2: Fetch all tiles in a bounding box
     bbox = (-0.2, 51.4, 0.1, 51.6)  # (min_lon, min_lat, max_lon, max_lat)
-    embeddings = gt.fetch_embeddings(bbox, year=2024)
+    tiles = gt.fetch_embeddings(bbox, year=2024)
     
-    # Export as GeoTIFF files with proper georeferencing
+    for tile_lon, tile_lat, embedding, crs, transform in tiles:
+        print(f"Tile ({tile_lon}, {tile_lat}): {embedding.shape}")
+    
+    # Export as GeoTIFF files with preserved UTM projections
     files = gt.export_embedding_geotiffs(
         bbox=bbox,
         output_dir="./output",

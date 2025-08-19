@@ -9,6 +9,7 @@ Overview
 GeoTessera is designed around a simple but powerful architecture that optimizes for:
 
 - **Efficient data access**: Only download what you need
+- **Projection preservation**: Maintain native UTM projections for accuracy
 - **Scalability**: Handle large datasets with lazy loading
 - **Flexibility**: Support both analysis and GIS workflows
 - **Reliability**: Ensure data integrity with checksums
@@ -153,15 +154,16 @@ Tessera embeddings are stored using a quantization system for efficiency:
     
     # Result: (height, width, 128) float32 array
 
-This process is handled automatically by ``GeoTessera.fetch_embedding()``.
+This process is handled automatically by ``GeoTessera.fetch_embedding()``, which now returns the dequantized embedding along with CRS and transform information from the corresponding landmask tile.
 
 Metadata and Projections
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Landmask Files** (``grid_X.XX_Y.YY.tiff``):
 
-- Provide UTM projection information for each tile
-- Define precise geospatial transforms
+- Provide native UTM projection information for each tile
+- Define precise geospatial transforms (no reprojection needed)
+- Preserve original coordinate system for maximum accuracy
 - Used for georeferencing when exporting to GeoTIFF
 - Contain binary land/water masks
 
@@ -321,22 +323,31 @@ GeoTessera uses `Pooch <https://www.fatiando.org/pooch/>`_ for robust data downl
 
 **Download Process**::
 
-    # Simplified download workflow
-    def fetch_embedding(lat, lon, year):
+    # Simplified download workflow with CRS preservation
+    def fetch_embedding(lon, lat, year):  # Note: lon, lat order
         # 1. Ensure registry block is loaded
         registry.ensure_block_loaded(year, lon, lat)
         
         # 2. Get file paths from registry
-        embedding_path, scales_path = get_tile_paths(lat, lon, year)
+        embedding_path, scales_path = get_tile_paths(lon, lat, year)
+        landmask_path = get_landmask_path(lon, lat)
         
         # 3. Download files via Pooch (cached)
         embedding_file = pooch.fetch(embedding_path)
         scales_file = pooch.fetch(scales_path)
+        landmask_file = pooch.fetch(landmask_path)
         
         # 4. Load and dequantize
         quantized = np.load(embedding_file)
         scales = np.load(scales_file)
-        return quantized.astype(np.float32) * scales
+        embedding = quantized.astype(np.float32) * scales
+        
+        # 5. Extract projection from landmask
+        with rasterio.open(landmask_file) as src:
+            crs = src.crs
+            transform = src.transform
+            
+        return embedding, crs, transform
 
 Caching Strategy
 ~~~~~~~~~~~~~~~~
@@ -366,12 +377,13 @@ When exporting to GeoTIFF, additional processing occurs:
 **Export Workflow**:
 
 1. **Fetch embedding data** (quantized + scales)
-2. **Fetch landmask tile** for projection information
-3. **Extract UTM projection** from landmask
+2. **Fetch landmask tile** for projection information  
+3. **Extract native UTM projection** and transform from landmask
 4. **Apply dequantization** to embedding data
-5. **Select bands** (if specified)
-6. **Write GeoTIFF** with proper geotransform and CRS
-7. **Apply compression** (LZW, DEFLATE, etc.)
+5. **Preserve original coordinate system** (no reprojection)
+6. **Select bands** (if specified)
+7. **Write GeoTIFF** with native UTM CRS and accurate transform
+8. **Apply compression** (LZW, DEFLATE, etc.)
 
 **Projection Inheritance**::
 
@@ -425,9 +437,9 @@ When processing large regions, GeoTessera uses several strategies:
         # Get tile list (metadata only)
         tiles = gt.registry.load_blocks_for_region(bbox, year)
         
-        for tile_lat, tile_lon in tiles:
-            # Process one tile at a time
-            embedding = gt.fetch_embedding(tile_lat, tile_lon, year)
+        for tile_lon, tile_lat in tiles:  # Note: lon, lat order
+            # Process one tile at a time  
+            embedding, crs, transform = gt.fetch_embedding(tile_lon, tile_lat, year)
             
             # Apply band selection early
             if bands:
@@ -456,8 +468,8 @@ For multiple tiles, downloads can be parallelized::
         gt = GeoTessera()
         
         def download_single(coords):
-            lat, lon = coords
-            return gt.fetch_embedding(lat, lon, year)
+            lon, lat = coords  # Note: lon, lat order
+            return gt.fetch_embedding(lon, lat, year)
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             embeddings = list(executor.map(download_single, tile_coords))
