@@ -1,10 +1,8 @@
 GeoTessera Documentation
 ========================
 
- `Pooch <https://www.fatiando.org/pooch/>`_
-
 GeoTessera provides access to open geospatial embeddings from the `Tessera foundation model <https://github.com/ucam-eo/tessera>`_
-(`[pdf] <https://arxiv.org/abs/2506.20380>`_). Tessera processes Sentinel-1 and
+(`paper <https://arxiv.org/abs/2506.20380>`_). Tessera processes Sentinel-1 and
 Sentinel-2 satellite imagery to generate 128-channel representation maps at 10m
 resolution, compressing a full year of temporal-spectral features into dense
 representations optimized for downstream geospatial analysis tasks.

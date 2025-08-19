@@ -11,44 +11,70 @@ Package Overview
    :show-inheritance:
    :undoc-members:
 
-Core Modules
-------------
+API Reference
+-------------
 
-geotessera.core module
-~~~~~~~~~~~~~~~~~~~~~~
+.. _geotessera-core:
 
-The main interface for accessing Tessera embeddings. Contains the primary GeoTessera class with methods for fetching embeddings with CRS information and exporting to various formats while preserving native UTM projections.
+:mod:`geotessera.core` -- Core Functionality
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The main interface for accessing Tessera embeddings. Contains the primary :class:`~geotessera.GeoTessera` class with methods for fetching embeddings with CRS information and exporting to various formats while preserving native UTM projections.
+
+**Key Features:**
+
+* :meth:`~geotessera.GeoTessera.fetch_embedding` - Fetch a single embedding tile with CRS and transform
+* :meth:`~geotessera.GeoTessera.fetch_embeddings` - Fetch multiple tiles in a bounding box with projection info
+* :meth:`~geotessera.GeoTessera.export_embedding_geotiff` - Export single embedding as GeoTIFF with native UTM
+* :meth:`~geotessera.GeoTessera.export_embedding_geotiffs` - Export multiple embeddings as GeoTIFF files
 
 .. automodule:: geotessera.core
    :members:
    :show-inheritance:
    :undoc-members:
 
-geotessera.registry module
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. _geotessera-registry:
+
+:mod:`geotessera.registry` -- Registry Management
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Registry management for efficient data discovery and access. Handles the block-based registry system, lazy loading, and metadata management.
+
+**Key Features:**
+
+* :class:`~geotessera.registry.Registry` - Main registry class for data discovery
+* :func:`~geotessera.registry.get_tile_bounds` - Get geographic bounds of a tile
+* :func:`~geotessera.registry.world_to_tile_coords` - Convert geographic to tile coordinates
+* :func:`~geotessera.registry.get_block_coordinates` - Get block coordinates for a tile
 
 .. automodule:: geotessera.registry
    :members:
    :show-inheritance:
    :undoc-members:
 
-geotessera.visualization module
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. _geotessera-visualization:
+
+:mod:`geotessera.visualization` -- Visualization Tools
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Visualization utilities for creating maps, web tiles, and interactive visualizations from GeoTIFF files.
+
+**Key Features:**
+
+* :func:`~geotessera.visualization.visualize_global_coverage` - Create global coverage maps
+* :func:`~geotessera.visualization.create_rgb_mosaic_from_geotiffs` - Combine multiple GeoTIFFs into a mosaic
+* :func:`~geotessera.visualization.geotiff_to_web_tiles` - Generate web tiles for interactive maps
+* :func:`~geotessera.visualization.create_coverage_summary_map` - Create coverage summary visualizations
 
 .. automodule:: geotessera.visualization
    :members:
    :show-inheritance:
    :undoc-members:
 
-Command Line Interface
-----------------------
+.. _geotessera-cli:
 
-geotessera.cli module
-~~~~~~~~~~~~~~~~~~~~~
+:mod:`geotessera.cli` -- Command Line Interface
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Comprehensive command-line interface providing download, visualization, and serving capabilities.
 
@@ -56,64 +82,6 @@ Comprehensive command-line interface providing download, visualization, and serv
    :members:
    :show-inheritance:
    :undoc-members:
-
-Key Classes and Functions
--------------------------
-
-GeoTessera Class
-~~~~~~~~~~~~~~~~
-
-The main interface for accessing Tessera embeddings:
-
-.. autoclass:: geotessera.GeoTessera
-   :members:
-   :show-inheritance:
-
-Key methods:
-
-* :meth:`~geotessera.GeoTessera.fetch_embedding` - Fetch a single embedding tile with CRS and transform
-* :meth:`~geotessera.GeoTessera.fetch_embeddings` - Fetch multiple tiles in a bounding box with projection info
-* :meth:`~geotessera.GeoTessera.export_embedding_geotiff` - Export single embedding as GeoTIFF with native UTM
-* :meth:`~geotessera.GeoTessera.export_embedding_geotiffs` - Export multiple embeddings as GeoTIFF files
-
-Registry Class
-~~~~~~~~~~~~~~
-
-Manages data discovery and access:
-
-.. autoclass:: geotessera.registry.Registry
-   :members:
-   :show-inheritance:
-
-Key methods:
-
-* :meth:`~geotessera.registry.Registry.get_available_embeddings` - List all available tiles
-* :meth:`~geotessera.registry.Registry.ensure_all_blocks_loaded` - Load complete registry for coverage maps
-* :meth:`~geotessera.registry.Registry.load_blocks_for_region` - Load registry for specific region
-
-Visualization Functions
-~~~~~~~~~~~~~~~~~~~~~~~
-
-Main visualization functions:
-
-.. autofunction:: geotessera.visualization.visualize_global_coverage
-
-.. autofunction:: geotessera.visualization.create_rgb_mosaic_from_geotiffs
-
-.. autofunction:: geotessera.visualization.geotiff_to_web_tiles
-
-.. autofunction:: geotessera.visualization.create_coverage_summary_map
-
-Utility Functions
-~~~~~~~~~~~~~~~~~
-
-Registry utility functions:
-
-.. autofunction:: geotessera.registry.get_tile_bounds
-
-.. autofunction:: geotessera.registry.world_to_tile_coords
-
-.. autofunction:: geotessera.registry.get_block_coordinates
 
 Examples
 --------
