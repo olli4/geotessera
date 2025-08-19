@@ -22,7 +22,7 @@ Simplified Usage:
     >>>
     >>> # Export as individual GeoTIFF files
     >>> files = gt.export_embedding_geotiffs(
-    ...     bbox=bbox, 
+    ...     bbox=bbox,
     ...     output_dir="tiles/",
     ...     bands=[0, 1, 2]  # Select specific bands
     ... )
@@ -53,6 +53,7 @@ from . import registry
 
 try:
     import importlib.metadata
+
     __version__ = importlib.metadata.version("geotessera")
 except importlib.metadata.PackageNotFoundError:
     # Fallback for development installs

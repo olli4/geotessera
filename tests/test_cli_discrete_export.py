@@ -1,9 +1,6 @@
 """Tests for CLI discrete GeoTIFF export functionality."""
 
-import pytest
 from unittest.mock import Mock, patch
-import tempfile
-from pathlib import Path
 
 from typer.testing import CliRunner
 from geotessera.cli import app
@@ -50,7 +47,7 @@ class TestCLIDiscreteExport:
         assert "--type" in result.stdout
         assert "--bands" in result.stdout
 
-    @patch('geotessera.cli.GeoTessera')
+    @patch("geotessera.cli.GeoTessera")
     def test_info_command_execution(self, mock_geotessera_class):
         """Test that info command executes without error."""
         # Mock GeoTessera instance
@@ -59,10 +56,10 @@ class TestCLIDiscreteExport:
         mock_gt_instance.get_available_years.return_value = [2022, 2023, 2024]
         mock_gt_instance.registry.loaded_blocks = {}
         mock_geotessera_class.return_value = mock_gt_instance
-        
+
         runner = CliRunner()
         result = runner.invoke(app, ["info"])
-        
+
         assert result.exit_code == 0
         assert "0.4.0" in result.stdout
         assert "2024" in result.stdout
@@ -71,7 +68,7 @@ class TestCLIDiscreteExport:
         """Test that download command requires output directory."""
         runner = CliRunner()
         result = runner.invoke(app, ["download", "--bbox", "0,51,1,52"])
-        
+
         # Should fail because --output is required
         assert result.exit_code != 0
 
@@ -79,27 +76,31 @@ class TestCLIDiscreteExport:
         """Test that download command requires either bbox or region-file."""
         runner = CliRunner()
         result = runner.invoke(app, ["download", "--output", "/tmp/test"])
-        
+
         # Should fail because neither --bbox nor --region-file is provided
         assert result.exit_code == 1  # typer.Exit(1)
         assert "Must specify either --bbox or --region-file" in result.stdout
 
-    @patch('geotessera.cli.GeoTessera')
+    @patch("geotessera.cli.GeoTessera")
     def test_download_invalid_bbox_format(self, mock_geotessera_class):
         """Test that download command validates bbox format."""
         runner = CliRunner()
-        result = runner.invoke(app, ["download", "--output", "/tmp/test", "--bbox", "invalid"])
-        
+        result = runner.invoke(
+            app, ["download", "--output", "/tmp/test", "--bbox", "invalid"]
+        )
+
         # Should fail due to invalid bbox format
         assert result.exit_code == 1
         assert "Invalid bbox format" in result.stdout
 
-    @patch('geotessera.cli.GeoTessera')
+    @patch("geotessera.cli.GeoTessera")
     def test_download_invalid_bbox_length(self, mock_geotessera_class):
         """Test that download command validates bbox has 4 values."""
         runner = CliRunner()
-        result = runner.invoke(app, ["download", "--output", "/tmp/test", "--bbox", "0,51,1"])
-        
+        result = runner.invoke(
+            app, ["download", "--output", "/tmp/test", "--bbox", "0,51,1"]
+        )
+
         # Should fail due to wrong number of bbox values
         assert result.exit_code == 1
         assert "bbox must be 'min_lon,min_lat,max_lon,max_lat'" in result.stdout

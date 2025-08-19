@@ -588,9 +588,7 @@ def scan_tiffs_from_checksums(base_dir, registry_dir, console):
                                     lat = float(lat_str)
 
                                     # Determine block coordinates (5x5 degree blocks)
-                                    block_lon, block_lat = block_from_world(
-                                        lon, lat
-                                    )
+                                    block_lon, block_lat = block_from_world(lon, lat)
 
                                     # Add to appropriate block
                                     tiff_blocks[(block_lon, block_lat)].append(
