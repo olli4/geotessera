@@ -52,7 +52,7 @@ class TestDatasetVersionParameter:
             )
     
     def test_get_available_years_uses_registry(self):
-        """Test that get_available_years delegates to registry."""
+        """Test that get_available_years is accessible through registry."""
         mock_years = [2020, 2021, 2022]
         with patch('geotessera.core.Registry') as mock_registry_class:
             mock_registry_instance = Mock()
@@ -60,7 +60,7 @@ class TestDatasetVersionParameter:
             mock_registry_class.return_value = mock_registry_instance
             
             gt = GeoTessera(dataset_version="v1")
-            years = gt.get_available_years()
+            years = gt.registry.get_available_years()
             
             assert years == mock_years
             mock_registry_instance.get_available_years.assert_called_once()
@@ -76,8 +76,8 @@ class TestGeoTIFFMetadataTags:
         # Setup mocks
         mock_registry_instance = Mock()
         mock_registry_class.return_value = mock_registry_instance
-        mock_registry_instance.load_blocks_for_region.return_value = [(51.55, -0.15)]
-        mock_registry_instance.available_embeddings = [(2024, 51.55, -0.15)]
+        mock_registry_instance.load_blocks_for_region.return_value = [(-0.15, 51.55)]
+        mock_registry_instance.available_embeddings = [(2024, -0.15, 51.55)]
         mock_registry_instance.ensure_block_loaded.return_value = None
         mock_registry_instance.fetch.return_value = "/fake/path"
         
@@ -93,10 +93,10 @@ class TestGeoTIFFMetadataTags:
         with patch('numpy.load') as mock_np_load:
             mock_np_load.side_effect = [fake_embedding, fake_scales]
             
-            with patch('geotessera.registry.tile_to_embedding_path') as mock_path:
+            with patch('geotessera.registry.tile_to_embedding_paths') as mock_path:
                 mock_path.return_value = ("/fake/embedding.npy", "/fake/scales.npy")
                 
-                with patch('geotessera.registry.get_tile_bounds') as mock_bounds:
+                with patch('geotessera.registry.tile_to_bounds') as mock_bounds:
                     mock_bounds.return_value = (-0.1, 51.5, 0.0, 51.6)
                     
                     with tempfile.TemporaryDirectory() as temp_dir:

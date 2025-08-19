@@ -26,10 +26,10 @@ from rich.progress import (
 )
 
 from .registry import (
-    get_block_coordinates,
-    get_embeddings_registry_filename,
-    get_landmasks_registry_filename,
-    parse_grid_coordinates,
+    block_from_world,
+    block_to_embeddings_registry_filename,
+    block_to_landmasks_registry_filename,
+    parse_grid_name,
 )
 
 
@@ -92,10 +92,10 @@ def find_npy_files_by_blocks(base_dir):
 
                     # Extract coordinates from the grid directory name
                     grid_dir = os.path.basename(os.path.dirname(file_path))
-                    lon, lat = parse_grid_coordinates(grid_dir)
+                    lon, lat = parse_grid_name(grid_dir)
 
                     if lon is not None and lat is not None:
-                        block_lon, block_lat = get_block_coordinates(lon, lat)
+                        block_lon, block_lat = block_from_world(lon, lat)
                         block_key = (block_lon, block_lat)
                         files_by_year_and_block[year][block_key].append(file_path)
 
@@ -114,10 +114,10 @@ def find_tiff_files_by_blocks(base_dir):
                 # Extract coordinates from the tiff filename (e.g., grid_-120.55_53.45.tiff)
                 filename = os.path.basename(file_path)
                 tiff_name = filename.replace(".tiff", "")
-                lon, lat = parse_grid_coordinates(tiff_name)
+                lon, lat = parse_grid_name(tiff_name)
 
                 if lon is not None and lat is not None:
-                    block_lon, block_lat = get_block_coordinates(lon, lat)
+                    block_lon, block_lat = block_from_world(lon, lat)
                     block_key = (block_lon, block_lat)
                     files_by_block[block_key].append(file_path)
 
@@ -467,7 +467,7 @@ def scan_embeddings_from_checksums(base_dir, registry_dir, console):
                 sha256_file = os.path.join(grid_path, "SHA256")
 
                 # Parse coordinates from grid name
-                lon, lat = parse_grid_coordinates(grid_name)
+                lon, lat = parse_grid_name(grid_name)
                 if lon is None or lat is None:
                     console.print(
                         f"  [yellow]Warning:[/yellow] Could not parse coordinates from {grid_name}"
@@ -476,7 +476,7 @@ def scan_embeddings_from_checksums(base_dir, registry_dir, console):
                     continue
 
                 # Get block coordinates
-                block_lon, block_lat = get_block_coordinates(lon, lat)
+                block_lon, block_lat = block_from_world(lon, lat)
                 block_key = (block_lon, block_lat)
 
                 # Read SHA256 file and add entries
@@ -526,7 +526,7 @@ def scan_embeddings_from_checksums(base_dir, registry_dir, console):
         os.makedirs(embeddings_dir, exist_ok=True)
 
         for (block_lon, block_lat), block_entries in sorted(blocks_for_year.items()):
-            registry_filename = get_embeddings_registry_filename(
+            registry_filename = block_to_embeddings_registry_filename(
                 year, block_lon, block_lat
             )
             registry_file = os.path.join(embeddings_dir, registry_filename)
@@ -588,7 +588,7 @@ def scan_tiffs_from_checksums(base_dir, registry_dir, console):
                                     lat = float(lat_str)
 
                                     # Determine block coordinates (5x5 degree blocks)
-                                    block_lon, block_lat = get_block_coordinates(
+                                    block_lon, block_lat = block_from_world(
                                         lon, lat
                                     )
 
@@ -622,7 +622,7 @@ def scan_tiffs_from_checksums(base_dir, registry_dir, console):
     console.print("\n[blue]Writing block-based landmasks registry files:[/blue]")
 
     for (block_lon, block_lat), block_entries in sorted(tiff_blocks.items()):
-        registry_filename = get_landmasks_registry_filename(block_lon, block_lat)
+        registry_filename = block_to_landmasks_registry_filename(block_lon, block_lat)
         registry_file = os.path.join(landmasks_dir, registry_filename)
         all_registry_files.append(registry_file)
 

@@ -1,17 +1,15 @@
 """Core GeoTessera functionality.
 
-Simplified library focusing on:
-1. Downloading tiles for lat/lon bounding boxes to numpy arrays
+The library focusses on:
+1. Downloading Tessera tiles for lat/lon bounding boxes to numpy arrays
 2. Exporting tiles to individual GeoTIFF files with accurate metadata
-
-All other functionality has been moved to separate modules or removed.
 """
 
 from pathlib import Path
 from typing import Union, List, Tuple, Optional
 import numpy as np
 
-from .registry import Registry, world_to_tile_coords
+from .registry import Registry, tile_from_world
 
 try:
     import importlib.metadata
@@ -21,7 +19,7 @@ except importlib.metadata.PackageNotFoundError:
 
 
 class GeoTessera:
-    """Simplified GeoTessera for downloading tiles and exporting GeoTIFFs.
+    """Library for downloading Tessera tiles and exporting GeoTIFFs.
     
     Core functionality:
     - Download tiles within a bounding box to numpy arrays
@@ -60,10 +58,6 @@ class GeoTessera:
         """Get the GeoTessera library version."""
         return __version__
 
-    def get_available_years(self) -> List[int]:
-        """Get list of available years."""
-        return self.registry.get_available_years()
-
     def fetch_embeddings(
         self, 
         bbox: Tuple[float, float, float, float],
@@ -78,9 +72,9 @@ class GeoTessera:
             progress_callback: Optional callback function(current, total) for progress tracking
             
         Returns:
-            List of (tile_lat, tile_lon, embedding_array, crs, transform) tuples where:
-            - tile_lat: Tile center latitude
+            List of (tile_lon, tile_lat, embedding_array, crs, transform) tuples where:
             - tile_lon: Tile center longitude
+            - tile_lat: Tile center latitude
             - embedding_array: shape (H, W, 128) with dequantized values
             - crs: CRS object from rasterio (coordinate reference system)
             - transform: Affine transform from rasterio
@@ -92,7 +86,7 @@ class GeoTessera:
         results = []
         total_tiles = len(tiles_to_download)
         
-        for i, (tile_lat, tile_lon) in enumerate(tiles_to_download):
+        for i, (tile_lon, tile_lat) in enumerate(tiles_to_download):
             try:
                 # Create a sub-progress callback for this tile's downloads
                 def tile_progress_callback(current: int, total: int, status: str = None):
@@ -102,8 +96,8 @@ class GeoTessera:
                         tile_status = f"Tile {i+1}/{total_tiles}: {status}" if status else f"Fetching tile {i+1}/{total_tiles}"
                         progress_callback(int(tile_progress), 100, tile_status)
                 
-                embedding, crs, transform = self.fetch_embedding(tile_lat, tile_lon, year, tile_progress_callback)
-                results.append((tile_lat, tile_lon, embedding, crs, transform))
+                embedding, crs, transform = self.fetch_embedding(tile_lon, tile_lat, year, tile_progress_callback)
+                results.append((tile_lon, tile_lat, embedding, crs, transform))
                 
                 # Update progress for completed tile
                 if progress_callback:
@@ -117,12 +111,12 @@ class GeoTessera:
                 
         return results
 
-    def fetch_embedding(self, lat: float, lon: float, year: int, progress_callback: Optional[callable] = None) -> Tuple[np.ndarray, object, object]:
+    def fetch_embedding(self, lon: float, lat: float, year: int, progress_callback: Optional[callable] = None) -> Tuple[np.ndarray, object, object]:
         """Fetch and dequantize a single embedding tile with CRS information.
         
         Args:
+            lon: Tile center longitude
             lat: Tile center latitude
-            lon: Tile center longitude  
             year: Year of embeddings
             progress_callback: Optional callback for download progress
             
@@ -132,13 +126,13 @@ class GeoTessera:
             - crs: CRS object from rasterio (coordinate reference system)
             - transform: Affine transform from rasterio
         """
-        from .registry import tile_to_embedding_path
+        from .registry import tile_to_embedding_paths
         
         # Ensure the block is loaded
         self.registry.ensure_block_loaded(year, lon, lat)
         
         # Get file paths
-        embedding_path, scales_path = tile_to_embedding_path(lat, lon, year)
+        embedding_path, scales_path = tile_to_embedding_paths(lon, lat, year)
         
         # Fetch the files
         embedding_file = self.registry.fetch(embedding_path, progressbar=False, progress_callback=progress_callback)
@@ -157,58 +151,16 @@ class GeoTessera:
         dequantized = quantized_embedding.astype(np.float32) * scales
         
         # Get CRS and transform from landmask
-        crs, transform = self._get_utm_projection_from_landmask(lat, lon)
+        crs, transform = self._get_utm_projection_from_landmask(lon, lat)
         
         return dequantized, crs, transform
 
-    def find_tile_for_point(self, lat: float, lon: float, year: int) -> Optional[Tuple[float, float]]:
-        """Find which tile contains a specific point using coordinate math.
-        
-        Tessera tiles are on a regular 0.1-degree grid, so we can calculate
-        the tile coordinates directly. Optionally checks registry for existence.
-        
-        Args:
-            lat: Point latitude in decimal degrees
-            lon: Point longitude in decimal degrees  
-            year: Year of embeddings (used for optional registry availability check)
-            
-        Returns:
-            Tuple of (tile_lat, tile_lon) if tile exists, None otherwise
-        """
-        from .registry import world_to_tile_coords
-        
-        # Calculate which tile this point should belong to
-        tile_lat, tile_lon = world_to_tile_coords(lat, lon)
-        
-        # Optional: Check if this tile actually exists in the registry
-        # You could skip this check for maximum performance if you trust the data
-        try:
-            # Create a small bbox around the calculated tile
-            buffer = 0.01
-            bbox = (tile_lon - buffer, tile_lat - buffer, 
-                   tile_lon + buffer, tile_lat + buffer)
-            
-            available_tiles = self.registry.load_blocks_for_region(bbox, year)
-            
-            # Check if our calculated tile is in the available tiles
-            for avail_lat, avail_lon in available_tiles:
-                if (abs(avail_lat - tile_lat) < 0.001 and 
-                    abs(avail_lon - tile_lon) < 0.001):
-                    return (tile_lat, tile_lon)  # Return the rounded version for consistency
-            
-            return None
-                
-        except Exception:
-            # If registry check fails, you might want to return the calculated tile anyway
-            # or return None to be safe - depends on your use case
-            return None
-
-    def _get_utm_projection_from_landmask(self, lat: float, lon: float):
+    def _get_utm_projection_from_landmask(self, lon: float, lat: float):
         """Get UTM projection info from corresponding landmask tile.
         
         Args:
-            lat: Tile center latitude
             lon: Tile center longitude
+            lat: Tile center latitude
             
         Returns:
             Tuple of (crs, transform) from landmask tile
@@ -226,7 +178,7 @@ class GeoTessera:
             from .registry import tile_to_landmask_filename
             
             # Get landmask filename
-            landmask_filename = tile_to_landmask_filename(lat, lon)
+            landmask_filename = tile_to_landmask_filename(lon, lat)
             
             # Ensure registry block is loaded
             self.registry.ensure_tile_block_loaded(lon, lat)
@@ -245,12 +197,12 @@ class GeoTessera:
         except Exception as e:
             if isinstance(e, (ImportError, RuntimeError)):
                 raise
-            raise RuntimeError(f"Failed to get UTM projection from landmask for ({lat:.2f}, {lon:.2f}): {e}") from e
+            raise RuntimeError(f"Failed to get UTM projection from landmask for ({lon:.2f}, {lat:.2f}): {e}") from e
 
     def export_embedding_geotiff(
         self,
-        lat: float,
         lon: float,
+        lat: float,
         output_path: Union[str, Path],
         year: int = 2024,
         bands: Optional[List[int]] = None,
@@ -259,8 +211,8 @@ class GeoTessera:
         """Export a single embedding tile as a GeoTIFF file with native UTM projection.
         
         Args:
-            lat: Tile center latitude
             lon: Tile center longitude
+            lat: Tile center latitude
             output_path: Output path for GeoTIFF file
             year: Year of embeddings to export
             bands: List of band indices to export (None = all 128 bands)
@@ -284,7 +236,7 @@ class GeoTessera:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Fetch single tile with CRS info
-        embedding, crs, transform = self.fetch_embedding(lat, lon, year)
+        embedding, crs, transform = self.fetch_embedding(lon, lat, year)
         
         # Select bands
         if bands is not None:
@@ -397,7 +349,7 @@ class GeoTessera:
         created_files = []
         total_tiles = len(tiles)
         
-        for i, (tile_lat, tile_lon, embedding, crs, transform) in enumerate(tiles):
+        for i, (tile_lon, tile_lat, embedding, crs, transform) in enumerate(tiles):
             # Create filename first for progress reporting
             filename = f"tessera_{year}_lat{tile_lat:.2f}_lon{tile_lon:.2f}.tif"
             output_path = output_dir / filename

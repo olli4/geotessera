@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 from geotessera import GeoTessera
-from geotessera.registry import tile_to_landmask_filename, world_to_tile_coords
+from geotessera.registry import tile_to_landmask_filename, tile_from_world
 
 
 class TestLandmaskUTMProjections:
@@ -22,7 +22,7 @@ class TestLandmaskUTMProjections:
     def test_landmask_utm_projections(self, lat, lon, expected_epsg, location):
         """Test that landmask tiles contain correct UTM projections for various locations."""
         # Convert to tile coordinates
-        tile_lat, tile_lon = world_to_tile_coords(lat, lon)
+        tile_lon, tile_lat = tile_from_world(lon, lat)
         
         # Get landmask filename
         landmask_filename = tile_to_landmask_filename(tile_lat, tile_lon)
@@ -75,7 +75,7 @@ class TestLandmaskUTMProjections:
         lat, lon = 51.5, -0.1
         
         # Convert to tile coordinates (should be same for both)
-        tile_lat, tile_lon = world_to_tile_coords(lat, lon)
+        tile_lon, tile_lat = tile_from_world(lon, lat)
         
         # Get filenames
         landmask_filename = tile_to_landmask_filename(tile_lat, tile_lon)
@@ -95,7 +95,7 @@ class TestLandmaskUTMProjections:
         gt = GeoTessera()
         
         # Convert to tile coordinates
-        tile_lat, tile_lon = world_to_tile_coords(lat, lon)
+        tile_lon, tile_lat = tile_from_world(lon, lat)
         
         # Get landmask filename
         landmask_filename = tile_to_landmask_filename(tile_lat, tile_lon)
@@ -113,7 +113,7 @@ class TestLandmaskUTMProjections:
         lat, lon = 51.5, -0.1  # London - should be UTM 30N (EPSG:32630)
         
         gt = GeoTessera()
-        tile_lat, tile_lon = world_to_tile_coords(lat, lon)
+        tile_lon, tile_lat = tile_from_world(lon, lat)
         landmask_filename = tile_to_landmask_filename(tile_lat, tile_lon)
         
         gt.registry.ensure_tile_block_loaded(tile_lon, tile_lat)
@@ -148,7 +148,7 @@ class TestLandmaskProjectionIntegration:
         gt = GeoTessera()
         
         # Step 1: Convert coordinates
-        tile_lat, tile_lon = world_to_tile_coords(lat, lon)
+        tile_lon, tile_lat = tile_from_world(lon, lat)
         
         # Step 2: Get landmask filename
         landmask_filename = tile_to_landmask_filename(tile_lat, tile_lon)

@@ -37,7 +37,7 @@ def calculate_bbox_from_points(
     """Calculate bounding box from point data.
     
     Args:
-        points: List of dicts with 'lat'/'lon' keys or DataFrame with lat/lon columns
+        points: List of dicts with 'lon'/'lat' keys or DataFrame with lon/lat columns
         buffer_degrees: Buffer around points in degrees
         
     Returns:
@@ -48,8 +48,8 @@ def calculate_bbox_from_points(
     else:
         df = points
         
-    if 'lat' not in df.columns or 'lon' not in df.columns:
-        raise ValueError("Points must have 'lat' and 'lon' columns")
+    if 'lon' not in df.columns or 'lat' not in df.columns:
+        raise ValueError("Points must have 'lon' and 'lat' columns")
         
     min_lon = df['lon'].min() - buffer_degrees
     max_lon = df['lon'].max() + buffer_degrees
@@ -98,76 +98,65 @@ def create_rgb_mosaic_from_geotiffs(
         if progress_callback:
             progress_callback(20, 100, "Checking coordinate systems...")
             
-        # Check if all files have the same CRS
-        first_crs = src_files[0].crs
-        different_crs = [src for src in src_files if src.crs != first_crs]
+        # Always reproject to Web Mercator for web visualization consistency
+        # This avoids alignment issues between UTM tiles that may have slightly different transforms
+        target_crs = rasterio.crs.CRS.from_epsg(3857)  # Web Mercator
         
-        if different_crs:
-            if progress_callback:
-                progress_callback(25, 100, f"Reprojecting {len(different_crs)} files to common CRS...")
-            
-            # Use rasterio's warp functionality to reproject to common CRS
+        if progress_callback:
+            progress_callback(25, 100, f"Reprojecting all files to Web Mercator for web compatibility...")
+        
+        # Always reproject all files to ensure perfect alignment
+        if True:
+            # Use rasterio's warp functionality to reproject to Web Mercator
             from rasterio.warp import reproject, calculate_default_transform, Resampling
             from rasterio.io import MemoryFile
             
-            # Create reprojected datasets for files with different CRS
+            # Create reprojected datasets for all files 
             reprojected_datasets = []
             
             for i, src in enumerate(src_files):
-                if src.crs == first_crs:
-                    # Same CRS, use as-is
-                    reprojected_datasets.append(src)
-                else:
-                    # Different CRS, reproject to first_crs
-                    if progress_callback:
-                        progress_callback(25 + int((i / len(src_files)) * 10), 100, 
-                                        f"Reprojecting file {i+1}/{len(src_files)}...")
-                    
-                    # Calculate target transform
-                    dst_transform, dst_width, dst_height = calculate_default_transform(
-                        src.crs, first_crs, src.width, src.height, *src.bounds
+                # Always reproject to Web Mercator for consistent alignment
+                if progress_callback:
+                    progress_callback(25 + int((i / len(src_files)) * 10), 100, 
+                                    f"Reprojecting file {i+1}/{len(src_files)}...")
+                
+                # Calculate target transform
+                dst_transform, dst_width, dst_height = calculate_default_transform(
+                    src.crs, target_crs, src.width, src.height, *src.bounds
+                )
+                
+                # Create in-memory reprojected dataset
+                memfile = MemoryFile()
+                dst_dataset = memfile.open(
+                    driver='GTiff',
+                    height=dst_height, width=dst_width, count=src.count,
+                    dtype=src.dtypes[0], crs=target_crs, transform=dst_transform
+                )
+                
+                # Reproject each band
+                for band_idx in range(1, src.count + 1):
+                    reproject(
+                        source=rasterio.band(src, band_idx),
+                        destination=rasterio.band(dst_dataset, band_idx),
+                        src_transform=src.transform,
+                        src_crs=src.crs,
+                        dst_transform=dst_transform,
+                        dst_crs=target_crs,
+                        resampling=Resampling.bilinear
                     )
-                    
-                    # Create in-memory reprojected dataset
-                    memfile = MemoryFile()
-                    dst_dataset = memfile.open(
-                        driver='GTiff',
-                        height=dst_height, width=dst_width, count=src.count,
-                        dtype=src.dtypes[0], crs=first_crs, transform=dst_transform
-                    )
-                    
-                    # Reproject each band
-                    for band_idx in range(1, src.count + 1):
-                        reproject(
-                            source=rasterio.band(src, band_idx),
-                            destination=rasterio.band(dst_dataset, band_idx),
-                            src_transform=src.transform,
-                            src_crs=src.crs,
-                            dst_transform=dst_transform,
-                            dst_crs=first_crs,
-                            resampling=Resampling.bilinear
-                        )
-                    
-                    reprojected_datasets.append(dst_dataset)
+                
+                reprojected_datasets.append(dst_dataset)
             
             # Now merge the reprojected datasets
             if progress_callback:
                 progress_callback(35, 100, "Merging reprojected files...")
             
             merged_array, merged_transform = merge(reprojected_datasets, method='first')
-            merged_crs = first_crs
+            merged_crs = target_crs
             
-            # Close any temporary datasets we created
-            for i, dataset in enumerate(reprojected_datasets):
-                if src_files[i].crs != first_crs:
-                    dataset.close()
-        else:
-            if progress_callback:
-                progress_callback(30, 100, "Merging GeoTIFF files...")
-                
-            # All files have same CRS, use rasterio merge
-            merged_array, merged_transform = merge(src_files, method='first')
-            merged_crs = first_crs
+            # Close all temporary datasets we created (all are reprojected now)
+            for dataset in reprojected_datasets:
+                dataset.close()
         
         if progress_callback:
             progress_callback(40, 100, f"Extracting RGB bands {bands}...")
@@ -334,27 +323,76 @@ def geotiff_to_web_tiles(
         raise RuntimeError("Neither 'gdal raster tile' nor 'gdal2tiles.py' found. Install GDAL tools.")
 
 
+def _generate_boundary_js(boundary_geojson: str) -> str:
+    """Generate JavaScript code to add boundary overlay to Leaflet map."""
+    if not boundary_geojson:
+        return "// No boundary to overlay"
+    
+    return f"""
+        // Add boundary overlay
+        var boundaryData = {boundary_geojson};
+        var boundaryLayer = L.geoJSON(boundaryData, {{
+            style: {{
+                color: '#ff0000',
+                weight: 2,
+                opacity: 0.8,
+                fillOpacity: 0.1,
+                fillColor: '#ff0000'
+            }}
+        }});
+        boundaryLayer.addTo(map);
+        
+        // Add boundary to layer control
+        overlayMaps["Region Boundary"] = boundaryLayer;
+        map.removeControl(map._controlContainer.querySelector('.leaflet-control-layers'));
+        L.control.layers(baseMaps, overlayMaps).addTo(map);
+    """
+
+
 def create_simple_web_viewer(
     tiles_dir: str,
     output_html: str,
-    center_lat: float = 0,
     center_lon: float = 0,
+    center_lat: float = 0,
     zoom: int = 10,
-    title: str = "GeoTessera Visualization"
+    title: str = "GeoTessera Visualization",
+    region_file: str = None
 ) -> str:
     """Create a simple HTML viewer for web tiles.
     
     Args:
         tiles_dir: Directory containing web tiles
         output_html: Output path for HTML file
-        center_lat: Initial map center latitude
         center_lon: Initial map center longitude
+        center_lat: Initial map center latitude
         zoom: Initial zoom level
         title: Page title
+        region_file: Optional GeoJSON/Shapefile boundary to overlay
         
     Returns:
         Path to created HTML file
     """
+    # Process region file if provided
+    boundary_geojson = None
+    if region_file:
+        try:
+            import geopandas as gpd
+            import json
+            
+            # Read the region file and convert to GeoJSON
+            gdf = gpd.read_file(region_file)
+            # Convert to WGS84 if not already
+            if gdf.crs != 'EPSG:4326':
+                gdf = gdf.to_crs('EPSG:4326')
+            
+            # Convert to GeoJSON string
+            boundary_geojson = gdf.__geo_interface__
+            boundary_geojson = json.dumps(boundary_geojson)
+            
+        except Exception as e:
+            print(f"Warning: Could not process region file {region_file}: {e}")
+            boundary_geojson = None
+    
     html_content = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -428,6 +466,9 @@ def create_simple_web_viewer(
         }};
         
         L.control.layers(baseMaps, overlayMaps).addTo(map);
+        
+        // Add boundary layer if provided
+        {_generate_boundary_js(boundary_geojson)}
         
         // Opacity slider functionality
         var opacitySlider = document.getElementById('opacity-slider');
@@ -579,8 +620,8 @@ def create_coverage_summary_map(
             "properties": {
                 "year": tile["year"],
                 "bands": tile["bands"],
-                "lat": tile["tile_lat"],
                 "lon": tile["tile_lon"],
+                "lat": tile["tile_lat"],
                 "path": Path(tile["path"]).name
             }
         }
@@ -632,7 +673,7 @@ def create_coverage_summary_map(
                 "<b>Tessera Tile</b><br>" +
                 "Year: " + props.year + "<br>" +
                 "Bands: " + props.bands + "<br>" +
-                "Position: (" + props.lat + ", " + props.lon + ")<br>" +
+                "Position: (" + props.lon + ", " + props.lat + ")<br>" +
                 "File: " + props.path;
             layer.bindPopup(popupContent);
         }}
@@ -715,8 +756,8 @@ def visualize_global_coverage(
             "Please install required packages: pip install matplotlib geodatasets"
         )
     
-    # Import get_tile_bounds from registry module
-    from .registry import get_tile_bounds
+    # Import tile_to_bounds from registry module
+    from .registry import tile_to_bounds
     
     # Load world countries from geodatasets
     if not progress_callback:
@@ -731,11 +772,11 @@ def visualize_global_coverage(
     
     # Filter embeddings by year if specified
     if year is not None:
-        tiles = [(lat, lon) for y, lat, lon in available_embeddings if y == year]
+        tiles = [(lon, lat) for y, lon, lat in available_embeddings if y == year]
         title = f"Tessera Embedding Coverage - Year {year}"
     else:
         # Get unique tile locations across all years
-        tile_set = set((lat, lon) for _, lat, lon in available_embeddings)
+        tile_set = set((lon, lat) for _, lon, lat in available_embeddings)
         tiles = list(tile_set)
         title = "Tessera Embedding Coverage - All Available Years"
     
@@ -760,14 +801,14 @@ def visualize_global_coverage(
     rectangles = []
     total_tiles = len(tiles)
     
-    for i, (lat, lon) in enumerate(tiles):
+    for i, (lon, lat) in enumerate(tiles):
         # Update progress every 100 tiles or at the end
         if progress_callback and (i % 100 == 0 or i == total_tiles - 1):
             progress = 20 + int((i / total_tiles) * 50)  # 20% to 70%
             progress_callback(progress, 100, f"Processing tile {i+1}/{total_tiles}...")
         
         # Get tile bounds using the helper function
-        west, south, east, north = get_tile_bounds(lat, lon)
+        west, south, east, north = tile_to_bounds(lon, lat)
         
         # Apply size multiplier if needed
         if tile_size != 1.0:

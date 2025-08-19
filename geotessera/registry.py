@@ -21,29 +21,55 @@ import logging
 # Configure pooch logging after importing pooch
 pooch.get_logger().setLevel(logging.ERROR)
 
-
 # Constants for block-based registry management
 BLOCK_SIZE = 5  # 5x5 degree blocks
 
+# ==============================================================================
+# COORDINATE SYSTEM HIERARCHY
+# ==============================================================================
+# This module uses a three-level coordinate hierarchy:
+# 
+# 1. BLOCKS (5×5 degrees): Registry files are organized into blocks for efficient
+#    loading. Each block contains up to 2,500 tiles (50×50 grid).
+# 
+# 2. TILES (0.1×0.1 degrees): Individual data files containing embeddings or 
+#    landmasks. Tiles are centered at 0.05-degree offsets (e.g., 0.05, 0.15, 0.25).
+# 
+# 3. WORLD: Arbitrary decimal degree coordinates provided by users.
+# 
+# Function naming convention:
+# - block_* : Operations on 5-degree registry blocks
+# - tile_*  : Operations on 0.1-degree data tiles  
+# - *_from_world : Convert from arbitrary coordinates to block/tile coords
+# ==============================================================================
 
-# Registry utility functions
-def get_block_coordinates(lon: float, lat: float) -> Tuple[int, int]:
-    """Calculate the block coordinates for a given longitude and latitude.
+# Block-level functions (5-degree registry organization)
+def block_from_world(lon: float, lat: float) -> Tuple[int, int]:
+    """Convert world coordinates to containing registry block coordinates.
+    
+    Registry blocks are 5×5 degree squares used to organize registry files.
+    Each block can contain up to 2,500 tiles.
 
     Args:
         lon: Longitude in decimal degrees
         lat: Latitude in decimal degrees
 
     Returns:
-        tuple: (block_lon, block_lat) representing the lower-left corner of the block
+        tuple: (block_lon, block_lat) lower-left corner of the containing block
+        
+    Examples:
+        >>> block_from_world(3.2, 52.7)
+        (0, 50)
+        >>> block_from_world(-7.8, -23.4)
+        (-10, -25)
     """
     block_lon = math.floor(lon / BLOCK_SIZE) * BLOCK_SIZE
     block_lat = math.floor(lat / BLOCK_SIZE) * BLOCK_SIZE
     return int(block_lon), int(block_lat)
 
 
-def get_embeddings_registry_filename(year: str, block_lon: int, block_lat: int) -> str:
-    """Generate the registry filename for a specific embeddings block.
+def block_to_embeddings_registry_filename(year: str, block_lon: int, block_lat: int) -> str:
+    """Generate registry filename for an embeddings block.
 
     Args:
         year: Year string (e.g., "2024")
@@ -59,8 +85,8 @@ def get_embeddings_registry_filename(year: str, block_lon: int, block_lat: int) 
     return f"embeddings_{year}_{lon_str}_{lat_str}.txt"
 
 
-def get_landmasks_registry_filename(block_lon: int, block_lat: int) -> str:
-    """Generate the registry filename for a specific landmask tiles block.
+def block_to_landmasks_registry_filename(block_lon: int, block_lat: int) -> str:
+    """Generate registry filename for a landmasks block.
 
     Args:
         block_lon: Block longitude (lower-left corner)
@@ -75,10 +101,10 @@ def get_landmasks_registry_filename(block_lon: int, block_lat: int) -> str:
     return f"landmasks_{lon_str}_{lat_str}.txt"
 
 
-def get_all_blocks_in_range(
+def blocks_in_bounds(
     min_lon: float, max_lon: float, min_lat: float, max_lat: float
 ) -> list:
-    """Get all block coordinates that intersect with a given bounding box.
+    """Get all registry blocks that intersect with given bounds.
 
     Args:
         min_lon: Minimum longitude
@@ -109,8 +135,32 @@ def get_all_blocks_in_range(
     return blocks
 
 
-def parse_grid_coordinates(filename: str) -> Tuple[Optional[float], Optional[float]]:
-    """Extract longitude and latitude from a grid filename.
+# Tile-level functions (0.1-degree data tiles)
+def tile_from_world(lon: float, lat: float) -> Tuple[float, float]:
+    """Convert world coordinates to containing tile center coordinates.
+    
+    Tiles are 0.1×0.1 degree squares centered at 0.05-degree offsets
+    (e.g., -0.05, 0.05, 0.15, 0.25, etc.).
+    
+    Args:
+        lon: World longitude in decimal degrees
+        lat: World latitude in decimal degrees
+    
+    Returns:
+        Tuple of (tile_lon, tile_lat) representing the tile center
+        
+    Examples:
+        >>> tile_from_world(0.17, 52.23)
+        (0.15, 52.25)
+        >>> tile_from_world(-0.12, -0.03)
+        (-0.15, -0.05)
+    """
+    tile_lon = np.floor(lon * 10) / 10 + 0.05
+    tile_lat = np.floor(lat * 10) / 10 + 0.05
+    return round(float(tile_lon), 2), round(float(tile_lat), 2)
+
+def parse_grid_name(filename: str) -> Tuple[Optional[float], Optional[float]]:
+    """Extract tile coordinates from a grid filename.
 
     Args:
         filename: Grid filename like "grid_-50.55_-20.65"
@@ -124,79 +174,57 @@ def parse_grid_coordinates(filename: str) -> Tuple[Optional[float], Optional[flo
     return None, None
 
 
-def get_tile_name(lon: float, lat: float) -> str:
-    """Generate the tile name for a specific coordinate.
+def tile_to_grid_name(lon: float, lat: float) -> str:
+    """Generate grid name for a tile.
 
     Args:
-        lon: Longitude in decimal degrees
-        lat: Latitude in decimal degrees
+        lon: Tile center longitude
+        lat: Tile center latitude
 
     Returns:
-        str: Tile name like "grid_-50.55_-20.65"
+        str: Grid name like "grid_-50.55_-20.65"
     """
     return f"grid_{lon:.2f}_{lat:.2f}"
 
 
-def world_to_tile_coords(lat: float, lon: float) -> Tuple[float, float]:
-    """Convert world coordinates to tile center coordinates.
-    
-    Tessera tiles are on a 0.1-degree grid with centers at 0.05-degree offsets
-    (e.g., -0.05, 0.05, 0.15, 0.25, etc.).
-    
-    Args:
-        lat: World latitude in decimal degrees
-        lon: World longitude in decimal degrees
-    
-    Returns:
-        Tuple of (tile_lat, tile_lon) representing the tile center coordinates
-        
-    Examples:
-        >>> world_to_tile_coords(52.23, 0.17)
-        (52.25, 0.15)
-        >>> world_to_tile_coords(-0.03, -0.12)
-        (-0.05, -0.15)
-    """
-    tile_lat = np.floor(lat * 10) / 10 + 0.05
-    tile_lon = np.floor(lon * 10) / 10 + 0.05
-    return round(float(tile_lat), 2), round(float(tile_lon), 2)
 
 
-def tile_to_embedding_path(lat: float, lon: float, year: int) -> Tuple[str, str]:
+def tile_to_embedding_paths(lon: float, lat: float, year: int) -> Tuple[str, str]:
     """Generate embedding and scales file paths for a tile.
     
     Args:
-        lat: Tile center latitude
         lon: Tile center longitude
+        lat: Tile center latitude  
         year: Year of embeddings
         
     Returns:
         Tuple of (embedding_path, scales_path)
     """
-    grid_name = get_tile_name(lon, lat)  # Note: get_tile_name uses (lon, lat) order
+    grid_name = tile_to_grid_name(lon, lat)
     embedding_path = f"{year}/{grid_name}/{grid_name}.npy"
     scales_path = f"{year}/{grid_name}/{grid_name}_scales.npy"
     return embedding_path, scales_path
 
 
-def tile_to_landmask_filename(lat: float, lon: float) -> str:
+def tile_to_landmask_filename(lon: float, lat: float) -> str:
     """Generate landmask filename for a tile.
     
     Args:
-        lat: Tile center latitude
         lon: Tile center longitude
+        lat: Tile center latitude
         
     Returns:
         Landmask filename like "grid_0.15_52.25.tiff"
     """
-    return f"{get_tile_name(lon, lat)}.tiff"  # Note: get_tile_name uses (lon, lat) order
+    return f"{tile_to_grid_name(lon, lat)}.tiff"
 
 
-def get_tile_bounds(lat: float, lon: float) -> Tuple[float, float, float, float]:
+def tile_to_bounds(lon: float, lat: float) -> Tuple[float, float, float, float]:
     """Get geographic bounds for a tile.
     
     Args:
-        lat: Tile center latitude
         lon: Tile center longitude
+        lat: Tile center latitude
         
     Returns:
         Tuple of (west, south, east, north) bounds
@@ -204,53 +232,54 @@ def get_tile_bounds(lat: float, lon: float) -> Tuple[float, float, float, float]
     return (lon - 0.05, lat - 0.05, lon + 0.05, lat + 0.05)
 
 
-def get_tile_box(lat: float, lon: float):
+def tile_to_box(lon: float, lat: float):
     """Create a Shapely box geometry for a tile.
     
     Args:
-        lat: Tile center latitude
         lon: Tile center longitude
+        lat: Tile center latitude
         
     Returns:
         Shapely box geometry representing the tile bounds
     """
     from shapely.geometry import box
-    west, south, east, north = get_tile_bounds(lat, lon)
+    west, south, east, north = tile_to_bounds(lon, lat)
     return box(west, south, east, north)
 
 
-def get_registry_path_for_tile(
+# Registry path functions
+def registry_path_for_embeddings(
     registry_base_dir: str, year: str, lon: float, lat: float
 ) -> str:
-    """Get the full path to the registry file containing a specific tile.
+    """Get the full path to the embeddings registry file for given coordinates.
 
     Args:
-        registry_base_dir: Base directory for registry files (should be the parent directory)
+        registry_base_dir: Base directory for registry files
         year: Year string (e.g., "2024")
         lon: Longitude in decimal degrees
         lat: Latitude in decimal degrees
 
     Returns:
-        str: Full path to the registry file
+        str: Full path to the embeddings registry file
     """
-    block_lon, block_lat = get_block_coordinates(lon, lat)
-    registry_filename = get_embeddings_registry_filename(year, block_lon, block_lat)
+    block_lon, block_lat = block_from_world(lon, lat)
+    registry_filename = block_to_embeddings_registry_filename(year, block_lon, block_lat)
     return os.path.join(registry_base_dir, "registry", registry_filename)
 
 
-def get_registry_path_for_tiles(registry_base_dir: str, lon: float, lat: float) -> str:
-    """Get the full path to the tiles registry file containing a specific coordinate.
+def registry_path_for_landmasks(registry_base_dir: str, lon: float, lat: float) -> str:
+    """Get the full path to the landmasks registry file for given coordinates.
 
     Args:
-        registry_base_dir: Base directory for registry files (should be the parent directory)
+        registry_base_dir: Base directory for registry files
         lon: Longitude in decimal degrees
         lat: Latitude in decimal degrees
 
     Returns:
-        str: Full path to the tiles registry file
+        str: Full path to the landmasks registry file
     """
-    block_lon, block_lat = get_block_coordinates(lon, lat)
-    registry_filename = get_landmasks_registry_filename(block_lon, block_lat)
+    block_lon, block_lat = block_from_world(lon, lat)
+    registry_filename = block_to_landmasks_registry_filename(block_lon, block_lat)
     return os.path.join(registry_base_dir, "registry", registry_filename)
 
 
@@ -521,13 +550,13 @@ class Registry:
             lon: Longitude in decimal degrees
             lat: Latitude in decimal degrees
         """
-        block_lon, block_lat = get_block_coordinates(lon, lat)
+        block_lon, block_lat = block_from_world(lon, lat)
         block_key = (year, block_lon, block_lat)
         
         if block_key in self._loaded_blocks:
             return
         
-        registry_filename = get_embeddings_registry_filename(str(year), block_lon, block_lat)
+        registry_filename = block_to_embeddings_registry_filename(str(year), block_lon, block_lat)
         
         if self._registry_dir:
             # Load from local directory
@@ -724,12 +753,12 @@ class Registry:
             year: Year of embeddings to load
             
         Returns:
-            List of (tile_lat, tile_lon) tuples for tiles available in the region
+            List of (tile_lon, tile_lat) tuples for tiles available in the region
         """
         min_lon, min_lat, max_lon, max_lat = bounds
         
         # Get all blocks that intersect with the region
-        required_blocks = get_all_blocks_in_range(min_lon, max_lon, min_lat, max_lat)
+        required_blocks = blocks_in_bounds(min_lon, max_lon, min_lat, max_lat)
         
         print(
             f"Loading {len(required_blocks)} registry blocks for region bounds: "
@@ -776,7 +805,7 @@ class Registry:
         
         # Filter tiles that are in the region for the specified year
         tiles_in_region = []
-        for emb_year, lat, lon in self._available_embeddings:
+        for emb_year, lon, lat in self._available_embeddings:
             if emb_year != year:
                 continue
                 
@@ -787,7 +816,7 @@ class Registry:
             
             if (tile_min_lon < max_lon and tile_max_lon > min_lon and
                 tile_min_lat < max_lat and tile_max_lat > min_lat):
-                tiles_in_region.append((lat, lon))
+                tiles_in_region.append((lon, lat))
         
         return tiles_in_region
     
@@ -801,13 +830,13 @@ class Registry:
             lon: Longitude in decimal degrees
             lat: Latitude in decimal degrees
         """
-        block_lon, block_lat = get_block_coordinates(lon, lat)
+        block_lon, block_lat = block_from_world(lon, lat)
         block_key = (block_lon, block_lat)
         
         if block_key in self._loaded_tile_blocks:
             return
         
-        registry_filename = get_landmasks_registry_filename(block_lon, block_lat)
+        registry_filename = block_to_landmasks_registry_filename(block_lon, block_lat)
         
         if self._registry_dir:
             # Load from local directory using block-based landmasks
@@ -850,10 +879,10 @@ class Registry:
         """Parse registry files to build index of available embedding tiles.
         
         Scans through loaded registry files to extract metadata about available
-        tiles. Each tile is identified by year, latitude, and longitude. This
+        tiles. Each tile is identified by year, longitude, and latitude. This
         method is called automatically when registry files are loaded.
         
-        The index is stored as a sorted list of (year, lat, lon) tuples for
+        The index is stored as a sorted list of (year, lon, lat) tuples for
         efficient searching and iteration.
         """
         embeddings = []
@@ -877,12 +906,12 @@ class Registry:
                                 if len(coords) == 2:
                                     lon = float(coords[0])
                                     lat = float(coords[1])
-                                    embeddings.append((year, lat, lon))
+                                    embeddings.append((year, lon, lat))
                         
                         except (ValueError, IndexError):
                             continue
         
-        # Sort by year, then lat, then lon for consistent ordering
+        # Sort by year, then lon, then lat for consistent ordering
         embeddings.sort(key=lambda x: (x[0], x[1], x[2]))
         self._available_embeddings = embeddings
     
@@ -893,7 +922,7 @@ class Registry:
         1. Provide binary land/water classification (0=water, 1=land)
         2. Store coordinate reference system metadata for proper georeferencing
         
-        This method builds an index of available land mask tiles as (lat, lon)
+        This method builds an index of available land mask tiles as (lon, lat)
         tuples for efficient lookup during merge operations.
         """
         landmasks = []
@@ -912,11 +941,11 @@ class Registry:
                         try:
                             lon = float(coords[0])
                             lat = float(coords[1])
-                            landmasks.append((lat, lon))
+                            landmasks.append((lon, lat))
                         except ValueError:
                             continue
         
-        # Sort by lat, then lon for consistent ordering
+        # Sort by lon, then lat for consistent ordering
         landmasks.sort(key=lambda x: (x[0], x[1]))
         self._available_landmasks = landmasks
     
@@ -938,10 +967,10 @@ class Registry:
             return list(range(2017, 2025))
     
     def get_available_embeddings(self) -> List[Tuple[int, float, float]]:
-        """Get list of all available embeddings as (year, lat, lon) tuples.
+        """Get list of all available embeddings as (year, lon, lat) tuples.
         
         Returns:
-            List of (year, lat, lon) tuples for all available embedding tiles
+            List of (year, lon, lat) tuples for all available embedding tiles
         """
         return self._available_embeddings.copy()
     

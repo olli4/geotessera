@@ -93,7 +93,7 @@ class TestUTMProjectionExportSimple:
         utm_transform = Affine(10.0, 0.0, 500000, 0.0, -10.0, 4000000)
         
         with patch('numpy.load', side_effect=[fake_embedding, fake_scales]):
-            with patch('geotessera.registry.tile_to_embedding_path', return_value=("/fake/emb.npy", "/fake/scales.npy")):
+            with patch('geotessera.registry.tile_to_embedding_paths', return_value=("/fake/emb.npy", "/fake/scales.npy")):
                 with patch.object(gt, '_get_utm_projection_from_landmask', return_value=(utm_crs, utm_transform)):
                     with patch('rasterio.open') as mock_rasterio_open:
                         mock_dst = Mock()
@@ -106,7 +106,7 @@ class TestUTMProjectionExportSimple:
                             
                             # Export single tile
                             result_path = gt.export_embedding_geotiff(
-                                lat=51.5, lon=-0.1,
+                                lon=-0.1, lat=51.5,
                                 output_path=str(output_path)
                             )
                             
@@ -143,7 +143,7 @@ class TestUTMProjectionExportSimple:
         
         # Mock UTM projection retrieval to fail
         with patch('numpy.load', side_effect=[fake_embedding, fake_scales]):
-            with patch('geotessera.registry.tile_to_embedding_path', return_value=("/fake/emb.npy", "/fake/scales.npy")):
+            with patch('geotessera.registry.tile_to_embedding_paths', return_value=("/fake/emb.npy", "/fake/scales.npy")):
                 with patch.object(gt, '_get_utm_projection_from_landmask', side_effect=RuntimeError("Landmask not available")):
                     with tempfile.TemporaryDirectory() as temp_dir:
                         output_path = Path(temp_dir) / "test.tif"
@@ -151,7 +151,7 @@ class TestUTMProjectionExportSimple:
                         # Export should raise exception
                         with pytest.raises(RuntimeError, match="Landmask not available"):
                             gt.export_embedding_geotiff(
-                                lat=51.5, lon=-0.1,
+                                lon=-0.1, lat=51.5,
                                 output_path=str(output_path)
                             )
 
@@ -180,7 +180,7 @@ class TestUTMProjectionExportSimple:
             utm_transform = Affine(10.0, 0.0, 500000, 0.0, -10.0, 4000000)
             
             with patch('numpy.load', side_effect=[fake_embedding, fake_scales]):
-                with patch('geotessera.registry.tile_to_embedding_path', return_value=("/fake/emb.npy", "/fake/scales.npy")):
+                with patch('geotessera.registry.tile_to_embedding_paths', return_value=("/fake/emb.npy", "/fake/scales.npy")):
                     with patch.object(gt, '_get_utm_projection_from_landmask', return_value=(utm_crs, utm_transform)):
                         with patch('rasterio.open') as mock_rasterio_open:
                             mock_dst = Mock()

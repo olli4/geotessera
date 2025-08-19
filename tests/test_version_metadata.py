@@ -46,8 +46,8 @@ class TestVersionMetadata:
             
             # Export single tile
             created_file = gt.export_embedding_geotiff(
-                lat=51.5,
                 lon=0.0,
+                lat=51.5,
                 output_path=str(output_path),
                 year=2024,
                 bands=[0, 1, 2]

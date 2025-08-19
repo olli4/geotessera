@@ -305,7 +305,7 @@ def download(
                 files = []
                 metadata = {"tiles": [], "year": year, "bbox": bbox_coords}
                 
-                for tile_lat, tile_lon, embedding_array, crs, transform in embeddings:
+                for tile_lon, tile_lat, embedding_array, crs, transform in embeddings:
                     # Apply band selection if specified
                     if bands_list:
                         embedding_array = embedding_array[:, :, bands_list]
@@ -318,8 +318,8 @@ def download(
                     
                     # Add to metadata including CRS info
                     metadata["tiles"].append({
-                        "lat": tile_lat,
                         "lon": tile_lon,
+                        "lat": tile_lat,
                         "filename": filename,
                         "shape": embedding_array.shape,
                         "bands": bands_list if bands_list else list(range(128)),
@@ -406,6 +406,11 @@ def visualize(
     bands: Annotated[Optional[str], typer.Option(
         "--bands",
         help="Comma-separated band indices"
+    )] = None,
+    region_file: Annotated[Optional[Path], typer.Option(
+        "--region-file",
+        help="GeoJSON/Shapefile boundary to overlay on visualization",
+        exists=True
     )] = None,
     normalize: Annotated[bool, typer.Option(
         "--normalize",
@@ -552,10 +557,11 @@ def visualize(
             create_simple_web_viewer(
                 tiles_dir=str(tiles_dir),
                 output_html=str(html_path),
-                center_lat=center_lat,
                 center_lon=center_lon,
+                center_lat=center_lat,
                 zoom=initial_zoom,
-                title=f"GeoTessera - {input_path}"
+                title=f"GeoTessera - {input_path}",
+                region_file=str(region_file) if region_file else None
             )
             
             rprint(f"[green]Created viewer: {html_path}[/green]")
@@ -784,7 +790,7 @@ def info(
     else:
         # Show library info
         gt = GeoTessera(dataset_version=dataset_version)
-        years = gt.get_available_years()
+        years = gt.registry.get_available_years()
         
         info_table = Table(show_header=False, box=None)
         info_table.add_row("Version:", gt.version)
@@ -914,10 +920,10 @@ def coverage(
         available_embeddings = gt.registry.get_available_embeddings()
         if available_embeddings:
             if year:
-                tile_count = len([(y, lat, lon) for y, lat, lon in available_embeddings if y == year])
+                tile_count = len([(y, lon, lat) for y, lon, lat in available_embeddings if y == year])
                 rprint(f"[cyan]📊 Tiles shown: {tile_count:,} (year {year})[/cyan]")
             else:
-                unique_tiles = len(set((lat, lon) for _, lat, lon in available_embeddings))
+                unique_tiles = len(set((lon, lat) for _, lon, lat in available_embeddings))
                 years = sorted(set(y for y, _, _ in available_embeddings))
                 rprint(f"[cyan]📊 Unique tile locations: {unique_tiles:,}[/cyan]")
                 if years:
