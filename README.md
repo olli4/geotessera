@@ -4,7 +4,12 @@ Python library for accessing and working with Tessera geospatial foundation mode
 
 ## Overview
 
-GeoTessera provides streamlined access to geospatial embeddings from the [Tessera foundation model](https://github.com/ucam-eo/tessera), which processes Sentinel-1 and Sentinel-2 satellite imagery to generate 128-channel representation maps at 10m resolution. These embeddings compress a full year of temporal-spectral features into dense representations optimized for downstream geospatial analysis tasks.
+GeoTessera provides access to geospatial embeddings from the [Tessera
+foundation model](https://github.com/ucam-eo/tessera), which processes
+Sentinel-1 and Sentinel-2 satellite imagery to generate 128-channel
+representation maps at 10m resolution. These embeddings compress a full year of
+temporal-spectral features into dense representations optimized for downstream
+geospatial analysis tasks. Read more details about [the model](https://github.com/ucam-eo/tessera).
 
 ## Table of Contents
 
@@ -477,7 +482,7 @@ create_rgb_mosaic_from_geotiffs(
 
 ### Overview
 
-GeoTessera uses a sophisticated registry system to efficiently manage and access the large Tessera dataset:
+GeoTessera uses a [registry system](https://github.com/ucam-eo/tessera-manifests] to efficiently manage and access the large Tessera dataset:
 
 - **Block-based organization**: Registry divided into 5×5 degree geographic blocks
 - **Lazy loading**: Only loads registry blocks for the region you're accessing
@@ -592,35 +597,24 @@ TESSERA_DATA_DIR=/tmp/cache geotessera download ...
    - Use `npy` format for numerical analysis (smaller, faster)
    - Use `tiff` format for GIS integration (georeferenced)
 
-## Requirements
-
-- Python 3.8+
-- NumPy - Array operations
-- Pooch - Data downloading and caching
-- Rasterio - GeoTIFF support
-- GeoPandas - Geometric operations
-- Matplotlib - Visualizations
-- Rich - CLI interface
-- Typer - CLI framework
-
 ## Contributing
 
 Contributions are welcome! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
-
-## License
-
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Citation
 
-If you use GeoTessera in your research, please cite:
+If you use Tessera in your research, please cite the [arXiv paper](https://arxiv.org/abs/2506.20380):
 
 ```bibtex
-@software{geotessera2024,
-  title = {GeoTessera: Python Interface for Tessera Geospatial Embeddings},
-  author = {University of Cambridge Earth Observation Group},
-  year = {2024},
-  url = {https://github.com/ucam-eo/geotessera}
+@misc{feng2025tesseratemporalembeddingssurface,
+      title={TESSERA: Temporal Embeddings of Surface Spectra for Earth Representation and Analysis}, 
+      author={Zhengpeng Feng and Clement Atzberger and Sadiq Jaffer and Jovana Knezevic and Silja Sormunen and Robin Young and Madeline C Lisaius and Markus Immitzer and David A. Coomes and Anil Madhavapeddy and Andrew Blake and Srinivasan Keshav},
+      year={2025},
+      eprint={2506.20380},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2506.20380}, 
 }
 ```
 
