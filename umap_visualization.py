@@ -222,18 +222,40 @@ def apply_umap_projection(data: np.ndarray, checkpoint_dir: Path = None, n_compo
 
 def normalize_to_rgb(embedding: np.ndarray):
     """Normalize UMAP embedding to 0-255 RGB range."""
-    # Normalize each component to 0-1 range
+    # Use percentile-based normalization for better color distribution
+    # This prevents extreme values from dominating the color mapping
+    percentile_low = 2
+    percentile_high = 98
+    
     rgb_normalized = np.zeros_like(embedding)
+    
     for i in range(embedding.shape[1]):
         component = embedding[:, i]
-        min_val, max_val = component.min(), component.max()
-        if max_val > min_val:
-            rgb_normalized[:, i] = (component - min_val) / (max_val - min_val)
+        # Use percentiles to clip extreme values
+        p_low = np.percentile(component, percentile_low)
+        p_high = np.percentile(component, percentile_high)
+        
+        # Clip and normalize
+        component_clipped = np.clip(component, p_low, p_high)
+        
+        if p_high > p_low:
+            rgb_normalized[:, i] = (component_clipped - p_low) / (p_high - p_low)
         else:
-            rgb_normalized[:, i] = 0.5  # Set to middle value if no variation
+            rgb_normalized[:, i] = 0.5
+    
+    # Apply a slight contrast enhancement to make colors more vivid
+    # Using a sigmoid-like transformation
+    rgb_enhanced = rgb_normalized
+    rgb_enhanced = np.clip(rgb_enhanced * 1.2 - 0.1, 0, 1)  # Boost contrast slightly
     
     # Scale to 0-255 and convert to uint8
-    rgb_255 = (rgb_normalized * 255).astype(np.uint8)
+    rgb_255 = (rgb_enhanced * 255).astype(np.uint8)
+    
+    # Print statistics for debugging
+    print(f"RGB channel statistics after normalization:")
+    print(f"  R: min={rgb_255[:, 0].min()}, max={rgb_255[:, 0].max()}, mean={rgb_255[:, 0].mean():.1f}")
+    print(f"  G: min={rgb_255[:, 1].min()}, max={rgb_255[:, 1].max()}, mean={rgb_255[:, 1].mean():.1f}")
+    print(f"  B: min={rgb_255[:, 2].min()}, max={rgb_255[:, 2].max()}, mean={rgb_255[:, 2].mean():.1f}")
     
     return rgb_255
 
@@ -243,7 +265,9 @@ def create_rgb_mosaic(tiff_files: list, reducer, scaler, output_path: Path, chec
     print("Creating RGB mosaic from all files")
     
     rgb_datasets = []
-    target_crs = None
+    # Use Web Mercator (EPSG:3857) as the common CRS for merging
+    # This ensures all tiles can be properly aligned and matches web mapping standards
+    target_crs = rasterio.crs.CRS.from_epsg(3857)
     
     # Create RGB cache directory
     rgb_cache_dir = None
@@ -260,16 +284,10 @@ def create_rgb_mosaic(tiff_files: list, reducer, scaler, output_path: Path, chec
             
             if rgb_cache_path.exists():
                 rgb_datasets.append(rgb_cache_path)
-                # Get CRS from cached file if needed
-                if target_crs is None:
-                    with rasterio.open(rgb_cache_path) as src:
-                        target_crs = src.crs
                 continue
         
         with rasterio.open(tiff_file) as src:
-            # Store the first CRS as the target
-            if target_crs is None:
-                target_crs = src.crs
+            from rasterio.warp import calculate_default_transform, reproject, Resampling
             
             data = src.read()  # Shape: (bands, height, width)
             height, width = data.shape[1], data.shape[2]
@@ -300,14 +318,23 @@ def create_rgb_mosaic(tiff_files: list, reducer, scaler, output_path: Path, chec
             # Reshape back to image format
             rgb_image = rgb_data.reshape(height, width, 3).transpose(2, 0, 1)
             
-            # Create RGB dataset profile
-            rgb_profile = src.profile.copy()
-            rgb_profile.update({
+            # Calculate target transform for reprojection to Web Mercator
+            dst_transform, dst_width, dst_height = calculate_default_transform(
+                src.crs, target_crs, src.width, src.height, *src.bounds
+            )
+            
+            # Create reprojected RGB dataset
+            rgb_profile = {
+                'driver': 'GTiff',
+                'height': dst_height,
+                'width': dst_width,
                 'count': 3,
                 'dtype': 'uint8',
-                'nodata': 0,
-                'crs': target_crs  # Ensure all files use the same CRS
-            })
+                'crs': target_crs,
+                'transform': dst_transform,
+                'compress': 'lzw',
+                'nodata': 0
+            }
             
             # Write to cache or temp file
             if rgb_cache_path:
@@ -315,8 +342,19 @@ def create_rgb_mosaic(tiff_files: list, reducer, scaler, output_path: Path, chec
             else:
                 output_rgb_path = output_path.parent / f"temp_rgb_{tiff_file.stem}.tif"
             
+            # Write and reproject RGB image to Web Mercator
             with rasterio.open(output_rgb_path, 'w', **rgb_profile) as dst:
-                dst.write(rgb_image)
+                # Reproject each RGB band
+                for i in range(3):
+                    reproject(
+                        source=rgb_image[i],
+                        destination=rasterio.band(dst, i + 1),
+                        src_transform=src.transform,
+                        src_crs=src.crs,
+                        dst_transform=dst_transform,
+                        dst_crs=target_crs,
+                        resampling=Resampling.bilinear
+                    )
             
             rgb_datasets.append(output_rgb_path)
     
