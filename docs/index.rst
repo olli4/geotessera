@@ -1,21 +1,32 @@
 GeoTessera Documentation
 ========================
 
-GeoTessera provides Python access to pre-computed geospatial embeddings from the 
-`Tessera foundation model <https://github.com/ucam-eo/tessera>`_. Tessera processes 
-Sentinel-1 and Sentinel-2 satellite imagery to generate 128-dimensional representation 
-maps at 10m spatial resolution, compressing a full year of temporal-spectral features 
-into dense geospatial embeddings.
+ `Pooch <https://www.fatiando.org/pooch/>`_
+
+GeoTessera provides access to open geospatial embeddings from the `Tessera foundation model <https://github.com/ucam-eo/tessera>`_
+(`[pdf] <https://arxiv.org/abs/2506.20380>`_). Tessera processes Sentinel-1 and
+Sentinel-2 satellite imagery to generate 128-channel representation maps at 10m
+resolution, compressing a full year of temporal-spectral features into dense
+representations optimized for downstream geospatial analysis tasks.
+
+Overview
+--------
+
+GeoTessera is built around a two-step workflow:
+
+1. **Retrieve embeddings**: Fetch raw numpy arrays for a geographic bounding box
+2. **Export to desired format**: Save as raw numpy arrays or convert to georeferenced GeoTIFF files
 
 Key Features
 ------------
 
-* **Global Coverage**: Access embeddings for any location worldwide (where data exists)
-* **High Resolution**: 10m spatial resolution preserving fine-grained details
+* **Global Coverage**: Access embeddings for any terrestrial location worldwide where data exists
+* **Flexible Formats**: Export as numpy arrays for analysis or GeoTIFF for GIS integration
+* **High Resolution**: 10m spatial resolution
 * **Temporal Compression**: Full year of satellite observations in each embedding
 * **Multi-spectral**: Combines Sentinel-1 SAR and Sentinel-2 optical data
-* **Efficient Storage**: Quantized embeddings with automatic dequantization
-* **Easy Access**: Simple Python API with automatic data fetching and caching
+* **Efficient Registry**: Block-based lazy loading of only required data
+* **Easy Access**: Python API and CLI with automatic caching
 
 Installation
 ------------
@@ -33,37 +44,131 @@ For development installation::
 Quick Start
 -----------
 
-Basic usage example::
+Check data availability first::
+
+    # Generate a coverage map
+    geotessera coverage --output coverage_map.png
+    
+    # View coverage for a specific year
+    geotessera coverage --year 2024
+
+Download embeddings in your preferred format::
+
+    # Download as GeoTIFF (georeferenced, for GIS)
+    geotessera download --bbox "-0.2,51.4,0.1,51.6" --year 2024 --output ./london_tiffs --bands 1,2,3
+    
+    # Download as numpy arrays (for analysis, all 128 bands)
+    geotessera download --bbox "-0.2,51.4,0.1,51.6" --format npy --year 2024 --output ./london_arrays
+
+    # Download tiles from a region
+    geotessera download --region-file example/CB.geojson --format npy --year 2024 --output ./cambridge
+
+
+Python API usage::
 
     from geotessera import GeoTessera
     
     # Initialize client
     gt = GeoTessera()
     
-    # Fetch embeddings for a location (Cambridge, UK)
-    embedding = gt.fetch_embedding(lat=52.2053, lon=0.1218)
-    print(f"Embedding shape: {embedding.shape}")  # (height, width, 128)
+    # Method 1: Fetch a single tile
+    embedding = gt.fetch_embedding(lat=52.05, lon=0.15, year=2024)
+    print(f"Shape: {embedding.shape}")  # e.g., (1200, 1200, 128)
     
-    # Create false-color visualization
-    gt.export_single_tile_as_tiff(
-        lat=52.20, lon=0.10,
-        output_path="cambridge.tiff",
-        bands=[10, 20, 30]  # Select 3 channels for RGB
+    # Method 2: Fetch all tiles in a bounding box
+    bbox = (-0.2, 51.4, 0.1, 51.6)  # (min_lon, min_lat, max_lon, max_lat)
+    embeddings = gt.fetch_embeddings(bbox, year=2024)
+    
+    # Export as GeoTIFF files with proper georeferencing
+    files = gt.export_embedding_geotiffs(
+        bbox=bbox,
+        output_dir="./output",
+        year=2024,
+        bands=[0, 1, 2]  # Export first 3 bands only
     )
 
-Command Line Usage
-------------------
+Create web visualizations::
 
-GeoTessera includes a comprehensive CLI::
+    # Create interactive web map from GeoTIFFs
+    geotessera visualize ./london_tiffs --type web --output ./london_web
+    geotessera serve ./london_web --open
 
-    # List available embeddings
-    geotessera list-embeddings --limit 10
-    
-    # Create visualization for a region
-    geotessera visualize --region region.json --output viz.tiff
-    
-    # Launch interactive web map
-    geotessera serve --region boundary.json --open
+Architecture Overview
+---------------------
+
+Coordinate System and Tile Grid
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The Tessera embeddings use a **0.1-degree grid system**:
+
+* **Tile size**: Each tile covers 0.1° × 0.1° (approximately 11km × 11km at the equator)
+* **Tile naming**: Tiles are named by their **center coordinates** (e.g., ``grid_0.15_52.05``)
+* **Tile bounds**: A tile at center (lon, lat) covers [lon ± 0.05°, lat ± 0.05°]
+* **Resolution**: 10m per pixel (variable pixels per tile depending on latitude)
+
+File Structure and Downloads
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When you request embeddings, GeoTessera downloads several files via Pooch:
+
+**Embedding Files** (via ``fetch_embedding``):
+
+1. **Quantized embeddings** (``grid_X.XX_Y.YY.npy``):
+   
+   * Shape: ``(height, width, 128)``
+   * Data type: int8 (quantized for storage efficiency)
+   * Contains the compressed embedding values
+
+2. **Scale files** (``grid_X.XX_Y.YY_scales.npy``):
+   
+   * Shape: ``(height, width)`` or ``(height, width, 128)``
+   * Data type: float32
+   * Contains scale factors for dequantization
+
+3. **Dequantization**: ``final_embedding = quantized_embedding * scales``
+
+**Landmask Files** (with CRS and masks for GeoTIFF export):
+
+* **Landmask tiles** (``grid_X.XX_Y.YY.tiff``):
+  
+  * Provide UTM projection information
+  * Define precise geospatial transforms
+  * Contain land/water masks
+
+Data Flow
+~~~~~~~~~
+
+::
+
+    User Request (lat/lon bbox)
+        ↓
+    Registry Lookup (find available tiles)
+        ↓
+    Download Files (via Pooch with caching)
+        ├── embedding.npy (quantized)
+        └── embedding_scales.npy
+        ↓
+    Dequantization (multiply arrays)
+        ↓
+    Output Format
+        ├── NumPy arrays → Direct analysis
+        └── GeoTIFF → GIS integration
+
+Registry System
+~~~~~~~~~~~~~~~
+
+GeoTessera uses a hosted, versioned registry system for efficient data access:
+
+* **Block-based organization**: Registry divided into 5×5 degree geographic blocks
+* **Lazy loading**: Only loads registry blocks for the region you're accessing  
+* **Automatic caching**: Downloads are cached locally using Pooch
+* **Integrity checking**: SHA256 checksums ensure data integrity
+
+The registry can be loaded from multiple sources:
+
+1. **Local directory** (via ``--registry-dir`` or ``registry_dir`` parameter)
+2. **Environment variable** (``TESSERA_REGISTRY_DIR``)
+3. **Auto-cloned repository** (default, from GitHub)
 
 Understanding Tessera Embeddings
 --------------------------------
@@ -73,7 +178,7 @@ Each embedding tile:
 * Covers a 0.1° × 0.1° area (approximately 11km × 11km at equator)
 * Contains 128 channels of learned features per pixel
 * Represents patterns from a full year of satellite observations
-* Is stored in quantized format for efficient transmission
+* Is stored in quantized format for efficient transmission and storage
 
 The 128 channels capture various environmental features learned by the
 Tessera foundation model, including vegetation patterns, water bodies,
@@ -82,14 +187,60 @@ urban structures, and seasonal changes.
 Data Organization
 -----------------
 
+**Remote Server Structure**::
+
+    dl-2.tessera.wiki/
+    ├── v1/                              # Dataset version
+    │   ├── 2024/                        # Year
+    │   │   ├── grid_0.15_52.05/         # Tile (named by center coords)
+    │   │   │   ├── grid_0.15_52.05.npy              # Quantized embeddings
+    │   │   │   └── grid_0.15_52.05_scales.npy       # Scale factors
+    │   │   └── ...
+    │   └── landmasks/
+    │       ├── grid_0.15_52.05.tiff     # Landmask with projection info
+    │       └── ...
+
+**Local Cache Structure**::
+
+    ~/.cache/geotessera/                 # Default cache location
+    ├── tessera-manifests/               # Auto-cloned registry
+    │   └── registry/
+    ├── pooch/                           # Downloaded data files
+    │   ├── grid_0.15_52.05.npy
+    │   ├── grid_0.15_52.05_scales.npy
+    │   └── ...
+
 Embeddings are organized by:
 
 * **Year**: 2017-2024 (depending on availability)
 * **Location**: Global 0.1-degree grid system
 * **Format**: NumPy arrays with shape (height, width, 128)
 
-Files are fetched on-demand from the Tessera servers via
-HTTPS and cached locally for subsequent use.
+Environment Configuration
+-------------------------
+
+You can configure GeoTessera using environment variables::
+
+    # Set custom cache directory for downloaded files
+    export TESSERA_DATA_DIR=/path/to/cache
+    
+    # Use local registry directory  
+    export TESSERA_REGISTRY_DIR=/path/to/tessera-manifests
+    
+    # Or configure per-command
+    TESSERA_DATA_DIR=/tmp/cache geotessera download ...
+
+Documentation Sections
+-----------------------
+
+.. toctree::
+   :maxdepth: 2
+   :caption: User Guide:
+   
+   quickstart
+   architecture
+   tutorials
+   cli_reference
 
 .. toctree::
    :maxdepth: 2
@@ -105,3 +256,9 @@ HTTPS and cached locally for subsequent use.
    Tessera Model <https://github.com/ucam-eo/tessera>
    Issue Tracker <https://github.com/ucam-eo/geotessera/issues>
 
+Indices and tables
+==================
+
+* :ref:`genindex`
+* :ref:`modindex`
+* :ref:`search`

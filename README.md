@@ -1,26 +1,22 @@
 # GeoTessera
 
-Python library interface to the Tessera geofoundation model embeddings.
+Python library for accessing and working with Tessera geospatial foundation model embeddings.
 
 ## Overview
 
-GeoTessera provides access to geospatial embeddings from the [Tessera foundation model](https://github.com/ucam-eo/tessera), which processes Sentinel-1 and Sentinel-2 satellite imagery to generate 128-channel representation maps at 10m resolution. The embeddings compress a full year of temporal-spectral features into useful representations for geospatial analysis tasks.
+GeoTessera provides streamlined access to geospatial embeddings from the [Tessera foundation model](https://github.com/ucam-eo/tessera), which processes Sentinel-1 and Sentinel-2 satellite imagery to generate 128-channel representation maps at 10m resolution. These embeddings compress a full year of temporal-spectral features into dense representations optimized for downstream geospatial analysis tasks.
 
-## Data Coverage
+## Table of Contents
 
-![My Real-time Map](map.png)
-
-## Features
-
-- **Flexible Registry Sources**: Use local registry files, remote downloads, or auto-cloned repositories
-- **Efficient Block-Based Loading**: Lazy loading of registry data using 5×5 degree geographic blocks
-- **Environment Variable Support**: Configure registry location via `TESSERA_REGISTRY_DIR`
-- **Auto-Updating Manifests**: Automatically clone and update registry manifests from GitHub
-- **Geographic Data Access**: Download geospatial embeddings for specific coordinates
-- **Comprehensive CLI**: List tiles, create visualizations, serve interactive maps
-- **Built-in Caching**: Efficient local caching of downloaded files with Pooch
-- **Registry Management Tools**: Generate and maintain registry files for data maintainers
-- **Robust Error Handling**: Fatal errors for missing tiles ensure data integrity
+- [Installation](#installation)
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Python API](#python-api)
+- [CLI Reference](#cli-reference)
+- [Complete Workflows](#complete-workflows)
+- [Registry System](#registry-system)
+- [Data Organization](#data-organization)
+- [Contributing](#contributing)
 
 ## Installation
 
@@ -28,297 +24,609 @@ GeoTessera provides access to geospatial embeddings from the [Tessera foundation
 pip install geotessera
 ```
 
-## Configuration
-
-GeoTessera supports multiple configuration options for both data caching and registry management.
-
-### Data Cache Configuration
-
-Files are cached in the system's default cache directory (`~/.cache/geotessera` on Unix-like systems). You can customize this:
-
+For development:
 ```bash
-# Set custom cache directory
-export TESSERA_DATA_DIR=/path/to/your/cache/directory
-
-# Or set for a single command
-TESSERA_DATA_DIR=/tmp/tessera geotessera info
+git clone https://github.com/ucam-eo/geotessera
+cd geotessera
+pip install -e .
 ```
 
-### Registry Configuration
+## Architecture
 
-GeoTessera can load registry files from multiple sources, checked in this priority order:
+### Core Concepts
 
-1. **Explicit registry directory** (via `--registry-dir` or constructor parameter)
-2. **Environment variable** (`TESSERA_REGISTRY_DIR`)
-3. **Auto-cloned manifests repository** (default behavior)
+GeoTessera is built around a simple two-step workflow:
 
-#### Using Environment Variable
+1. **Retrieve embeddings**: Fetch raw numpy arrays for a geographic bounding box
+2. **Export to desired format**: Save as raw numpy arrays or convert to georeferenced GeoTIFF files
 
-```bash
-# Point to local registry directory
-export TESSERA_REGISTRY_DIR=/path/to/tessera-manifests
+### Coordinate System and Tile Grid
 
-# Use with any command
-geotessera info
+The Tessera embeddings use a **0.1-degree grid system**:
+
+- **Tile size**: Each tile covers 0.1° × 0.1° (approximately 11km × 11km at the equator)
+- **Tile naming**: Tiles are named by their **center coordinates** (e.g., `grid_0.15_52.05`)
+- **Tile bounds**: A tile at center (lon, lat) covers:
+  - Longitude: [lon - 0.05°, lon + 0.05°]
+  - Latitude: [lat - 0.05°, lat + 0.05°]
+- **Resolution**: 10m per pixel (variable number of pixels per tile depending on latitude)
+
+### File Structure and Downloads
+
+When you request embeddings, GeoTessera downloads several files via Pooch:
+
+#### Embedding Files (via `fetch_embedding`)
+1. **Quantized embeddings** (`grid_X.XX_Y.YY.npy`):
+   - Shape: `(height, width, 128)` 
+   - Data type: int8 (quantized for storage efficiency)
+   - Contains the compressed embedding values
+
+2. **Scale files** (`grid_X.XX_Y.YY_scales.npy`):
+   - Shape: `(height, width)` or `(height, width, 128)`
+   - Data type: float32
+   - Contains scale factors for dequantization
+
+3. **Dequantization**: `final_embedding = quantized_embedding * scales`
+
+#### Landmask Files (for GeoTIFF export)
+When exporting to GeoTIFF, additional landmask files are fetched:
+- **Landmask tiles** (`grid_X.XX_Y.YY.tiff`):
+  - Provide UTM projection information
+  - Define precise geospatial transforms
+  - Contain land/water masks
+
+### Data Flow
+
+```
+User Request (lat/lon bbox)
+    ↓
+Registry Lookup (find available tiles)
+    ↓
+Download Files (via Pooch with caching)
+    ├── embedding.npy (quantized)
+    └── embedding_scales.npy
+    ↓
+Dequantization (multiply arrays)
+    ↓
+Output Format
+    ├── NumPy arrays → Direct analysis
+    └── GeoTIFF → GIS integration
 ```
 
-#### Using Auto-Cloned Repository
+## Quick Start
 
-By default, GeoTessera automatically clones the [tessera-manifests](https://github.com/ucam-eo/tessera-manifests) repository to your cache directory. This can be configured:
+### Check Available Data
+
+Before downloading, check what data is available:
+
+```bash
+# Generate a coverage map showing all available tiles
+geotessera coverage --output coverage_map.png
+
+# View coverage for a specific year
+geotessera coverage --year 2024 --output coverage_2024.png
+
+# Customize the visualization
+geotessera coverage --year 2024 --tile-color blue --tile-alpha 0.3 --dpi 150
+```
+
+### Download Embeddings
+
+Download embeddings as either numpy arrays or GeoTIFF files:
+
+```bash
+# Download as GeoTIFF (default, with georeferencing)
+geotessera download \
+  --bbox "-0.2,51.4,0.1,51.6" \
+  --year 2024 \
+  --output ./london_tiffs
+
+# Download as raw numpy arrays (with metadata JSON)
+geotessera download \
+  --bbox "-0.2,51.4,0.1,51.6" \
+  --format npy \
+  --year 2024 \
+  --output ./london_arrays
+
+# Download using a GeoJSON/Shapefile region
+geotessera download \
+  --region-file cambridge.geojson \
+  --format tiff \
+  --year 2024 \
+  --output ./cambridge_tiles
+
+# Download specific bands only
+geotessera download \
+  --bbox "-0.2,51.4,0.1,51.6" \
+  --bands "0,1,2" \
+  --year 2024 \
+  --output ./london_rgb
+```
+
+### Create Visualizations
+
+Generate web maps from downloaded GeoTIFFs:
+
+```bash
+# Create an interactive web map
+geotessera visualize \
+  ./london_tiffs \
+  --type web \
+  --output ./london_web
+
+# Create an RGB mosaic
+geotessera visualize \
+  ./london_tiffs \
+  --type rgb \
+  --bands "30,60,90" \
+  --output ./london_rgb
+
+# Serve the web map locally
+geotessera serve ./london_web --open
+```
+
+## Python API
+
+### Core Methods
+
+The library provides two main methods for retrieving embeddings:
 
 ```python
 from geotessera import GeoTessera
 
-# Use default auto-cloning
-tessera = GeoTessera()
+# Initialize the client
+gt = GeoTessera()
 
-# Auto-update to latest manifests
-tessera = GeoTessera(auto_update=True)
+# Method 1: Fetch a single tile
+embedding, crs, transform = gt.fetch_embedding(lat=52.05, lon=0.15, year=2024)
+print(f"Shape: {embedding.shape}")  # e.g., (1200, 1200, 128)
+print(f"CRS: {crs}")  # Coordinate reference system from landmask
+
+# Method 2: Fetch all tiles in a bounding box
+bbox = (-0.2, 51.4, 0.1, 51.6)  # (min_lon, min_lat, max_lon, max_lat)
+embeddings = gt.fetch_embeddings(bbox, year=2024)
+
+for tile_lat, tile_lon, embedding_array, crs, transform in embeddings:
+    print(f"Tile ({tile_lat}, {tile_lon}): {embedding_array.shape}")
+```
+
+### Export Formats
+
+#### Export as GeoTIFF
+
+```python
+# Export embeddings for a region as individual GeoTIFF files
+files = gt.export_embedding_geotiffs(
+    bbox=(-0.2, 51.4, 0.1, 51.6),
+    output_dir="./output",
+    year=2024,
+    bands=None,  # Export all 128 bands (default)
+    compress="lzw"  # Compression method
+)
+
+print(f"Created {len(files)} GeoTIFF files")
+
+# Export specific bands only (e.g., first 3 for RGB visualization)
+files = gt.export_embedding_geotiffs(
+    bbox=(-0.2, 51.4, 0.1, 51.6),
+    output_dir="./rgb_output",
+    year=2024,
+    bands=[0, 1, 2]  # Only export first 3 bands
+)
+```
+
+#### Work with NumPy Arrays
+
+```python
+# Fetch and process embeddings directly
+embeddings = gt.fetch_embeddings(bbox, year=2024)
+
+for lat, lon, embedding, crs, transform in embeddings:
+    # Compute statistics
+    mean_values = np.mean(embedding, axis=(0, 1))  # Mean per channel
+    std_values = np.std(embedding, axis=(0, 1))    # Std per channel
+    
+    # Extract specific pixels
+    center_pixel = embedding[embedding.shape[0]//2, embedding.shape[1]//2, :]
+    
+    # Apply custom processing
+    processed = your_analysis_function(embedding)
+```
+
+### Visualization Functions
+
+```python
+from geotessera.visualization import (
+    create_rgb_mosaic_from_geotiffs,
+    create_coverage_summary_map,
+    visualize_global_coverage,
+    geotiff_to_web_tiles
+)
+
+# Create an RGB mosaic from multiple GeoTIFF files
+create_rgb_mosaic_from_geotiffs(
+    geotiff_paths=["tile1.tif", "tile2.tif"],
+    output_path="mosaic.tif",
+    bands=(0, 1, 2),  # RGB bands
+    normalize=True  # Normalize to 0-255
+)
+
+# Generate web tiles for interactive maps
+geotiff_to_web_tiles(
+    geotiff_path="mosaic.tif",
+    output_dir="./web_tiles",
+    zoom_levels=(8, 15)
+)
+
+# Create a global coverage visualization
+visualize_global_coverage(
+    tessera_client=gt,
+    output_path="global_coverage.png",
+    year=2024,  # Or None for all years
+    figsize=(20, 10),
+    dpi=100,
+    tile_color="red",
+    tile_alpha=0.6
+)
+```
+
+## CLI Reference
+
+### download
+
+Download embeddings for a region in your preferred format:
+
+```bash
+geotessera download [OPTIONS]
+
+Options:
+  -o, --output PATH         Output directory [required]
+  --bbox TEXT              Bounding box: 'min_lon,min_lat,max_lon,max_lat'
+  --region-file PATH       GeoJSON/Shapefile to define region
+  -f, --format TEXT        Output format: 'tiff' or 'npy' (default: tiff)
+  --year INT               Year of embeddings (default: 2024)
+  --bands TEXT             Comma-separated band indices (default: all 128)
+  --compress TEXT          Compression for TIFF format (default: lzw)
+  --list-files             List all created files with details
+  -v, --verbose            Verbose output
+```
+
+Output formats:
+- **tiff**: Georeferenced GeoTIFF files with UTM projection
+- **npy**: Raw numpy arrays with metadata.json file
+
+### visualize
+
+Create visualizations from GeoTIFF files:
+
+```bash
+geotessera visualize INPUT_PATH [OPTIONS]
+
+Options:
+  -o, --output PATH        Output directory [required]
+  --type TEXT              Visualization type: rgb, web, coverage
+  --bands TEXT             Comma-separated band indices for RGB
+  --normalize              Normalize bands
+  --min-zoom INT           Min zoom for web tiles (default: 8)
+  --max-zoom INT           Max zoom for web tiles (default: 15)
+  --force                  Force regeneration of tiles
+```
+
+### coverage
+
+Generate a world map showing data availability:
+
+```bash
+geotessera coverage [OPTIONS]
+
+Options:
+  -o, --output PATH        Output PNG file (default: tessera_coverage.png)
+  --year INT               Specific year to visualize
+  --tile-color TEXT        Color for tiles (default: red)
+  --tile-alpha FLOAT       Transparency 0-1 (default: 0.6)
+  --tile-size FLOAT        Size multiplier (default: 1.0)
+  --dpi INT                Output resolution (default: 100)
+  --width INT              Figure width in inches (default: 20)
+  --height INT             Figure height in inches (default: 10)
+  --no-countries           Don't show country boundaries
+```
+
+### serve
+
+Serve web visualizations locally:
+
+```bash
+geotessera serve DIRECTORY [OPTIONS]
+
+Options:
+  -p, --port INT           Port number (default: 8000)
+  --open/--no-open         Auto-open browser (default: open)
+  --html TEXT              Specific HTML file to serve
+```
+
+### info
+
+Display information about GeoTIFF files or the library:
+
+```bash
+geotessera info [OPTIONS]
+
+Options:
+  --geotiffs PATH          Analyze GeoTIFF files/directory
+  --dataset-version TEXT   Tessera dataset version
+  -v, --verbose            Verbose output
+```
+
+## Complete Workflows
+
+### Example 1: NumPy Array Analysis
+
+```python
+from geotessera import GeoTessera
+import numpy as np
+
+# Initialize client
+gt = GeoTessera()
+
+# Define area of interest
+bbox = (-0.15, 52.15, 0.0, 52.25)  # Cambridge area
+
+# Fetch embeddings as numpy arrays
+embeddings = gt.fetch_embeddings(bbox, year=2024)
+
+# Save arrays with metadata
+import json
+metadata = {"tiles": [], "bbox": bbox, "year": 2024}
+
+for lat, lon, embedding, crs, transform in embeddings:
+    # Save numpy array
+    filename = f"tile_{lat:.2f}_{lon:.2f}.npy"
+    np.save(filename, embedding)
+    
+    # Record metadata
+    metadata["tiles"].append({
+        "lat": lat,
+        "lon": lon,
+        "filename": filename,
+        "shape": embedding.shape
+    })
+    
+    # Perform analysis
+    print(f"Tile ({lat:.2f}, {lon:.2f}):")
+    print(f"  Shape: {embedding.shape}")
+    print(f"  Mean values (first 5 bands): {np.mean(embedding, axis=(0,1))[:5]}")
+    print(f"  Data range: [{embedding.min():.2f}, {embedding.max():.2f}]")
+
+# Save metadata
+with open("metadata.json", "w") as f:
+    json.dump(metadata, f, indent=2)
+```
+
+### Example 2: GeoTIFF Export for GIS
+
+```bash
+# 1. Download as GeoTIFF for GIS software
+geotessera download \
+  --bbox "-0.2,51.4,0.1,51.6" \
+  --format tiff \
+  --year 2024 \
+  --compress lzw \
+  --output ./london_tiles
+
+# 2. Create RGB visualization
+geotessera visualize \
+  ./london_tiles \
+  --type rgb \
+  --bands "10,30,50" \
+  --normalize \
+  --output ./london_viz
+
+# 3. Generate web tiles
+geotessera visualize \
+  ./london_tiles \
+  --type web \
+  --min-zoom 8 \
+  --max-zoom 15 \
+  --output ./london_web
+
+# 4. Serve interactive map
+geotessera serve ./london_web --open
+```
+
+### Example 3: Mixed Format Workflow
+
+```python
+from geotessera import GeoTessera
+from geotessera.visualization import create_rgb_mosaic_from_geotiffs
+
+gt = GeoTessera()
+bbox = (-0.1, 51.5, 0.0, 51.55)
+
+# Step 1: Fetch as numpy for analysis
+embeddings = gt.fetch_embeddings(bbox, year=2024)
+
+# Analyze embeddings
+selected_tiles = []
+for lat, lon, embedding, crs, transform in embeddings:
+    # Custom selection criteria
+    mean_band_50 = np.mean(embedding[:, :, 50])
+    if mean_band_50 > threshold:
+        selected_tiles.append((lat, lon))
+
+# Step 2: Export selected tiles as GeoTIFF
+files = []
+for lat, lon in selected_tiles:
+    file = gt.export_single_tile_as_tiff(
+        lat=lat, lon=lon,
+        output_path=f"selected_{lat:.2f}_{lon:.2f}.tif",
+        year=2024,
+        bands=[10, 30, 50]  # Custom band selection
+    )
+    files.append(file)
+
+# Step 3: Create mosaic
+create_rgb_mosaic_from_geotiffs(
+    geotiff_paths=files,
+    output_path="selected_mosaic.tif",
+    bands=(0, 1, 2),  # Already filtered to 3 bands
+    normalize=True
+)
+```
+
+## Registry System
+
+### Overview
+
+GeoTessera uses a sophisticated registry system to efficiently manage and access the large Tessera dataset:
+
+- **Block-based organization**: Registry divided into 5×5 degree geographic blocks
+- **Lazy loading**: Only loads registry blocks for the region you're accessing
+- **Automatic caching**: Downloads are cached locally using Pooch
+- **Integrity checking**: SHA256 checksums ensure data integrity
+
+### Registry Sources
+
+The registry can be loaded from multiple sources (in priority order):
+
+1. **Local directory** (via `--registry-dir` or `registry_dir` parameter)
+2. **Environment variable** (`TESSERA_REGISTRY_DIR`)
+3. **Auto-cloned repository** (default, from GitHub)
+
+```python
+# Use local registry
+gt = GeoTessera(registry_dir="/path/to/tessera-manifests")
+
+# Use auto-updating registry
+gt = GeoTessera(auto_update=True)
 
 # Use custom manifest repository
-tessera = GeoTessera(
+gt = GeoTessera(
     manifests_repo_url="https://github.com/your-org/custom-manifests.git"
 )
 ```
 
-## Usage
-
-### Command Line Interface
-
-All CLI commands support registry configuration options:
-
-```bash
-# Global options available for all commands:
-# --registry-dir PATH          Use local registry directory
-# --auto-update               Update manifests to latest version
-# --manifests-repo-url URL    Custom manifests repository URL
-```
-
-#### Basic Commands
-
-Make this `uv --from git+https://github.com/ucam-eo/geotessera@main` if you don't want to clone this repository.
-
-```bash
-# List available embeddings
-uvx geotessera list-embeddings --limit 10
-
-# Show dataset information  
-uvx geotessera info
-
-# Generate world map showing embedding coverage
-uvx geotessera map --output coverage_map.png
-```
-
-#### Using Local Registry
-
-```bash
-# Use local registry directory
-uvx geotessera \
-  --registry-dir /path/to/tessera-manifests info
-
-# Auto-update manifests before use
-uvx geotessera \
-  --auto-update info
-```
-
-#### Visualization Commands
-
-```bash
-# Create false-color visualization for a region
-uvx geotessera visualize \
-  --topojson example/CB.geojson --output cambridge_viz.tiff
-
-# Serve interactive web map
-uvx geotessera serve --geojson example/CB.geojson --open
-
-# Serve with custom band selection (e.g., bands 30, 60, 90)
-uvx geotessera serve \
-  --geojson example/CB.geojson --bands 30 60 90 --open
-```
-
-If you have the repository checked out, use `--from .` instead.
-
-### Python API
-
-```python
-from geotessera import GeoTessera
-
-# Initialize with default settings (auto-clone manifests)
-tessera = GeoTessera()
-
-# Use local registry directory
-tessera = GeoTessera(
-    version="v1",
-    registry_dir="/path/to/tessera-manifests"
-)
-
-# Auto-update manifests to latest version
-tessera = GeoTessera(
-    version="v1", 
-    auto_update=True
-)
-
-# Use custom manifests repository
-tessera = GeoTessera(
-    version="v1",
-    manifests_repo_url="https://github.com/your-org/custom-manifests.git"
-)
-
-# Download and get dequantized embedding for specific coordinates
-embedding = tessera.fetch_embedding(lat=52.05, lon=0.15, year=2024)
-print(f"Embedding shape: {embedding.shape}")  # (height, width, 128)
-
-# List available embeddings for exploration
-for year, lat, lon in tessera.list_available_embeddings():
-    print(f"Year {year}: ({lat:.2f}, {lon:.2f})")
-
-# Get available years
-years = tessera.get_available_years()
-print(f"Available years: {years}")
-
-# Find tiles that intersect with a geometry
-from shapely.geometry import box
-geometry = box(-0.2, 51.9, 0.3, 52.3)  # Cambridge area
-tiles = tessera.find_tiles_for_geometry(geometry, year=2024)
-print(f"Found {len(tiles)} tiles for the geometry")
-
-# Extract embeddings at specific points
-points = [(52.2053, 0.1218), (52.1951, 0.1313)]  # Cambridge locations
-embeddings_df = tessera.extract_points(points, year=2024, include_coords=True)
-print(f"Extracted embeddings shape: {embeddings_df.shape}")
-
-# Get tile metadata
-bounds = tessera.get_tile_bounds(lat=52.05, lon=0.15)
-crs = tessera.get_tile_crs(lat=52.05, lon=0.15)
-transform = tessera.get_tile_transform(lat=52.05, lon=0.15)
-print(f"Tile bounds: {bounds}")
-print(f"Tile CRS: {crs}")
-
-# Export single tile as GeoTIFF
-tessera.export_single_tile_as_tiff(
-    lat=52.05, lon=0.15, 
-    output_path="tile.tiff",
-    year=2024,
-    bands=[0, 1, 2]  # RGB visualization
-)
-
-# Merge embeddings for a region
-bounds = (-0.2, 51.9, 0.3, 52.3)  # (west, south, east, north)
-tessera.merge_embeddings_for_region(
-    bounds=bounds,
-    output_path="region.tiff",
-    target_crs="EPSG:4326",
-    bands=[0, 1, 2],
-    year=2024
-)
-```
-
-## Registry Architecture
-
-GeoTessera uses a block-based registry system for efficient data access to the needed tiles:
-
-### Block-Based Organization
-
-- **5×5 degree geographic blocks**: Registry files are organized into blocks to enable lazy loading
-- **Embeddings**: `embeddings_YYYY_lonX_latY.txt` (e.g., `embeddings_2024_lon-5_lat50.txt`)
-- **Landmasks**: `landmasks_lonX_latY.txt` (e.g., `landmasks_lon0_lat50.txt`)
-- **Lazy Loading**: Only loads registry files for geographic regions being accessed
-
-### Registry Directory Structure
+### Registry Structure
 
 ```
 tessera-manifests/
-├── registry/
-│   ├── embeddings/
-│   │   ├── embeddings_2024_lon-180_lat-90.txt
-│   │   ├── embeddings_2024_lon-175_lat-90.txt
+└── registry/
+    ├── embeddings/
+    │   ├── embeddings_2024_lon-5_lat50.txt    # 5×5° block
+    │   ├── embeddings_2024_lon0_lat50.txt
+    │   └── ...
+    └── landmasks/
+        ├── landmasks_lon-5_lat50.txt
+        ├── landmasks_lon0_lat50.txt
+        └── ...
+```
+
+Each registry file contains:
+```
+# Pooch registry format
+filepath SHA256checksum
+2024/grid_0.15_52.05/grid_0.15_52.05.npy sha256:abc123...
+2024/grid_0.15_52.05/grid_0.15_52.05_scales.npy sha256:def456...
+```
+
+### How Registry Loading Works
+
+1. **Request tiles for bbox** → Determine which 5×5° blocks overlap
+2. **Load block registries** → Parse only the needed registry files
+3. **Find available tiles** → List tiles within the requested region
+4. **Fetch via Pooch** → Download with caching and integrity checks
+
+## Data Organization
+
+### Tessera Data Structure
+
+```
+Remote Server (dl-2.tessera.wiki)
+├── v1/                              # Dataset version
+│   ├── 2024/                        # Year
+│   │   ├── grid_0.15_52.05/         # Tile (named by center coords)
+│   │   │   ├── grid_0.15_52.05.npy              # Quantized embeddings
+│   │   │   └── grid_0.15_52.05_scales.npy       # Scale factors
 │   │   └── ...
 │   └── landmasks/
-│       ├── landmasks_lon-180_lat-90.txt
-│       ├── landmasks_lon-175_lat-90.txt
+│       ├── grid_0.15_52.05.tiff     # Landmask with projection info
 │       └── ...
 ```
 
-### Registry File Format
-
-Registry files use Pooch-compatible format for data integrity:
+### Local Cache Structure
 
 ```
-# Format: filepath checksum
-v1/2024/grid_0.15_52.05/embedding.npy 2a1c8d7e9f3b5a6c8e7d9f2a1c8d7e9f3b5a6c8e7d9f2a1c8d7e9f3b5a6c8e7d
-v1/2024/grid_0.15_52.05/embedding_scales.npy 5f9e2d1a8c6b9e3f7d2a8c6b9e3f7d2a8c6b9e3f7d2a8c6b9e3f7d2a8c6b9
-```
-
-## Registry Management (Data Maintainers)
-
-GeoTessera includes tools for generating and maintaining registry files. The registry system uses block-based organization for efficient access to large datasets.
-
-### Registry Generation Workflow
-
-```bash
-# 1. Generate SHA256 checksums for data files
-uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera-registry hash /path/to/v1
-
-# 2. Scan checksums and create block-based pooch registries  
-uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera-registry scan /path/to/v1
-
-# 3. List generated registry files
-uvx --from git+https://github.com/ucam-eo/geotessera@main geotessera-registry list /path/to/v1
-```
-
-### Expected Data Structure
-
-The registry tools expect this directory structure:
-
-```
-v1/
-├── global_0.1_degree_representation/  # Embedding .npy files by year
-│   ├── 2024/
-│   │   ├── grid_0.15_52.05/
-│   │   │   ├── embedding.npy
-│   │   │   ├── embedding_scales.npy  
-│   │   │   └── SHA256               # Generated by hash command
-│   │   └── ...
+~/.cache/geotessera/                 # Default cache location
+├── tessera-manifests/                # Auto-cloned registry
+│   └── registry/
+├── pooch/                            # Downloaded data files
+│   ├── grid_0.15_52.05.npy
+│   ├── grid_0.15_52.05_scales.npy
 │   └── ...
-└── global_0.1_degree_tiff_all/        # Landmask .tiff files
-    ├── grid_0.15_52.05.tiff
-    ├── SHA256SUM                      # Generated by hash command
-    └── ...
 ```
 
-### Registry Commands
+### Coordinate Reference Systems
+
+- **Embeddings**: Stored in simple arrays, referenced by center coordinates
+- **GeoTIFF exports**: Use UTM projection from corresponding landmask tiles
+- **Web visualizations**: Reprojected to Web Mercator (EPSG:3857)
+
+## Environment Variables
 
 ```bash
-# Generate SHA256 checksums (parallel processing)
-geotessera-registry hash /path/to/data
-# - Creates SHA256 files in each grid subdirectory
-# - Creates SHA256SUM file for TIFF files using chunked processing
+# Set custom cache directory for downloaded files
+export TESSERA_DATA_DIR=/path/to/cache
 
-# Generate block-based pooch registries from checksums
-geotessera-registry scan /path/to/data [--registry-dir /output/path]
-# - Reads SHA256 files and creates registry/embeddings/ files
-# - Reads SHA256SUM and creates registry/landmasks/ files
-# - Organizes into 5×5 degree blocks for efficient loading
+# Use local registry directory
+export TESSERA_REGISTRY_DIR=/path/to/tessera-manifests
 
-# List existing registry files with entry counts
-geotessera-registry list /path/to/registry
+# Configure per-command
+TESSERA_DATA_DIR=/tmp/cache geotessera download ...
 ```
 
-## Error Handling
+## Performance Tips
 
-GeoTessera now provides robust error handling to ensure data integrity:
+1. **Use bounding boxes efficiently**: Request only the region you need
+2. **Cache management**: Files are cached locally after first download
+3. **Band selection**: Export only required bands to reduce file sizes
+4. **Format choice**: 
+   - Use `npy` format for numerical analysis (smaller, faster)
+   - Use `tiff` format for GIS integration (georeferenced)
 
-- **Fatal Errors**: Missing embedding tiles throw exceptions instead of silent warnings
-- **Registry Validation**: Missing registry files cause fatal errors during initialization
-- **Checksum Verification**: All downloaded files are verified against SHA256 checksums
-- **Clear Error Messages**: Descriptive errors help diagnose configuration issues
+## Requirements
 
-## About Tessera
+- Python 3.8+
+- NumPy - Array operations
+- Pooch - Data downloading and caching
+- Rasterio - GeoTIFF support
+- GeoPandas - Geometric operations
+- Matplotlib - Visualizations
+- Rich - CLI interface
+- Typer - CLI framework
 
-Tessera is a foundation model for Earth observation developed by the University of Cambridge. It learns temporal-spectral features from multi-source satellite data to enable advanced geospatial analysis including land classification and canopy height prediction.
+## Contributing
 
-For more information about the Tessera project, visit: https://github.com/ucam-eo/tessera
+Contributions are welcome! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
-## Related Tools
+## License
 
-For a higher-level, interactive interface for point-and-click land cover classification built on top of `GeoTessera`, check out the [Interactive Map Classifier](https://github.com/ucam-eo/tessera-interactive-map) as an example.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Citation
+
+If you use GeoTessera in your research, please cite:
+
+```bibtex
+@software{geotessera2024,
+  title = {GeoTessera: Python Interface for Tessera Geospatial Embeddings},
+  author = {University of Cambridge Earth Observation Group},
+  year = {2024},
+  url = {https://github.com/ucam-eo/geotessera}
+}
+```
+
+## Links
+
+- [Tessera Foundation Model](https://github.com/ucam-eo/tessera)
+- [Documentation](https://geotessera.readthedocs.io/)
+- [PyPI Package](https://pypi.org/project/geotessera/)
+- [Issue Tracker](https://github.com/ucam-eo/geotessera/issues)

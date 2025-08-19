@@ -1,3 +1,13 @@
+## v0.5.0 (unreleased)
+
+### Breaking API Changes
+
+- **Modified return values**: `fetch_embedding()` and `fetch_embeddings()` now return CRS and transform information
+  - `fetch_embedding()` returns `(embedding, crs, transform)` instead of just `embedding`
+  - `fetch_embeddings()` returns list of `(lat, lon, embedding, crs, transform)` tuples instead of `(lat, lon, embedding)`
+  - This provides direct access to the coordinate reference system from landmask tiles
+  - Useful for applications that need projection information without exporting to GeoTIFF
+
 ## v0.4.0
 
 ### Enhanced Full-Band GeoTIFF Support
