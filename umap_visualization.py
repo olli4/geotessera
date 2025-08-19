@@ -278,6 +278,32 @@ def normalize_to_rgb(embedding: np.ndarray):
     return rgb_255
 
 
+def normalize_to_rgb_global(embedding: np.ndarray, global_norm_params: list):
+    """Normalize UMAP embedding to 0-255 RGB range using global parameters."""
+    rgb_normalized = np.zeros_like(embedding)
+
+    for i in range(embedding.shape[1]):
+        component = embedding[:, i]
+        p_low, p_high = global_norm_params[i]
+
+        # Clip and normalize using global parameters
+        component_clipped = np.clip(component, p_low, p_high)
+
+        if p_high > p_low:
+            rgb_normalized[:, i] = (component_clipped - p_low) / (p_high - p_low)
+        else:
+            rgb_normalized[:, i] = 0.5
+
+    # Apply a slight contrast enhancement to make colors more vivid
+    rgb_enhanced = rgb_normalized
+    rgb_enhanced = np.clip(rgb_enhanced * 1.2 - 0.1, 0, 1)  # Boost contrast slightly
+
+    # Scale to 0-255 and convert to uint8
+    rgb_255 = (rgb_enhanced * 255).astype(np.uint8)
+
+    return rgb_255
+
+
 def create_rgb_mosaic(
     tiff_files: list, reducer, scaler, output_path: Path, checkpoint_dir: Path = None
 ):
@@ -295,7 +321,13 @@ def create_rgb_mosaic(
         rgb_cache_dir = checkpoint_dir / "rgb_tiles"
         rgb_cache_dir.mkdir(parents=True, exist_ok=True)
 
-    for tiff_file in tqdm(tiff_files, desc="Processing files for mosaic"):
+    # First pass: collect all embeddings to compute global statistics
+    print("First pass: collecting all embeddings for global normalization")
+    all_embeddings = []
+    tile_embeddings = []  # Store embeddings per tile for second pass
+    tile_metadata = []    # Store metadata per tile
+
+    for tiff_file in tqdm(tiff_files, desc="Collecting embeddings"):
         # Check if we have a cached RGB version
         rgb_cache_path = None
         if rgb_cache_dir:
@@ -304,11 +336,11 @@ def create_rgb_mosaic(
 
             if rgb_cache_path.exists():
                 rgb_datasets.append(rgb_cache_path)
+                tile_embeddings.append(None)  # Skip embedding collection for cached tiles
+                tile_metadata.append(None)
                 continue
 
         with rasterio.open(tiff_file) as src:
-            from rasterio.warp import calculate_default_transform, reproject, Resampling
-
             data = src.read()  # Shape: (bands, height, width)
             height, width = data.shape[1], data.shape[2]
 
@@ -318,9 +350,7 @@ def create_rgb_mosaic(
             # Handle NaN values
             valid_mask = ~np.isnan(data_reshaped).any(axis=1)
 
-            # Apply preprocessing and UMAP transformation
-            rgb_data = np.zeros((len(data_reshaped), 3), dtype=np.uint8)
-
+            tile_embedding = None
             if np.any(valid_mask):
                 valid_data = data_reshaped[valid_mask]
 
@@ -329,10 +359,60 @@ def create_rgb_mosaic(
 
                 # Apply UMAP transformation
                 valid_embedding = reducer.transform(valid_scaled)
+                
+                # Store embedding for this tile
+                tile_embedding = valid_embedding
+                all_embeddings.append(valid_embedding)
 
-                # Normalize to RGB
-                valid_rgb = normalize_to_rgb(valid_embedding)
+            # Store tile data for second pass
+            tile_embeddings.append(tile_embedding)
+            tile_metadata.append({
+                'data_shape': (height, width),
+                'valid_mask': valid_mask,
+                'file': tiff_file,
+                'cache_path': rgb_cache_path
+            })
 
+    # Compute global normalization parameters from all embeddings
+    if all_embeddings:
+        print("Computing global normalization parameters")
+        combined_embeddings = np.vstack(all_embeddings)
+        
+        # Use percentile-based normalization for better color distribution
+        percentile_low = 2
+        percentile_high = 98
+        
+        global_norm_params = []
+        for i in range(combined_embeddings.shape[1]):
+            component = combined_embeddings[:, i]
+            p_low = np.percentile(component, percentile_low)
+            p_high = np.percentile(component, percentile_high)
+            global_norm_params.append((p_low, p_high))
+        
+        print(f"Global normalization parameters computed from {len(combined_embeddings)} pixels across {len(all_embeddings)} tiles")
+    else:
+        global_norm_params = [(0, 1)] * 3  # Default if no embeddings
+
+    # Second pass: apply global normalization and create RGB tiles
+    print("Second pass: applying global normalization and creating tiles")
+    for tile_embedding, metadata in zip(tile_embeddings, tile_metadata):
+        if tile_embedding is None or metadata is None:
+            continue  # Skip cached tiles
+            
+        tiff_file = metadata['file']
+        height, width = metadata['data_shape']
+        valid_mask = metadata['valid_mask']
+        rgb_cache_path = metadata['cache_path']
+
+        with rasterio.open(tiff_file) as src:
+            from rasterio.warp import calculate_default_transform, reproject, Resampling
+
+            # Apply global normalization to RGB
+            rgb_data = np.zeros((len(valid_mask), 3), dtype=np.uint8)
+
+            if tile_embedding is not None:
+                # Apply global normalization
+                valid_rgb = normalize_to_rgb_global(tile_embedding, global_norm_params)
                 rgb_data[valid_mask] = valid_rgb
 
             # Reshape back to image format
