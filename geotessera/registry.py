@@ -289,7 +289,7 @@ def registry_path_for_landmasks(registry_base_dir: str, lon: float, lat: float) 
 
 
 # Base URL for Tessera data downloads
-TESSERA_BASE_URL = "https://dl-2.tessera.wiki"
+TESSERA_BASE_URL = "https://dl.geotessera.org"
 
 
 class Registry:
@@ -419,7 +419,7 @@ class Registry:
                     )
 
                     subprocess.run(
-                        ["git", "reset", "--hard", "origin/main"],
+                        ["git", "reset", "--hard", "origin/20250823-rev"],
                         cwd=manifests_dir,
                         check=True,
                         capture_output=True,

@@ -179,9 +179,15 @@ def list_command(args):
 
 def process_grid_checksum(args):
     """Process a single grid directory to generate SHA256 checksums."""
-    year_dir, grid_name = args
+    year_dir, grid_name, force = args
     grid_dir = os.path.join(year_dir, grid_name)
     sha256_file = os.path.join(grid_dir, "SHA256")
+
+    # Skip if SHA256 file already exists and force is not enabled
+    if not force and os.path.exists(sha256_file):
+        # Count .npy files to report in progress
+        npy_files = [f for f in os.listdir(grid_dir) if f.endswith(".npy")]
+        return (grid_name, len(npy_files), True, "skipped")
 
     # Find all .npy files in this grid directory
     npy_files = [f for f in os.listdir(grid_dir) if f.endswith(".npy")]
@@ -210,11 +216,13 @@ def process_grid_checksum(args):
     return (grid_name, 0, True, None)
 
 
-def generate_embeddings_checksums(base_dir):
+def generate_embeddings_checksums(base_dir, force=False):
     """Generate SHA256 checksums for .npy files in each embeddings subdirectory."""
     from tqdm import tqdm
 
     print("Generating SHA256 checksums for embeddings...")
+    if force:
+        print("Force mode enabled - regenerating all checksums")
 
     # Get number of CPU cores
     num_cores = multiprocessing.cpu_count()
@@ -251,7 +259,7 @@ def generate_embeddings_checksums(base_dir):
         total_grids += len(grid_dirs)
 
         # Prepare arguments for parallel processing
-        grid_args = [(year_dir, grid_name) for grid_name in sorted(grid_dirs)]
+        grid_args = [(year_dir, grid_name, force) for grid_name in sorted(grid_dirs)]
 
         # Process grid directories in parallel
         with ProcessPoolExecutor(max_workers=num_cores) as executor:
@@ -261,18 +269,25 @@ def generate_embeddings_checksums(base_dir):
             }
 
             # Process results with progress bar
+            skipped_grids = 0
             with tqdm(total=len(grid_dirs), desc=f"Year {year}", unit="grids") as pbar:
                 for future in as_completed(futures):
                     grid_name, num_files, success, error_msg = future.result()
 
                     if success:
-                        if num_files > 0:
+                        if error_msg == "skipped":
+                            skipped_grids += 1
+                            pbar.set_postfix(files=num_files, status="skipped")
+                        elif num_files > 0:
                             processed_grids += 1
-                        pbar.set_postfix(files=num_files)
+                            pbar.set_postfix(files=num_files)
                     else:
                         errors.append(f"{grid_name}: {error_msg}")
 
                     pbar.update(1)
+            
+            if skipped_grids > 0:
+                print(f"  Skipped {skipped_grids} directories with existing SHA256 files")
 
     # Report any errors
     if errors:
@@ -312,15 +327,23 @@ def process_tiff_chunk(args):
         return (chunk_num, len(chunk), False, f"Exception: {e}", temp_file)
 
 
-def generate_tiff_checksums(base_dir):
+def generate_tiff_checksums(base_dir, force=False):
     """Generate SHA256 checksums for TIFF files using chunked parallel processing."""
     from tqdm import tqdm
 
     print("Generating SHA256 checksums for TIFF files...")
+    if force:
+        print("Force mode enabled - regenerating all checksums")
 
     # Get number of CPU cores
     num_cores = multiprocessing.cpu_count()
     print(f"Using {num_cores} CPU cores for parallel processing")
+
+    # Check if SHA256SUM already exists and force is not enabled
+    sha256sum_file = os.path.join(base_dir, "SHA256SUM")
+    if not force and os.path.exists(sha256sum_file):
+        print(f"SHA256SUM file already exists. Skipping (use --force to regenerate)")
+        return 0
 
     # Find all .tiff files
     tiff_files = []
@@ -339,7 +362,6 @@ def generate_tiff_checksums(base_dir):
 
     # Process in chunks to avoid command line length limits
     chunk_size = 1000  # Process 1000 files at a time
-    sha256sum_file = os.path.join(base_dir, "SHA256SUM")
 
     # Prepare chunks for parallel processing
     chunks = []
@@ -725,6 +747,8 @@ def hash_command(args):
         print(f"Error: Directory {base_dir} does not exist")
         return 1
 
+    force = getattr(args, 'force', False)
+
     # Check if this is an embeddings directory structure
     repr_dir = os.path.join(base_dir, "global_0.1_degree_representation")
     tiles_dir = os.path.join(base_dir, "global_0.1_degree_tiff_all")
@@ -734,13 +758,13 @@ def hash_command(args):
     # Process embeddings if directory exists
     if os.path.exists(repr_dir):
         print(f"Processing embeddings directory: {repr_dir}")
-        if generate_embeddings_checksums(repr_dir) == 0:
+        if generate_embeddings_checksums(repr_dir, force=force) == 0:
             processed_any = True
 
     # Process TIFF files if directory exists
     if os.path.exists(tiles_dir):
         print(f"Processing TIFF directory: {tiles_dir}")
-        if generate_tiff_checksums(tiles_dir) == 0:
+        if generate_tiff_checksums(tiles_dir, force=force) == 0:
             processed_any = True
 
     if not processed_any:
@@ -768,6 +792,10 @@ Examples:
   # This will:
   # - Create SHA256 files in each grid subdirectory under global_0.1_degree_representation/YYYY/
   # - Create SHA256SUM file in global_0.1_degree_tiff_all/ using chunked processing
+  # - Skip directories that already have SHA256 files (use --force to regenerate)
+  
+  # Force regeneration of all checksums
+  geotessera-registry hash /path/to/v1 --force
   
   # Scan existing SHA256 checksum files and generate pooch-compatible registries
   geotessera-registry scan /path/to/v1
@@ -809,6 +837,11 @@ Directory Structure:
     hash_parser.add_argument(
         "base_dir",
         help="Base directory containing global_0.1_degree_representation and/or global_0.1_degree_tiff_all subdirectories",
+    )
+    hash_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force regeneration of all checksums, even if SHA256 files already exist",
     )
     hash_parser.set_defaults(func=hash_command)
 
