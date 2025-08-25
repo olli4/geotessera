@@ -482,7 +482,7 @@ create_rgb_mosaic_from_geotiffs(
 
 ### Overview
 
-GeoTessera uses a [registry system](https://github.com/ucam-eo/tessera-manifests] to efficiently manage and access the large Tessera dataset:
+GeoTessera uses a [registry system](https://github.com/ucam-eo/tessera-manifests) to efficiently manage and access the large Tessera dataset:
 
 - **Block-based organization**: Registry divided into 5×5 degree geographic blocks
 - **Lazy loading**: Only loads registry blocks for the region you're accessing
