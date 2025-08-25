@@ -471,3 +471,145 @@ class GeoTessera:
 
         print(f"Exported {len(created_files)} GeoTIFF files to {output_dir}")
         return created_files
+
+    def merge_geotiffs_to_mosaic(
+        self,
+        geotiff_paths: List[str],
+        output_path: Union[str, Path],
+        target_crs: str = "EPSG:3857",
+        compress: str = "lzw",
+    ) -> str:
+        """Merge a list of GeoTIFF files into a single mosaic in the target CRS.
+
+        Args:
+            geotiff_paths: List of paths to GeoTIFF files to merge
+            output_path: Path for output mosaic GeoTIFF
+            target_crs: Target CRS for the mosaic (default: Web Mercator EPSG:3857)
+            compress: Compression method for output GeoTIFF
+
+        Returns:
+            Path to created mosaic file
+
+        Raises:
+            ImportError: If rasterio is not available
+            RuntimeError: If merge fails
+        """
+        try:
+            import rasterio
+            from rasterio.merge import merge
+            from rasterio.warp import calculate_default_transform
+            import tempfile
+            import os
+        except ImportError:
+            raise ImportError(
+                "rasterio required for mosaic creation: pip install rasterio"
+            )
+
+        if not geotiff_paths:
+            raise RuntimeError("No GeoTIFF files provided")
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Determine source resolution from first file
+        with rasterio.open(geotiff_paths[0]) as first_src:
+            source_resolution = min(abs(first_src.transform.a), abs(first_src.transform.e))
+
+        # Create temporary directory for reprojected files
+        with tempfile.TemporaryDirectory(prefix="geotessera_reproject_") as temp_dir:
+            # Reproject all files to target CRS
+            reprojected_files = []
+            for i, geotiff_file in enumerate(geotiff_paths):
+                reprojected_file = os.path.join(temp_dir, f"reprojected_{i}.tif")
+                
+                with rasterio.open(geotiff_file) as src:
+                    # Calculate transform and dimensions for target CRS
+                    transform, width, height = calculate_default_transform(
+                        src.crs, target_crs, src.width, src.height, *src.bounds,
+                        resolution=source_resolution
+                    )
+                    
+                    # Create reprojected file
+                    with rasterio.open(
+                        reprojected_file,
+                        'w',
+                        driver='GTiff',
+                        height=height,
+                        width=width,
+                        count=src.count,
+                        dtype=src.dtypes[0],  # Get dtype from first band
+                        crs=target_crs,
+                        transform=transform,
+                        compress=compress,
+                        tiled=True,
+                        blockxsize=256,
+                        blockysize=256,
+                    ) as dst:
+                        from rasterio.warp import reproject, Resampling
+                        
+                        for band_idx in range(1, src.count + 1):
+                            reproject(
+                                source=rasterio.band(src, band_idx),
+                                destination=rasterio.band(dst, band_idx),
+                                src_transform=src.transform,
+                                src_crs=src.crs,
+                                dst_transform=transform,
+                                dst_crs=target_crs,
+                                resampling=Resampling.bilinear
+                            )
+                        
+                        # Copy metadata and band descriptions
+                        dst.update_tags(**src.tags())
+                        for band_idx in range(1, src.count + 1):
+                            band_desc = src.descriptions[band_idx-1] if src.descriptions and band_idx <= len(src.descriptions) else None
+                            if band_desc:
+                                dst.set_band_description(band_idx, band_desc)
+
+                reprojected_files.append(reprojected_file)
+
+            # Open all reprojected files for merging
+            src_files = [rasterio.open(f) for f in reprojected_files]
+            
+            try:
+                # Merge tiles
+                mosaic_array, mosaic_transform = merge(src_files, method='first')
+                
+                # Get metadata from first file
+                first_src = src_files[0]
+                profile = first_src.profile.copy()
+                profile.update({
+                    'height': mosaic_array.shape[1],
+                    'width': mosaic_array.shape[2],
+                    'transform': mosaic_transform,
+                    'dtype': mosaic_array.dtype,  # Use mosaic array dtype
+                    'compress': compress,
+                    'tiled': True,
+                    'blockxsize': 512,
+                    'blockysize': 512,
+                })
+                
+                # Write mosaic
+                with rasterio.open(output_path, 'w', **profile) as dst:
+                    dst.write(mosaic_array)
+                    
+                    # Copy band descriptions from first file
+                    for band_idx in range(1, mosaic_array.shape[0] + 1):
+                        band_desc = first_src.descriptions[band_idx-1] if first_src.descriptions and band_idx <= len(first_src.descriptions) else None
+                        if band_desc:
+                            dst.set_band_description(band_idx, band_desc)
+                    
+                    # Update metadata
+                    dst.update_tags(
+                        TESSERA_TARGET_CRS=target_crs,
+                        TESSERA_RESOLUTION=str(source_resolution),
+                        TESSERA_TILE_COUNT=str(len(geotiff_paths)),
+                        TESSERA_DESCRIPTION="GeoTessera satellite embedding mosaic",
+                        GEOTESSERA_VERSION=__version__,
+                    )
+
+            finally:
+                # Close all source files
+                for src in src_files:
+                    src.close()
+
+        return str(output_path)
