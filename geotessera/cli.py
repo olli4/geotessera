@@ -11,8 +11,9 @@ import time
 import http.server
 import socketserver
 import json
+from functools import partial
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional, Callable, List, Tuple
 from typing_extensions import Annotated
 
 import numpy as np
@@ -27,11 +28,14 @@ from .core import GeoTessera
 from .country import get_country_bbox
 from .visualization import (
     calculate_bbox_from_file,
-    create_rgb_mosaic_from_geotiffs,
+    create_pca_mosaic,
+    analyze_geotiff_coverage,
+)
+from .web import (
     geotiff_to_web_tiles,
     create_simple_web_viewer,
     create_coverage_summary_map,
-    analyze_geotiff_coverage,
+    prepare_mosaic_for_web,
 )
 
 
@@ -65,6 +69,9 @@ app = typer.Typer(
 )
 
 console = Console()
+
+
+
 
 
 def create_progress_callback(progress: Progress, task_id: TaskID) -> Callable:
@@ -154,12 +161,28 @@ def download(
 
     Supports two output formats:
     - tiff: Georeferenced GeoTIFF files with proper CRS metadata (default)
-    - npy: Raw numpy arrays with accompanying metadata JSON files
+    - npy: Raw numpy arrays with accompanying landmask TIFFs and metadata JSON files
 
     For GeoTIFF format, each tile preserves the original UTM coordinate system.
-    For numpy format, arrays are saved with metadata including coordinates and shape.
-    """
+    For numpy format, arrays are saved with landmask TIFF files and comprehensive JSON metadata files alongside each .npy file.
 
+    JSON Metadata File Format (for npy format):
+    Each embedding_<lat>_<lon>.npy file has a corresponding embedding_<lat>_<lon>.json file containing:
+    {
+        "lat": <tile_latitude>,
+        "lon": <tile_longitude>, 
+        "filename": "<npy_filename>",
+        "shape": [height, width, channels],
+        "bands": [list of band indices included],
+        "crs": "<coordinate_reference_system>",
+        "transform": [rasterio transform coefficients],
+        "year": <data_year>,
+        "dataset_version": "<version_string>",
+        "created_at": "<ISO_timestamp>",
+        "download_bbox": [min_lon, min_lat, max_lon, max_lat]
+    }
+    """
+    
     # Initialize GeoTessera
     gt = GeoTessera(
         dataset_version=dataset_version,
@@ -280,6 +303,7 @@ def download(
     )
 
     try:
+        
         # Export tiles with progress tracking
         with Progress(
             TextColumn("[progress.description]{task.description}"),
@@ -343,8 +367,9 @@ def download(
                 # Create output directory
                 output.mkdir(parents=True, exist_ok=True)
 
+                import datetime
+                
                 files = []
-                metadata = {"tiles": [], "year": year, "bbox": bbox_coords}
 
                 for tile_lon, tile_lat, embedding_array, crs, transform in embeddings:
                     # Apply band selection if specified
@@ -357,29 +382,73 @@ def download(
                     np.save(filepath, embedding_array)
                     files.append(str(filepath))
 
-                    # Add to metadata including CRS info
-                    metadata["tiles"].append(
-                        {
-                            "lon": tile_lon,
-                            "lat": tile_lat,
-                            "filename": filename,
-                            "shape": embedding_array.shape,
-                            "bands": bands_list if bands_list else list(range(128)),
-                            "crs": str(crs) if crs else None,
-                            "transform": list(transform) if transform else None,
+                    # Download and save landmask TIFF file
+                    try:
+                        from .registry import tile_to_landmask_filename
+                        
+                        landmask_filename = tile_to_landmask_filename(tile_lon, tile_lat)
+                        
+                        # Ensure tile registry block is loaded
+                        gt.registry.ensure_tile_block_loaded(tile_lon, tile_lat)
+                        
+                        # Fetch landmask file
+                        landmask_cache_path = gt.registry.fetch_landmask(
+                            landmask_filename, progressbar=False
+                        )
+                        
+                        # Copy landmask to output directory
+                        landmask_output_filename = f"landmask_{tile_lat:.2f}_{tile_lon:.2f}.tif"
+                        landmask_output_path = output / landmask_output_filename
+                        
+                        import shutil
+                        shutil.copy2(landmask_cache_path, landmask_output_path)
+                        files.append(str(landmask_output_path))
+                        
+                        landmask_info = {
+                            "landmask_filename": landmask_output_filename,
+                            "landmask_cache_path": landmask_cache_path,
+                            "landmask_size_bytes": landmask_output_path.stat().st_size,
                         }
-                    )
+                        
+                    except Exception as e:
+                        print(f"Warning: Could not download landmask for tile ({tile_lat:.2f}, {tile_lon:.2f}): {e}")
+                        landmask_info = {
+                            "landmask_filename": None,
+                            "landmask_error": str(e)
+                        }
 
-                # Save metadata
-                metadata_path = output / "metadata.json"
-                with open(metadata_path, "w") as f:
-                    json.dump(metadata, f, indent=2)
-                files.append(str(metadata_path))
+                    # Create comprehensive metadata for this tile
+                    tile_metadata = {
+                        "lat": tile_lat,
+                        "lon": tile_lon,
+                        "filename": filename,
+                        "shape": list(embedding_array.shape),
+                        "bands": bands_list if bands_list else list(range(128)),
+                        "crs": str(crs) if crs else None,
+                        "transform": list(transform) if transform else None,
+                        "year": year,
+                        "dataset_version": dataset_version,
+                        "created_at": datetime.datetime.now().isoformat(),
+                        "download_bbox": list(bbox_coords),
+                        "tile_bounds": [tile_lon - 0.05, tile_lat - 0.05, tile_lon + 0.05, tile_lat + 0.05],
+                        "landmask": landmask_info,
+                        "file_size_bytes": filepath.stat().st_size,
+                        "compression": "none",
+                        "data_type": str(embedding_array.dtype)
+                    }
+
+                    # Save comprehensive JSON metadata file
+                    json_filename = f"embedding_{tile_lat:.2f}_{tile_lon:.2f}.json"
+                    json_filepath = output / json_filename
+                    with open(json_filepath, "w") as f:
+                        json.dump(tile_metadata, f, indent=2)
+                    files.append(str(json_filepath))
 
                 rprint(
                     f"\n[green]✅ SUCCESS: Exported {len(embeddings)} numpy arrays[/green]"
                 )
-                rprint("   Metadata saved to: metadata.json")
+                rprint("   Landmask TIFF files downloaded for each tile")
+                rprint("   Comprehensive JSON metadata files created for each tile")
                 rprint(
                     f"   Arrays contain {'selected bands' if bands_list else 'all 128 bands'}"
                 )
@@ -428,6 +497,9 @@ def download(
         tips_table.add_row("• Inspect individual tiles with QGIS, GDAL, or rasterio")
         tips_table.add_row("• Use 'gdalinfo <filename>' to see projection details")
         tips_table.add_row("• Process tiles individually or in groups as needed")
+        if format == "tiff":
+            tips_table.add_row("• Create PCA visualization:")
+            tips_table.add_row(f"  [cyan]geotessera visualize {output} pca_mosaic.tif[/cyan]")
 
         rprint(
             Panel(tips_table, title="[bold]💡 Next steps[/bold]", border_style="green")
@@ -444,46 +516,79 @@ def download(
 @app.command()
 def visualize(
     input_path: Annotated[Path, typer.Argument(help="Input GeoTIFF file or directory")],
-    output: Annotated[Path, typer.Option("--output", "-o", help="Output directory")],
-    vis_type: Annotated[str, typer.Option("--type", help="Visualization type")] = "rgb",
-    bands: Annotated[
-        Optional[str], typer.Option("--bands", help="Comma-separated band indices")
-    ] = None,
-    region_file: Annotated[
-        Optional[Path],
-        typer.Option(
-            "--region-file",
-            help="GeoJSON/Shapefile boundary to overlay on visualization",
-            exists=True,
-        ),
-    ] = None,
-    normalize: Annotated[
-        bool, typer.Option("--normalize", help="Normalize bands")
-    ] = False,
-    min_zoom: Annotated[
-        int, typer.Option("--min-zoom", help="Min zoom for web tiles")
-    ] = 8,
-    max_zoom: Annotated[
-        int, typer.Option("--max-zoom", help="Max zoom for web tiles")
-    ] = 15,
-    initial_zoom: Annotated[
-        int, typer.Option("--initial-zoom", help="Initial zoom level")
-    ] = 10,
-    force_regenerate: Annotated[
-        bool,
-        typer.Option(
-            "--force/--no-force", help="Force regeneration of tiles even if they exist"
-        ),
-    ] = False,
+    output_file: Annotated[Path, typer.Argument(help="Output PCA mosaic file (.tif)")],
+    target_crs: Annotated[
+        str, typer.Option("--crs", help="Target CRS for reprojection")
+    ] = "EPSG:3857",
+    n_components: Annotated[
+        int, typer.Option("--n-components", help="Number of PCA components. Only first 3 used for RGB visualization - increase for analysis/research.")
+    ] = 3,
+    balance_method: Annotated[
+        str, typer.Option("--balance", help="RGB balance method: histogram (default), percentile, or adaptive")
+    ] = "histogram",
+    percentile_low: Annotated[
+        float, typer.Option("--percentile-low", help="Lower percentile for percentile balance method")
+    ] = 2.0,
+    percentile_high: Annotated[
+        float, typer.Option("--percentile-high", help="Upper percentile for percentile balance method")
+    ] = 98.0,
 ):
-    """Create visualizations from GeoTIFF files."""
-
-    # Validate visualization type
-    if vis_type not in ["rgb", "web", "coverage"]:
-        rprint(
-            f"[red]Error: Invalid visualization type '{vis_type}'. Must be one of: rgb, web, coverage[/red]"
-        )
+    """Create PCA visualization from multiband GeoTIFF files.
+    
+    This command combines all embedding data across tiles, applies a single PCA
+    transformation to the combined dataset, then creates a unified RGB mosaic.
+    This ensures consistent principal components across the entire region,
+    eliminating tiling artifacts.
+    
+    The first 3 principal components are mapped to RGB channels for visualization.
+    Additional components can be computed for research/analysis purposes.
+    
+    Examples:
+        # Create PCA visualization (3 components optimal for RGB)
+        geotessera visualize tiles/ pca_mosaic.tif
+        
+        # Use histogram equalization for maximum contrast
+        geotessera visualize tiles/ pca_balanced.tif --balance histogram
+        
+        # Use adaptive scaling based on variance
+        geotessera visualize tiles/ pca_adaptive.tif --balance adaptive
+        
+        # Custom percentile range for outlier-robust scaling
+        geotessera visualize tiles/ pca_custom.tif --percentile-low 5 --percentile-high 95
+        
+        # Use custom projection
+        geotessera visualize tiles/ pca_mosaic.tif --crs EPSG:4326
+        
+        # PCA for research - compute more components for analysis
+        # (still only uses first 3 for RGB, but saves variance info)
+        geotessera visualize tiles/ pca_research.tif --n-components 10
+        
+        # Then create web visualization
+        geotessera webmap pca_mosaic.tif --serve
+    """
+    
+    # Validate output file extension
+    if not output_file.suffix.lower() in [".tif", ".tiff"]:
+        rprint("[red]Error: Output file must have .tif or .tiff extension[/red]")
         raise typer.Exit(1)
+        
+    # Validate n_components
+    if n_components < 1:
+        rprint("[red]Error: Number of components must be at least 1[/red]")
+        raise typer.Exit(1)
+    if n_components < 3:
+        rprint(f"[yellow]Warning: Using {n_components} component(s). RGB visualization works best with 3+ components[/yellow]")
+    
+    # Validate balance_method
+    if balance_method not in ["percentile", "histogram", "adaptive"]:
+        rprint(f"[red]Error: Invalid balance method '{balance_method}'. Must be 'percentile', 'histogram', or 'adaptive'[/red]")
+        raise typer.Exit(1)
+    
+    # Validate percentile ranges
+    if balance_method == "percentile":
+        if not (0 <= percentile_low < percentile_high <= 100):
+            rprint(f"[red]Error: Invalid percentile range [{percentile_low}, {percentile_high}]. Must be 0 <= low < high <= 100[/red]")
+            raise typer.Exit(1)
 
     # Find GeoTIFF files
     if input_path.is_file():
@@ -498,7 +603,8 @@ def visualize(
 
     rprint(f"[blue]Found {len(geotiff_paths)} GeoTIFF files[/blue]")
 
-    output.mkdir(parents=True, exist_ok=True)
+    # Create output directory if needed
+    output_file.parent.mkdir(parents=True, exist_ok=True)
 
     with Progress(
         TextColumn("[progress.description]{task.description}"),
@@ -509,146 +615,91 @@ def visualize(
         TimeRemainingColumn(),
         console=console,
     ) as progress:
-        if vis_type == "rgb":
-            # Create RGB mosaic
-            bands_list = [0, 1, 2]  # Default RGB bands
-            if bands:
-                bands_list = list(map(int, bands.split(",")))
-                if len(bands_list) != 3:
-                    rprint(
-                        "[red]Error: RGB visualization requires exactly 3 bands[/red]"
-                    )
-                    raise typer.Exit(1)
+        task = progress.add_task(
+            f"Creating PCA mosaic ({n_components} components)...", total=5, status="Starting..."
+        )
 
-            output_path = output / "rgb_mosaic.tif"
-
-            task = progress.add_task(
-                "Creating RGB mosaic...", total=100, status="Starting..."
+        try:
+            # Get GeoTessera instance
+            gt = GeoTessera()
+            
+            # Create a progress callback that maps to our 5-step progress
+            def visualization_progress_callback(current: float, total: float, status: str = None):
+                progress.update(task, completed=current, total=total, status=status or "Processing...")
+            
+            # PCA MODE: Use clean visualization function
+            create_pca_mosaic(
+                geotiff_paths=geotiff_paths,
+                output_path=output_file,
+                n_components=n_components,
+                target_crs=target_crs,
+                progress_callback=visualization_progress_callback,
+                balance_method=balance_method,
+                percentile_range=(percentile_low, percentile_high),
             )
+            
+            progress.update(task, completed=5, total=5, status="Complete")
 
-            try:
-                created_file = create_rgb_mosaic_from_geotiffs(
-                    geotiff_paths=geotiff_paths,
-                    output_path=str(output_path),
-                    bands=tuple(bands_list),
-                    normalize=normalize,
-                    progress_callback=create_download_progress_callback(progress, task),
-                )
-                rprint(f"[green]Created RGB mosaic: {created_file}[/green]")
+        except Exception as e:
+            rprint(f"[red]Error creating PCA visualization: {e}[/red]")
+            raise typer.Exit(1)
+    
+    # Success output after progress bar completes
+    rprint(f"[green]Created PCA mosaic: {output_file}[/green]")
+    rprint(f"[blue]Components: {n_components} | CRS: {target_crs}[/blue]")
+    rprint("[blue]Next step: Create web visualization with:[/blue]")
+    rprint(f"[cyan]  geotessera webmap {output_file} --serve[/cyan]")
 
-            except Exception as e:
-                rprint(f"[red]Error creating RGB mosaic: {e}[/red]")
-                raise typer.Exit(1)
 
-        elif vis_type == "web":
-            # Simplified web tiles: Always create 3-band mosaic first, then generate web tiles
+@app.command()
+def tilemap(
+    input_path: Annotated[Path, typer.Argument(help="GeoTIFF file or directory")],
+    output_html: Annotated[Path, typer.Option("--output", "-o", help="Output HTML file")] = None,
+    title: Annotated[str, typer.Option("--title", help="Map title")] = "GeoTIFF Coverage Map",
+):
+    """Create an interactive HTML map showing GeoTIFF tile coverage.
+    
+    This command analyzes local GeoTIFF files and creates an interactive
+    Leaflet map showing their spatial coverage and metadata.
+    
+    Examples:
+        # Create coverage map for tiles in a directory
+        geotessera tilemap tiles/ --output coverage.html
+        
+        # View the map
+        geotessera serve . --html coverage.html
+    """
+    # Find GeoTIFF files
+    if input_path.is_file():
+        geotiff_paths = [str(input_path)]
+        if output_html is None:
+            output_html = Path(f"{input_path.stem}_coverage.html")
+    else:
+        geotiff_paths = list(map(str, input_path.glob("*.tif")))
+        geotiff_paths.extend(map(str, input_path.glob("*.tiff")))
+        if output_html is None:
+            output_html = Path(f"{input_path.name}_coverage.html")
 
-            # Step 1: Create 3-band RGB mosaic
-            mosaic_path = output / "rgb_mosaic.tif"
-            bands_list = [0, 1, 2]  # Always use first 3 bands for web visualization
-            if bands:
-                bands_list = list(map(int, bands.split(",")))[
-                    :3
-                ]  # Limit to 3 bands max
+    if not geotiff_paths:
+        rprint(f"[red]No GeoTIFF files found in {input_path}[/red]")
+        raise typer.Exit(1)
 
-            task1 = progress.add_task(
-                "Creating 3-band RGB mosaic...", total=100, status="Starting..."
-            )
+    rprint(f"[blue]Found {len(geotiff_paths)} GeoTIFF files[/blue]")
 
-            try:
-                create_rgb_mosaic_from_geotiffs(
-                    geotiff_paths=geotiff_paths,
-                    output_path=str(mosaic_path),
-                    bands=tuple(bands_list),
-                    normalize=True,  # Always normalize for web display
-                    progress_callback=create_progress_callback(progress, task1),
-                )
-                rprint(f"[green]Created RGB mosaic: {mosaic_path}[/green]")
+    try:
+        create_coverage_summary_map(
+            geotiff_paths=geotiff_paths,
+            output_html=str(output_html),
+            title=title,
+        )
+        
+        rprint(f"[green]Created coverage map: {output_html}[/green]")
+        rprint("[blue]To view the map, start a web server:[/blue]")
+        rprint(f"[cyan]  geotessera serve . --html {output_html.name}[/cyan]")
 
-            except Exception as e:
-                rprint(f"[red]Error creating RGB mosaic: {e}[/red]")
-                raise typer.Exit(1)
-
-            # Step 2: Generate web tiles from the 3-band mosaic
-            tiles_dir = output / "tiles"
-
-            # Check if we should regenerate tiles
-            if force_regenerate and tiles_dir.exists():
-                import shutil
-
-                rprint(
-                    f"[yellow]Removing existing tiles directory: {tiles_dir}[/yellow]"
-                )
-                shutil.rmtree(tiles_dir)
-
-            if not tiles_dir.exists() or not any(tiles_dir.iterdir()):
-                task2 = progress.add_task(
-                    "Generating web tiles...", total=100, status="Starting..."
-                )
-
-                try:
-                    result_dir = geotiff_to_web_tiles(
-                        geotiff_path=str(mosaic_path),
-                        output_dir=str(tiles_dir),
-                        zoom_levels=(min_zoom, max_zoom),
-                    )
-                    progress.update(task2, completed=100)
-                    rprint(f"[green]Created web tiles in: {result_dir}[/green]")
-
-                except Exception as e:
-                    rprint(f"[red]Error generating web tiles: {e}[/red]")
-                    raise typer.Exit(1)
-            else:
-                rprint(f"[green]Using existing tiles in: {tiles_dir}[/green]")
-                rprint("[blue]Use --force to regenerate tiles[/blue]")
-
-            # Step 3: Create HTML viewer
-            html_path = output / "viewer.html"
-
-            # Calculate center from coverage
-            coverage = analyze_geotiff_coverage(geotiff_paths)
-            bounds = coverage["bounds"]
-            center_lat = (bounds["min_lat"] + bounds["max_lat"]) / 2
-            center_lon = (bounds["min_lon"] + bounds["max_lon"]) / 2
-
-            create_simple_web_viewer(
-                tiles_dir=str(tiles_dir),
-                output_html=str(html_path),
-                center_lon=center_lon,
-                center_lat=center_lat,
-                zoom=initial_zoom,
-                title=f"GeoTessera - {input_path}",
-                region_file=str(region_file) if region_file else None,
-            )
-
-            rprint(f"[green]Created viewer: {html_path}[/green]")
-            rprint("[blue]To view the map, start a web server:[/blue]")
-            rprint(f"[cyan]  geotessera serve {output}[/cyan]")
-
-        elif vis_type == "coverage":
-            # Create coverage map
-            html_path = output / "coverage.html"
-
-            task = progress.add_task(
-                "Creating coverage map...", total=100, status="Starting..."
-            )
-
-            try:
-                create_coverage_summary_map(
-                    geotiff_paths=geotiff_paths,
-                    output_html=str(html_path),
-                    title=f"Coverage Map - {input_path}",
-                )
-
-                progress.update(task, completed=100)
-
-                rprint(f"[green]Created coverage map: {html_path}[/green]")
-                rprint("[blue]To view the map, start a web server:[/blue]")
-                rprint(f"[cyan]  geotessera serve {output}[/cyan]")
-
-            except Exception as e:
-                rprint(f"[red]Error creating coverage map: {e}[/red]")
-                raise typer.Exit(1)
+    except Exception as e:
+        rprint(f"[red]Error creating coverage map: {e}[/red]")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -783,6 +834,206 @@ def serve(
 
 
 @app.command()
+def webmap(
+    rgb_mosaic: Annotated[Path, typer.Argument(help="3-band RGB mosaic GeoTIFF file")],
+    output: Annotated[Path, typer.Option("--output", "-o", help="Output directory")] = None,
+    min_zoom: Annotated[int, typer.Option("--min-zoom", help="Min zoom for web tiles")] = 8,
+    max_zoom: Annotated[int, typer.Option("--max-zoom", help="Max zoom for web tiles")] = 15,
+    initial_zoom: Annotated[int, typer.Option("--initial-zoom", help="Initial zoom level")] = 10,
+    force_regenerate: Annotated[
+        bool,
+        typer.Option(
+            "--force/--no-force", help="Force regeneration of tiles even if they exist"
+        ),
+    ] = False,
+    serve_immediately: Annotated[
+        bool, typer.Option("--serve/--no-serve", help="Start web server immediately")
+    ] = False,
+    port: Annotated[int, typer.Option("--port", "-p", help="Port for web server")] = 8000,
+    region_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--region-file",
+            help="GeoJSON/Shapefile boundary to overlay",
+            exists=True,
+        ),
+    ] = None,
+    use_gdal_raster: Annotated[
+        bool,
+        typer.Option(
+            "--use-gdal-raster/--use-gdal2tiles",
+            help="Use newer gdal raster tile (faster but less stable) vs gdal2tiles (default, stable)",
+        ),
+    ] = False,
+):
+    """Create web tiles and viewer from a 3-band RGB mosaic.
+    
+    This command takes an RGB GeoTIFF mosaic, reprojects it if needed for web viewing,
+    generates web tiles, creates an HTML viewer, and optionally starts a web server.
+    
+    Example workflow:
+        1. geotessera download --bbox lon1,lat1,lon2,lat2 tiles/
+        2. geotessera visualize tiles/ --type rgb --output mosaics/
+        3. geotessera webmap mosaics/rgb_mosaic.tif --output webmap/ --serve
+    """
+    if not rgb_mosaic.exists():
+        rprint(f"[red]Error: Mosaic file {rgb_mosaic} does not exist[/red]")
+        raise typer.Exit(1)
+    
+    if not rgb_mosaic.suffix.lower() in ['.tif', '.tiff']:
+        rprint(f"[red]Error: Input must be a GeoTIFF file (.tif/.tiff)[/red]")
+        raise typer.Exit(1)
+    
+    # Default output directory
+    if output is None:
+        output = Path(f"{rgb_mosaic.stem}_webmap")
+    
+    output.mkdir(parents=True, exist_ok=True)
+    
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TextColumn("•"),
+        TextColumn("[dim]{task.fields[status]}", justify="left"),
+        TimeRemainingColumn(),
+        console=console,
+    ) as progress:
+        
+        # Step 1: Prepare mosaic for web (reproject if needed)
+        web_mosaic_path = output / "web_ready_mosaic.tif"
+        
+        task1 = progress.add_task(
+            "Preparing mosaic for web...", total=100, status="Starting..."
+        )
+        
+        try:
+            actual_mosaic_path = prepare_mosaic_for_web(
+                input_mosaic=str(rgb_mosaic),
+                output_path=str(web_mosaic_path),
+                target_crs="EPSG:3857",
+                progress_callback=create_progress_callback(progress, task1),
+            )
+            
+            # If no reprojection was needed, use original file
+            if actual_mosaic_path == str(rgb_mosaic):
+                actual_mosaic_path = str(rgb_mosaic)
+                mosaic_status = "Using original mosaic (already in correct CRS)"
+            else:
+                mosaic_status = f"Created web-ready mosaic: {web_mosaic_path}"
+                
+        except Exception as e:
+            rprint(f"[red]Error preparing mosaic: {e}[/red]")
+            raise typer.Exit(1)
+        
+        # Step 2: Generate web tiles
+        tiles_dir = output / "tiles"
+        
+        # Check if we should regenerate tiles
+        if force_regenerate and tiles_dir.exists():
+            import shutil
+            shutil.rmtree(tiles_dir)
+            tiles_regenerated = True
+        else:
+            tiles_regenerated = False
+        
+        tiles_force_hint = None
+        
+        if not tiles_dir.exists() or not any(tiles_dir.iterdir()):
+            task2 = progress.add_task(
+                "Generating web tiles...", total=100, status="Starting..."
+            )
+            
+            try:
+                result_dir = geotiff_to_web_tiles(
+                    geotiff_path=actual_mosaic_path,
+                    output_dir=str(tiles_dir),
+                    zoom_levels=(min_zoom, max_zoom),
+                    use_gdal_raster=use_gdal_raster,
+                )
+                progress.update(task2, completed=100)
+                tiles_status = f"Created web tiles in: {result_dir}"
+                
+            except Exception as e:
+                rprint(f"[red]Error generating web tiles: {e}[/red]")
+                raise typer.Exit(1)
+        else:
+            tiles_status = f"Using existing tiles in: {tiles_dir}"
+            tiles_force_hint = "Use --force to regenerate tiles"
+        
+        # Step 3: Create HTML viewer
+        html_path = output / "viewer.html"
+        
+        task3 = progress.add_task(
+            "Creating web viewer...", total=100, status="Starting..."
+        )
+        
+        try:
+            # Get mosaic bounds for centering
+            import rasterio
+            with rasterio.open(actual_mosaic_path) as src:
+                bounds = src.bounds
+                # Transform bounds to lat/lon if needed
+                if src.crs != 'EPSG:4326':
+                    from rasterio.warp import transform_bounds
+                    lon_min, lat_min, lon_max, lat_max = transform_bounds(
+                        src.crs, 'EPSG:4326', bounds.left, bounds.bottom, bounds.right, bounds.top
+                    )
+                else:
+                    lon_min, lat_min, lon_max, lat_max = bounds.left, bounds.bottom, bounds.right, bounds.top
+                    
+                center_lat = (lat_min + lat_max) / 2
+                center_lon = (lon_min + lon_max) / 2
+            
+            create_simple_web_viewer(
+                tiles_dir=str(tiles_dir),
+                output_html=str(html_path),
+                center_lon=center_lon,
+                center_lat=center_lat,
+                zoom=initial_zoom,
+                title=f"GeoTessera - {rgb_mosaic.name}",
+                region_file=str(region_file) if region_file else None,
+            )
+            
+            progress.update(task3, completed=100)
+            viewer_status = f"Created web viewer: {html_path}"
+            
+        except Exception as e:
+            rprint(f"[red]Error creating web viewer: {e}[/red]")
+            raise typer.Exit(1)
+    
+    # Summary
+    rprint(f"\n[green]✅ Web visualization ready in: {output}[/green]")
+    
+    # Print status messages from the progress context
+    rprint(f"[green]{mosaic_status}[/green]")
+    
+    if tiles_regenerated:
+        rprint(f"[yellow]Removed existing tiles directory for regeneration[/yellow]")
+    
+    rprint(f"[green]{tiles_status}[/green]")
+    if tiles_force_hint:
+        rprint(f"[blue]{tiles_force_hint}[/blue]")
+    
+    rprint(f"[green]{viewer_status}[/green]")
+    
+    if serve_immediately:
+        rprint(f"[blue]Starting web server...[/blue]")
+        # Call the serve function directly
+        try:
+            serve(directory=output, port=port, open_browser=True, html_file="viewer.html")
+        except KeyboardInterrupt:
+            rprint("\n[green]Web server stopped.[/green]")
+        except Exception as e:
+            rprint(f"[yellow]Could not start server automatically: {e}[/yellow]")
+            rprint("[blue]To view the map, start a web server manually:[/blue]")
+            rprint(f"[cyan]  geotessera serve {output} --port {port}[/cyan]")
+    else:
+        rprint("[blue]To view the map, start a web server:[/blue]")
+        rprint(f"[cyan]  geotessera serve {output} --port {port}[/cyan]")
+
+
+@app.command()
 def info(
     geotiffs: Annotated[
         Optional[Path],
@@ -910,11 +1161,23 @@ def coverage(
         Optional[int],
         typer.Option(
             "--year",
-            help="Specific year to visualize (e.g., 2024). If not specified, shows all years.",
+            help="Specific year to visualize (e.g., 2024). If not specified, shows multi-year analysis.",
+        ),
+    ] = None,
+    region_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--region-file", help="GeoJSON/Shapefile to focus coverage map on specific region", exists=True
+        ),
+    ] = None,
+    country: Annotated[
+        Optional[str],
+        typer.Option(
+            "--country", help="Country name to focus coverage map on (e.g., 'United Kingdom', 'UK', 'GB')"
         ),
     ] = None,
     tile_color: Annotated[
-        str, typer.Option("--tile-color", help="Color for tile rectangles")
+        str, typer.Option("--tile-color", help="Color for tile rectangles (when not using multi-year colors)")
     ] = "red",
     tile_alpha: Annotated[
         float, typer.Option("--tile-alpha", help="Transparency of tiles (0.0-1.0)")
@@ -935,6 +1198,9 @@ def coverage(
     no_countries: Annotated[
         bool, typer.Option("--no-countries", help="Don't show country boundaries")
     ] = False,
+    no_multi_year_colors: Annotated[
+        bool, typer.Option("--no-multi-year-colors", help="Disable multi-year color coding")
+    ] = False,
     dataset_version: Annotated[
         str, typer.Option("--dataset-version", help="Tessera dataset version")
     ] = "v1",
@@ -950,20 +1216,112 @@ def coverage(
 ):
     """Generate a world map showing Tessera embedding coverage.
 
+    ⭐ RECOMMENDED WORKFLOW: Use this as your first step before downloading data.
+    
+    1. Create or obtain a GeoJSON/Shapefile of your region of interest
+    2. Run this command to check data coverage: geotessera coverage --region-file your_region.geojson
+    3. Review the coverage map to understand data availability
+    4. Proceed to download data: geotessera download --region-file your_region.geojson
+
     Creates a PNG visualization with available tiles overlaid on a world map,
     helping users understand data availability for their regions of interest.
+    Can focus on a specific region for detailed coverage analysis.
+    
+    By default, when no specific year is requested, the map uses three colors to show:
+    - Green: All available years present for this tile
+    - Blue: Only the latest year available for this tile  
+    - Orange: Partial years coverage (some combination of years)
 
     Examples:
-        # Show all available tiles across all years
+        # STEP 1: Check coverage for your region (recommended first step)
+        geotessera coverage --region-file study_area.geojson
+        geotessera coverage --region-file colombia_aoi.gpkg
+        geotessera coverage --country "United Kingdom"
+        geotessera coverage --country "Colombia"
+
+        # Check coverage for specific year only
+        geotessera coverage --region-file study_area.shp --year 2024
+        geotessera coverage --country "UK" --year 2024
+
+        # Global coverage overview (all regions)
         geotessera coverage
 
-        # Show tiles for a specific year
+        # Global coverage for specific year
         geotessera coverage --year 2024
 
         # Customize visualization
-        geotessera coverage --tile-color blue --tile-alpha 0.3 --dpi 150
+        geotessera coverage --region-file area.geojson --tile-alpha 0.3 --dpi 150
+        geotessera coverage --country "Germany" --tile-alpha 0.3 --dpi 150
     """
     from .visualization import visualize_global_coverage
+    from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
+
+    # Process region file or country if provided
+    region_bbox = None
+    country_geojson_file = None
+    if region_file and country:
+        rprint("[red]Error: Cannot specify both --region-file and --country. Choose one.[/red]")
+        raise typer.Exit(1)
+    
+    if region_file:
+        try:
+            from .visualization import calculate_bbox_from_file
+            region_bbox = calculate_bbox_from_file(region_file)
+            rprint(f"[green]Region bounding box: {format_bbox(region_bbox)}[/green]")
+        except Exception as e:
+            rprint(f"[red]Error reading region file: {e}[/red]")
+            raise typer.Exit(1)
+    elif country:
+        # Create progress bar for country data download
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("•"),
+            TextColumn("[dim]{task.fields[status]}", justify="left"),
+            TimeRemainingColumn(),
+            console=console,
+        ) as progress:
+            country_task = progress.add_task(
+                "🌍 Loading country data...", total=100, status="Checking cache..."
+            )
+
+            def country_progress_callback(current: int, total: int, status: str = None):
+                progress.update(
+                    country_task,
+                    completed=current,
+                    total=total,
+                    status=status or "Processing...",
+                )
+
+            try:
+                # Get country lookup instance 
+                from .country import get_country_lookup
+                country_lookup = get_country_lookup(progress_callback=country_progress_callback)
+                
+                # Get both bbox and geometry
+                region_bbox = country_lookup.get_bbox(country)
+                country_gdf = country_lookup.get_geometry(country)
+                
+                # Create temporary GeoJSON file for the country boundary
+                import tempfile
+                import os
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.geojson', delete=False) as tmp:
+                    country_gdf.to_file(tmp.name, driver='GeoJSON')
+                    country_geojson_file = tmp.name
+                
+                progress.update(country_task, completed=100, status="Complete")
+            except ValueError as e:
+                rprint(f"[red]Error: {e}[/red]")
+                rprint(
+                    "[blue]Use 'geotessera countries list' to see available countries[/blue]"
+                )
+                raise typer.Exit(1)
+            except Exception as e:
+                rprint(f"[red]Error fetching country data: {e}[/red]")
+                raise typer.Exit(1)
+        
+        rprint(f"[green]Using country '{country}': {format_bbox(region_bbox)}[/green]")
 
     # Initialize GeoTessera
     if verbose:
@@ -977,8 +1335,6 @@ def coverage(
 
     # Generate coverage map
     try:
-        from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
-
         with Progress(
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
@@ -997,20 +1353,44 @@ def coverage(
                     f"[blue]Generating coverage map for year: {year if year else 'All years'}[/blue]"
                 )
 
+            # When using region files or countries, default to no countries for cleaner view
+            show_countries_final = not no_countries and not region_file and not country
+            
+            # Determine which region file to use (original region file or country boundary)
+            region_file_to_use = None
+            if region_file:
+                region_file_to_use = str(region_file)
+            elif country and 'country_geojson_file' in locals() and country_geojson_file:
+                region_file_to_use = country_geojson_file
+            
             output_path = visualize_global_coverage(
                 tessera_client=gt,
                 output_path=str(output),
                 year=year,
                 figsize=(width, height),
                 dpi=dpi,
-                show_countries=not no_countries,
+                show_countries=show_countries_final,
                 tile_color=tile_color,
                 tile_alpha=tile_alpha,
                 tile_size=tile_size,
+                multi_year_colors=not no_multi_year_colors,
                 progress_callback=create_progress_callback(progress, task),
+                region_bbox=region_bbox,
+                region_file=region_file_to_use,
             )
 
         rprint(f"[green]✅ Coverage map saved to: {output_path}[/green]")
+        
+        # Show next steps hint
+        if region_file:
+            rprint("[blue]Next step: Download data for your region:[/blue]")
+            rprint(f"[cyan]  geotessera download --region-file {region_file} --output tiles/[/cyan]")
+        elif country:
+            rprint("[blue]Next step: Download data for your country:[/blue]")
+            rprint(f"[cyan]  geotessera download --country \"{country}\" --output tiles/[/cyan]")
+        else:
+            rprint("[blue]Next step: Download data for a specific region:[/blue]")
+            rprint("[cyan]  geotessera download --bbox 'lon1,lat1,lon2,lat2' --output tiles/[/cyan]")
 
         # Show summary statistics
         available_embeddings = gt.registry.get_available_embeddings()
@@ -1040,6 +1420,14 @@ def coverage(
 
             traceback.print_exc()
         raise typer.Exit(1)
+    finally:
+        # Clean up temporary country GeoJSON file if created
+        if country_geojson_file and (not region_file or country_geojson_file != str(region_file)):
+            try:
+                import os
+                os.unlink(country_geojson_file)
+            except Exception:
+                pass  # Ignore cleanup errors
 
 
 def main():

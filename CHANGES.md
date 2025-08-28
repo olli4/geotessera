@@ -1,12 +1,120 @@
-## v0.5.0 (unreleased)
+## v0.5.0
+
+This release represents a significant architectural overhaul of GeoTessera as we
+build more usecases. The library now focuses on delivering tiles with the CRS
+system preserved 
+
+## geotessera CLI commands
+
+- `visualize` Command
+  - **PCA visualization**: Create PCA visualizations from multiband GeoTIFF files
+  - **Usage**: `geotessera visualize INPUT_PATH OUTPUT_FILE [OPTIONS]`
+  - **New options**: CRS reprojection, PCA component selection, RGB balancing methods
+  - **Support for**: Single tiles, directories of tiles, and complex mosaicking
+
+- New `webmap` Command
+  - **Complete web mapping pipeline**: `geotessera webmap RGB_MOSAIC [OPTIONS]`
+  - **Features**: Generate web tiles, create HTML viewer, optional web server
+  - **Customizable zoom levels**: Configurable min/max zoom for tile generation
+  - **Boundary support**: Overlay GeoJSON/Shapefile boundaries on maps
+
+- New `tilemap` Command
+  - **Coverage visualization**: `geotessera tilemap INPUT_PATH [OPTIONS]`
+  - **Generate HTML maps**: Show spatial coverage of GeoTIFF collections
+  - **Customizable styling**: Title and display options
+
+- Enhanced `download` Command
+  - **Country support**: `--country` parameter for downloads by country boundary
+  - **Multiple formats**: Enhanced support for both TIFF and NumPy formats
+  - **Better metadata**: JSON metadata files with detailed tile information
+  - **Improved progress reporting**: Rich progress bars with ETA and speed
+
+- Enhanced `serve` Command
+  - **Multi-format support**: Serve various visualization types
+  - **Auto-open browser**: Automatic browser launching option
+  - **Flexible file serving**: Support for HTML, image, and tile directory serving
+
+- New `coverage` Command Options
+  - **Enhanced styling**: Customizable tile colors, transparency, and sizing
+  - **Output control**: Configurable DPI and figure dimensions
+-   **Regional focus**: Filter coverage display by region files
 
 ### Breaking API Changes
 
-- **Modified return values**: `fetch_embedding()` and `fetch_embeddings()` now return CRS and transform information
+- **Core library:**
   - `fetch_embedding()` returns `(embedding, crs, transform)` instead of just `embedding`
   - `fetch_embeddings()` returns list of `(lat, lon, embedding, crs, transform)` tuples instead of `(lat, lon, embedding)`
   - This provides direct access to the coordinate reference system from landmask tiles
   - Useful for applications that need projection information without exporting to GeoTIFF
+
+- **Module restructuring**: Several modules have been reorganized for better functionality
+  - **Removed**: `export.py`, `io.py`, `parallel.py`, `spatial.py`, `registry_utils.py` (these will return in future editions)
+  - **Added**: `country.py`, `progress.py`, `visualization.py`, `web.py`
+  - **Enhanced**: `core.py`, `cli.py`, `registry.py` with significant new functionality
+
+- **New core methods**: Enhanced GeoTIFF processing capabilities
+  - `merge_geotiffs_to_mosaic()` - Intelligent merging of multiple GeoTIFF files with CRS handling
+  - `apply_pca_to_embeddings()` - Apply Principal Component Analysis to embedding data
+  - `export_pca_geotiffs()` - Export PCA-transformed embeddings as georeferenced GeoTIFFs
+  - Proper coordinate reference system preservation and transformation
+
+- **New `visualization.py` module**:
+  - `create_pca_mosaic()` - Generate PCA-based RGB visualizations from multiband GeoTIFFs
+  - `visualize_global_coverage()` - Create global coverage maps with customizable styling
+  - `create_rgb_mosaic()` - Advanced RGB composite creation with multiple balance methods
+  - Support for histogram, percentile, and adaptive RGB balancing techniques
+
+- **New `web.py` module**: Web mapping pipeline
+  - `geotiff_to_web_tiles()` - Generate web map tiles from GeoTIFFs using GDAL
+  - `create_simple_web_viewer()` - Generate complete HTML web map viewers
+  - Support for Leaflet-based interactive maps with customizable zoom levels
+  - Automatic boundary overlay support from GeoJSON/Shapefile regions
+
+- **New `country.py` module**: Geographic boundary support using Natural Earth data
+  - `CountryLookup` class for resolving country names, codes, and boundaries
+  - Support for multiple country identifiers (names, ISO codes, etc.)
+  - Automatic download and caching of Natural Earth 50m countries dataset
+  - Integration with CLI `--country` parameter for easy regional downloads
+
+- **New `progress.py` module**: Rich-based progress tracking system
+  - Progress bars with detailed status information
+  - Callback-based progress reporting for programmatic use
+  - Integration throughout CLI commands for better user experience
+
+
+### Performance and Efficiency Improvements
+
+- Registry System Optimization
+  - **Lazy loading**: Registry blocks loaded only when needed
+  - **Memory efficiency**: Significant reduction in startup memory usage
+  - **Caching improvements**: Better local caching and update mechanisms
+
+- Processing Optimizations
+  - **Coordinate system handling**: Preserved local projections until final export
+  - **GDAL integration**: Enhanced GDAL tool integration for better performance with
+    experimental support for the new `gdal raster tiles` (but this will really need
+    a new release of gdal to be stable as the feature is still under development there)
+
+### Dependencies
+
+- **Added**: `scikit-learn>=1.7.1` for PCA functionality
+- **Added**: `scikit-image>=0.25.2` for advanced image processing
+- **Added**: `geodatasets>=2024.8.0` for geographic data access
+- **Enhanced**: `rich` and `typer` for improved CLI experience
+- **Updated**: Various dependencies to latest stable versions
+
+### Migration Notes
+
+From v0.4.0 to v0.5.0:
+- **API changes**: Update code to handle new return values from `fetch_embedding()` and `fetch_embeddings()`
+- **CLI workflow changes**: `visualize` command now operates on existing GeoTIFF files
+- **Module imports**: Update imports for modules that have been restructured
+- **Dependencies**: Run `uv sync` or equivalent to update to new dependency versions
+
+Deprecated Features:
+- **Old visualization workflow**: Previous inline visualization during download is replaced by separate `download` → `visualize` workflow
+- **Legacy export functions**: Old export utilities replaced by enhanced core methods
+- **Direct embedding visualization**: Now requires separate PCA step for optimal results
 
 ## v0.4.0
 

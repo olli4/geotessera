@@ -40,8 +40,9 @@ The exported GeoTIFF files contain:
     - Standard compression and tiling
 
 For visualization and analysis, use the separate visualization module:
-    >>> from geotessera.visualization import create_rgb_mosaic_from_geotiffs
-    >>> create_rgb_mosaic_from_geotiffs(files, "mosaic.tif")
+    >>> from geotessera.visualization import create_rgb_mosaic
+    >>> gt = GeoTessera()
+    >>> create_rgb_mosaic(gt, files, "mosaic.tif")
 
 This design enables the use of standard GIS tools and libraries for all
 downstream processing, keeping GeoTessera focused on reliable data access.
@@ -49,6 +50,7 @@ downstream processing, keeping GeoTessera focused on reliable data access.
 
 from .core import GeoTessera
 from . import visualization
+from . import web
 from . import registry
 
 try:
@@ -59,4 +61,4 @@ except importlib.metadata.PackageNotFoundError:
     # Fallback for development installs
     __version__ = "unknown"
 
-__all__ = ["GeoTessera", "visualization", "registry"]
+__all__ = ["GeoTessera", "visualization", "web", "registry"]

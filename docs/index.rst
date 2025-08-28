@@ -52,6 +52,9 @@ Check data availability first::
     # View coverage for a specific year
     geotessera coverage --year 2024
 
+    # Check coverage for a single country
+    geotessera coverage --country uk
+
 Download embeddings in your preferred format::
 
     # Download as GeoTIFF (georeferenced, for GIS)
@@ -141,6 +144,9 @@ When you request embeddings, GeoTessera downloads several files via Pooch:
   * Provide UTM projection information
   * Define precise geospatial transforms
   * Contain land/water masks
+
+The geotessera CLI can also export these into GeoTIFF format with each band
+dequantised into 128-bands and with the GeoTIFF CRS metadata intact.
 
 Data Flow
 ~~~~~~~~~

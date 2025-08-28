@@ -74,6 +74,7 @@ Download embeddings for a region in numpy or GeoTIFF format.
         --bbox "-0.2,51.4,0.1,51.6" \
         --year 2024 \
         --output ./london_tiffs
+    # Next step: geotessera visualize ./london_tiffs pca_mosaic.tif
 
     # Download as numpy arrays (for analysis)
     geotessera download \
@@ -88,12 +89,14 @@ Download embeddings for a region in numpy or GeoTIFF format.
         --bands "0,1,2,10,20,30" \
         --year 2024 \
         --output ./london_subset
+    # Next step: geotessera visualize ./london_subset pca_mosaic.tif
 
     # Download by country name
     geotessera download \
         --country "United Kingdom" \
         --year 2024 \
         --output ./uk_tiles
+    # Next step: geotessera visualize ./uk_tiles pca_mosaic.tif
 
     # Download using a region file
     geotessera download \
@@ -101,6 +104,7 @@ Download embeddings for a region in numpy or GeoTIFF format.
         --format tiff \
         --year 2024 \
         --output ./cambridge_tiles
+    # Next step: geotessera visualize ./cambridge_tiles pca_mosaic.tif
 
 **Output Formats**:
 
@@ -123,96 +127,139 @@ Download embeddings for a region in numpy or GeoTIFF format.
 visualize
 ~~~~~~~~~
 
-Create visualizations from GeoTIFF files.
+Create PCA visualization from multiband GeoTIFF files.
 
 **Usage**::
 
-    geotessera visualize INPUT_PATH [OPTIONS]
+    geotessera visualize INPUT_PATH OUTPUT_FILE [OPTIONS]
 
 **Required Arguments**:
 
 * ``INPUT_PATH`` - Path to GeoTIFF file or directory containing GeoTIFFs
+* ``OUTPUT_FILE`` - Output PCA mosaic file (.tif)
 
-**Required Options**:
+**PCA Options**:
 
-* ``-o, --output PATH`` - Output directory
+* ``--n-components INT`` - Number of PCA components (default: 3). Only first 3 used for RGB visualization - increase for analysis/research.
+* ``--crs TEXT`` - Target CRS for reprojection (default: EPSG:3857)
 
-**Visualization Options**:
+**RGB Balance Options**:
 
-* ``--type TEXT`` - Visualization type: rgb, web, coverage (default: rgb)
-* ``--bands TEXT`` - Comma-separated band indices for RGB (default: "0,1,2")
-* ``--normalize`` - Normalize bands to 0-255 range
-
-**Web Tile Options**:
-
-* ``--min-zoom INT`` - Minimum zoom level for web tiles (default: 8)
-* ``--max-zoom INT`` - Maximum zoom level for web tiles (default: 15)
-* ``--initial-zoom INT`` - Initial zoom level for viewer (default: 10)
-* ``--force`` - Force regeneration of existing tiles
+* ``--balance TEXT`` - RGB balance method: histogram (default), percentile, or adaptive
+* ``--percentile-low FLOAT`` - Lower percentile for percentile balance method (default: 2.0)
+* ``--percentile-high FLOAT`` - Upper percentile for percentile balance method (default: 98.0)
 
 **Examples**::
 
-    # Create RGB visualization from first 3 bands
-    geotessera visualize \
-        ./london_tiffs \
-        --type rgb \
-        --output ./london_rgb
+    # Create PCA visualization (3 components optimal for RGB)
+    geotessera visualize tiles/ pca_mosaic.tif
 
-    # Create RGB with custom bands
-    geotessera visualize \
-        ./london_tiffs \
-        --type rgb \
-        --bands "30,60,90" \
-        --normalize \
-        --output ./london_custom_rgb
+    # Use histogram equalization for maximum contrast
+    geotessera visualize tiles/ pca_balanced.tif --balance histogram
 
-    # Generate interactive web map
-    geotessera visualize \
-        ./london_tiffs \
-        --type web \
-        --min-zoom 8 \
-        --max-zoom 15 \
-        --output ./london_web
+    # Use adaptive scaling based on variance
+    geotessera visualize tiles/ pca_adaptive.tif --balance adaptive
 
-    # Force regeneration of web tiles
-    geotessera visualize \
-        ./london_tiffs \
-        --type web \
-        --force \
-        --output ./london_web
+    # Custom percentile range for outlier-robust scaling
+    geotessera visualize tiles/ pca_custom.tif --percentile-low 5 --percentile-high 95
 
-    # Create coverage map from GeoTIFFs
-    geotessera visualize \
-        ./london_tiffs \
-        --type coverage \
-        --output ./london_coverage
+    # Use custom projection
+    geotessera visualize tiles/ pca_mosaic.tif --crs EPSG:4326
 
-**Visualization Types**:
+    # PCA for research - compute more components for analysis
+    # (still only uses first 3 for RGB, but saves variance info)
+    geotessera visualize tiles/ pca_research.tif --n-components 10
 
-**RGB** (``--type rgb``):
-    - Creates RGB composite images
-    - Merges multiple GeoTIFF tiles into a single mosaic
-    - Output: Single GeoTIFF file (``rgb_mosaic.tif``)
-    - Use ``--bands`` to specify which channels to use as R, G, B
-    - Use ``--normalize`` to stretch values to 0-255 range
+**PCA Visualization Process**:
 
-**Web** (``--type web``):
-    - Generates web map tiles for interactive viewing
-    - Creates Leaflet-compatible tile pyramid
-    - Output: Directory with tiles and HTML viewer
-    - Use ``--min-zoom`` and ``--max-zoom`` to control detail levels
-    - Automatically creates ``viewer.html`` for viewing
+1. **Data Combination**: Combines all embedding data across tiles
+2. **PCA Transformation**: Applies a single PCA transformation to the combined dataset
+3. **RGB Mosaic**: Creates a unified RGB mosaic from the first 3 principal components
+4. **Consistent Components**: Ensures consistent principal components across the entire region, eliminating tiling artifacts
 
-**Coverage** (``--type coverage``):
-    - Creates HTML map showing tile coverage
-    - Shows spatial extent of available data
-    - Output: Interactive HTML map
-    - Useful for understanding data distribution
+**Balance Methods**:
+
+* ``histogram`` - Histogram equalization for maximum contrast
+* ``percentile`` - Uses percentile range for outlier-robust scaling
+* ``adaptive`` - Adaptive scaling based on variance
+
+**Next Steps**: After creating PCA visualization, use ``geotessera webmap`` to create interactive web tiles
+
+webmap
+~~~~~~
+
+Create web tiles and viewer from a 3-band RGB mosaic.
+
+**Usage**::
+
+    geotessera webmap RGB_MOSAIC [OPTIONS]
+
+**Required Arguments**:
+
+* ``RGB_MOSAIC`` - 3-band RGB mosaic GeoTIFF file
+
+**Options**:
+
+* ``-o, --output PATH`` - Output directory
+* ``--min-zoom INT`` - Min zoom for web tiles (default: 8)
+* ``--max-zoom INT`` - Max zoom for web tiles (default: 15)
+* ``--initial-zoom INT`` - Initial zoom level (default: 10)
+* ``--force/--no-force`` - Force regeneration of tiles even if they exist
+* ``--serve/--no-serve`` - Start web server immediately
+* ``-p, --port INT`` - Port for web server (default: 8000)
+* ``--region-file PATH`` - GeoJSON/Shapefile boundary to overlay
+* ``--use-gdal-raster/--use-gdal2tiles`` - Use newer gdal raster tile vs gdal2tiles (default: gdal2tiles)
+
+**Examples**::
+
+    # Create web tiles from PCA mosaic and serve immediately
+    geotessera webmap pca_mosaic.tif --serve
+
+    # Create web tiles with custom zoom levels
+    geotessera webmap pca_mosaic.tif --min-zoom 6 --max-zoom 18 --output webmap/
+
+    # Add region boundary overlay
+    geotessera webmap pca_mosaic.tif --region-file study_area.geojson --serve
+
+    # Force regeneration of existing tiles
+    geotessera webmap pca_mosaic.tif --force --serve
+
+**Process**:
+1. Reprojects mosaic to EPSG:3857 for web viewing if needed
+2. Generates web tiles at specified zoom levels
+3. Creates HTML viewer with Leaflet map
+4. Optionally starts web server for immediate viewing
+
+tilemap
+~~~~~~~
+
+Create an interactive HTML map showing GeoTIFF tile coverage.
+
+**Usage**::
+
+    geotessera tilemap INPUT_PATH [OPTIONS]
+
+**Required Arguments**:
+
+* ``INPUT_PATH`` - GeoTIFF file or directory
+
+**Options**:
+
+* ``-o, --output PATH`` - Output HTML file
+* ``--title TEXT`` - Map title (default: "GeoTIFF Coverage Map")
+
+**Examples**::
+
+    # Create coverage map for tiles in a directory
+    geotessera tilemap tiles/ --output coverage.html
+
+    # View the map
+    geotessera serve . --html coverage.html
 
 serve
 ~~~~~
 
-Serve web visualizations locally with a built-in HTTP server.
+Start a web server to serve visualization files.
 
 **Usage**::
 
@@ -253,6 +300,8 @@ coverage
 
 Generate a world map showing Tessera embedding coverage.
 
+⭐ **RECOMMENDED WORKFLOW**: Use this as your first step before downloading data.
+
 **Usage**::
 
     geotessera coverage [OPTIONS]
@@ -264,12 +313,15 @@ Generate a world map showing Tessera embedding coverage.
 **Data Selection**:
 
 * ``--year INT`` - Specific year to visualize (default: all years)
+* ``--region-file PATH`` - GeoJSON/Shapefile to focus coverage map on specific region (shows boundary outline)
+* ``--country TEXT`` - Country name to focus coverage map on with precise boundary outline (e.g., 'United Kingdom', 'UK', 'GB')
 
 **Visualization Options**:
 
 * ``--tile-color TEXT`` - Color for tile rectangles (default: red)
 * ``--tile-alpha FLOAT`` - Transparency of tiles 0.0-1.0 (default: 0.6)
 * ``--tile-size FLOAT`` - Size multiplier for tiles (default: 1.0)
+* ``--no-multi-year-colors`` - Disable multi-year color coding
 
 **Map Options**:
 
@@ -280,37 +332,39 @@ Generate a world map showing Tessera embedding coverage.
 
 **Examples**::
 
-    # Generate global coverage map
-    geotessera coverage --output global_coverage.png
+    # STEP 1: Check coverage for your region (recommended first step)
+    geotessera coverage --region-file study_area.geojson
+    geotessera coverage --region-file colombia_aoi.gpkg
+    geotessera coverage --country "United Kingdom"
+    geotessera coverage --country "Colombia"
 
-    # Show coverage for specific year
-    geotessera coverage \
-        --year 2024 \
-        --output coverage_2024.png
+    # Check coverage for specific year only
+    geotessera coverage --region-file study_area.shp --year 2024
+    geotessera coverage --country "UK" --year 2024
+
+    # Global coverage overview (all regions)
+    geotessera coverage
+
+    # Global coverage for specific year
+    geotessera coverage --year 2024
 
     # Customize visualization
-    geotessera coverage \
-        --year 2024 \
-        --tile-color blue \
-        --tile-alpha 0.3 \
-        --tile-size 1.2 \
-        --dpi 150 \
-        --width 24 \
-        --height 12 \
-        --output high_res_coverage.png
+    geotessera coverage --region-file area.geojson --tile-alpha 0.3 --dpi 150
+    geotessera coverage --country "Germany" --tile-alpha 0.3 --dpi 150
 
-    # Map without country boundaries
-    geotessera coverage \
-        --no-countries \
-        --tile-color green \
-        --output coverage_clean.png
+**Multi-Year Color Coding** (default when no specific year requested):
+    - **Green**: All available years present for this tile
+    - **Blue**: Only the latest year available for this tile  
+    - **Orange**: Partial years coverage (some combination of years)
 
 **Output**:
-    - High-resolution PNG world map
-    - Red rectangles show available tile locations
-    - Each rectangle represents one 0.1° × 0.1° tile
-    - Statistics shown in top-left corner
-    - Legend indicates available tiles and land masses
+    - High-resolution PNG world map with available tile coverage
+    - Colored rectangles show available tile locations (one per 0.1° × 0.1° tile)
+    - **Boundary Visualization**: Country/region boundaries are precisely outlined when using ``--country`` or ``--region-file``
+    - Global country boundaries are hidden when focusing on specific regions for cleaner visualization
+    - Statistics and next-step hints shown after generation
+
+**Next Steps**: After checking coverage, proceed to download data using the same region file or bounding box
 
 info
 ~~~~
@@ -361,9 +415,9 @@ Common Workflows
 Basic Download and View
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-Complete workflow from download to visualization::
+Complete workflow from coverage check to web visualization::
 
-    # 1. Check data availability
+    # 1. Check data availability (RECOMMENDED FIRST STEP)
     geotessera coverage --year 2024 --output coverage.png
 
     # 2. Download data
@@ -372,29 +426,26 @@ Complete workflow from download to visualization::
         --year 2024 \
         --output ./london_data
 
-    # 3. Create web visualization  
-    geotessera visualize \
-        ./london_data \
-        --type web \
-        --output ./london_web
+    # 3. Create PCA visualization
+    geotessera visualize ./london_data pca_mosaic.tif
 
-    # 4. Serve and view
-    geotessera serve ./london_web --open
+    # 4. Create web tiles and serve
+    geotessera webmap pca_mosaic.tif --serve
 
 Analysis Workflow
 ~~~~~~~~~~~~~~~~~
 
 Download for analysis purposes::
 
-    # 1. Download as numpy arrays
+    # 1. Check coverage for your analysis region
+    geotessera coverage --bbox "-0.1,52.0,0.1,52.2" --year 2024
+
+    # 2. Download as numpy arrays
     geotessera download \
         --bbox "-0.1,52.0,0.1,52.2" \
         --format npy \
         --year 2024 \
         --output ./cambridge_analysis
-
-    # 2. Check what was downloaded
-    geotessera info --geotiffs ./cambridge_analysis
 
     # 3. Process in Python
     python your_analysis_script.py
@@ -403,22 +454,22 @@ Download for analysis purposes::
     geotessera download \
         --bbox "-0.1,52.0,0.1,52.2" \
         --format tiff \
-        --bands "0,1,2" \
         --year 2024 \
         --output ./cambridge_viz
 
-    # 5. Create web map
-    geotessera visualize \
-        ./cambridge_viz \
-        --type web \
-        --output ./cambridge_web
+    # 5. Create PCA visualization and web map
+    geotessera visualize ./cambridge_viz pca_analysis.tif
+    geotessera webmap pca_analysis.tif --serve
 
 GIS Workflow
 ~~~~~~~~~~~~
 
 Prepare data for GIS software::
 
-    # 1. Download with specific bands for analysis
+    # 1. Check coverage for your region first
+    geotessera coverage --region-file study_area.geojson
+
+    # 2. Download with specific bands for analysis
     geotessera download \
         --region-file study_area.geojson \
         --bands "10,20,30,40,50" \
@@ -427,18 +478,14 @@ Prepare data for GIS software::
         --year 2024 \
         --output ./gis_data
 
-    # 2. Create RGB composite for visualization
-    geotessera visualize \
-        ./gis_data \
-        --type rgb \
-        --bands "0,1,2" \
-        --normalize \
-        --output ./gis_rgb
+    # 3. Create PCA visualization for overview
+    geotessera visualize ./gis_data pca_overview.tif
 
-    # 3. Analyze files before importing to GIS
+    # 4. Analyze files before importing to GIS
     geotessera info --geotiffs ./gis_data --verbose
 
     # Files are now ready for QGIS, ArcGIS, etc.
+    # Use pca_overview.tif for quick visual reference
 
 Troubleshooting
 ---------------

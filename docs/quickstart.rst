@@ -17,13 +17,31 @@ Verify the installation::
 Step 1: Check Data Availability
 --------------------------------
 
-Before downloading embeddings, it's useful to check what data is available for your region of interest.
+⭐ **RECOMMENDED FIRST STEP**: Before downloading embeddings, check what data is available for your region of interest.
 
 Generate a global coverage map::
 
     geotessera coverage --output global_coverage.png
 
-This creates a world map showing all available embedding tiles as red rectangles.
+This creates a world map showing all available embedding tiles. By default, it uses multi-year color coding:
+
+- **Green**: All available years present for this tile
+- **Blue**: Only the latest year available for this tile  
+- **Orange**: Partial years coverage (some combination of years)
+
+**✨ Boundary Visualization**: When you specify a country or region file, the precise boundaries are outlined on the map for better clarity.
+
+For a specific region (recommended)::
+
+    geotessera coverage --region-file study_area.geojson
+    # Next step: geotessera download --region-file study_area.geojson --output tiles/
+
+    # Or check coverage for a specific country (with precise boundary outline):
+    geotessera coverage --country "United Kingdom"
+    # Next step: geotessera download --country "United Kingdom" --output tiles/
+    
+    # Works great for countries with complex coastlines:
+    geotessera coverage --country "Greece"  # Shows all islands and coastline details
 
 For a specific year::
 
@@ -32,13 +50,9 @@ For a specific year::
 You can customize the visualization::
 
     geotessera coverage \
-        --year 2024 \
-        --tile-color blue \
+        --region-file area.geojson \
         --tile-alpha 0.3 \
-        --dpi 150 \
-        --width 24 \
-        --height 12 \
-        --output high_res_coverage.png
+        --dpi 150
 
 Step 2: Download Embeddings
 ----------------------------
@@ -57,6 +71,7 @@ Download embeddings for London as GeoTIFF files::
         --bbox "-0.2,51.4,0.1,51.6" \
         --year 2024 \
         --output ./london_tiles
+    # Next step: geotessera visualize ./london_tiles pca_mosaic.tif
 
 This downloads all 128 bands with LZW compression.
 
@@ -67,6 +82,7 @@ Download specific bands only::
         --bands "0,1,2" \
         --year 2024 \
         --output ./london_rgb
+    # Next step: geotessera visualize ./london_rgb pca_mosaic.tif
 
 Download by country name::
 
@@ -74,12 +90,14 @@ Download by country name::
         --country "United Kingdom" \
         --year 2024 \
         --output ./uk_tiles
+    # Next step: geotessera visualize ./uk_tiles pca_mosaic.tif
 
     # Or use short country codes
     geotessera download \
         --country "GB" \
         --year 2024 \
         --output ./uk_tiles
+    # Next step: geotessera visualize ./uk_tiles pca_mosaic.tif
 
 Download using a region file::
 
@@ -97,6 +115,7 @@ Download using a region file::
         --region-file cambridge.json \
         --year 2024 \
         --output ./cambridge_tiles
+    # Next step: geotessera visualize ./cambridge_tiles pca_mosaic.tif
 
 Download as NumPy Arrays (For Analysis)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -194,59 +213,64 @@ Load and analyze downloaded numpy arrays::
         center_pixel = embedding[embedding.shape[0]//2, embedding.shape[1]//2, :]
         print(f"  Center pixel features (first 5): {center_pixel[:5]}")
 
-Step 4: Create Visualizations
-------------------------------
+Step 4: Create PCA Visualizations
+----------------------------------
 
-Create an RGB Mosaic
-~~~~~~~~~~~~~~~~~~~~~
+Create a PCA Mosaic
+~~~~~~~~~~~~~~~~~~~
 
-From GeoTIFF files::
+From GeoTIFF files, create a PCA visualization::
 
-    geotessera visualize \
-        ./london_tiles \
-        --type rgb \
-        --bands "30,60,90" \
-        --normalize \
-        --output ./london_rgb
+    geotessera visualize ./london_tiles pca_mosaic.tif
+    # Next step: geotessera webmap pca_mosaic.tif --serve
 
-This creates an RGB visualization using bands 30, 60, and 90 as red, green, and blue channels.
+This combines all embedding data across tiles, applies PCA transformation, and creates a unified RGB mosaic from the first 3 principal components. This eliminates tiling artifacts and provides consistent visualization across the region.
+
+Customize the PCA visualization::
+
+    # Use histogram equalization for maximum contrast
+    geotessera visualize ./london_tiles pca_balanced.tif --balance histogram
+
+    # Use adaptive scaling based on variance
+    geotessera visualize ./london_tiles pca_adaptive.tif --balance adaptive
+
+    # Custom percentile range for outlier-robust scaling
+    geotessera visualize ./london_tiles pca_custom.tif --percentile-low 5 --percentile-high 95
+
+    # Compute more components for research (still uses first 3 for RGB)
+    geotessera visualize ./london_tiles pca_research.tif --n-components 10
 
 Create Interactive Web Maps
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Generate web tiles and an interactive map::
+Generate web tiles and viewer from your PCA mosaic::
 
-    geotessera visualize \
-        ./london_tiles \
-        --type web \
-        --min-zoom 8 \
-        --max-zoom 15 \
-        --output ./london_web
+    geotessera webmap pca_mosaic.tif --serve
 
-Serve the interactive map locally::
+This automatically:
+1. Reprojects the mosaic for web viewing if needed
+2. Generates web tiles at multiple zoom levels
+3. Creates an HTML viewer
+4. Starts a local web server and opens in your browser
 
-    geotessera serve ./london_web --open
+Customize web tile generation::
 
-This starts a local web server and opens the interactive map in your browser.
+    # Custom zoom levels and output directory
+    geotessera webmap pca_mosaic.tif --min-zoom 6 --max-zoom 18 --output webmap/
 
-Advanced Options
-~~~~~~~~~~~~~~~~
+    # Add region boundary overlay
+    geotessera webmap pca_mosaic.tif --region-file study_area.geojson --serve
 
-Force regeneration of web tiles::
+    # Force regeneration of existing tiles
+    geotessera webmap pca_mosaic.tif --force --serve
 
-    geotessera visualize \
-        ./london_tiles \
-        --type web \
-        --force \
-        --output ./london_web
+Coverage Maps
+~~~~~~~~~~~~~
 
-Use specific bands for RGB::
+Create HTML maps showing tile coverage::
 
-    geotessera visualize \
-        ./london_tiles \
-        --type rgb \
-        --bands "0,1,2" \
-        --output ./london_rgb_012
+    geotessera tilemap ./london_tiles --output coverage.html
+    geotessera serve . --html coverage.html
 
 Step 5: Advanced Workflows
 ---------------------------
@@ -307,6 +331,10 @@ Complete analysis workflow::
             bands=[40, 50, 60]  # Bands around band 50
         )
         files.extend(file)
+    
+    # Create PCA visualization from selected tiles
+    # CLI: geotessera visualize ./selected_tiles pca_selected.tif
+    # CLI: geotessera webmap pca_selected.tif --serve
 
 Mixed Format Workflow
 ~~~~~~~~~~~~~~~~~~~~~
@@ -314,7 +342,6 @@ Mixed Format Workflow
 Use both numpy and GeoTIFF formats in the same workflow::
 
     from geotessera import GeoTessera
-    from geotessera.visualization import create_rgb_mosaic_from_geotiffs
     
     gt = GeoTessera()
     bbox = (-0.1, 51.5, 0.0, 51.55)
@@ -344,15 +371,13 @@ Use both numpy and GeoTIFF formats in the same workflow::
         )
         all_files.extend(files)
     
-    # Step 3: Create combined visualization
-    create_rgb_mosaic_from_geotiffs(
-        geotiff_paths=all_files,
-        output_path="interesting_mosaic.tif",
-        bands=(0, 1, 2),  # Use the 3 exported bands
-        normalize=True
-    )
+    # Step 3: Create PCA visualization from selected tiles
+    print("Creating PCA visualization...")
+    # Use CLI for PCA visualization:
+    # geotessera visualize ./interesting_tiles pca_interesting.tif
+    # geotessera webmap pca_interesting.tif --serve
     
-    print("Created mosaic of interesting tiles: interesting_mosaic.tif")
+    print("Use CLI commands to create PCA visualization and web viewer")
 
 Next Steps
 ----------
@@ -366,7 +391,7 @@ Common Issues
 -------------
 
 **No tiles found in region**:
-   Check the coverage map first. The region might not have available data.
+   Check the coverage map first using ``geotessera coverage`` with your region or bounding box. The region might not have available data.
 
 **Slow downloads**:
    Files are cached after first download. Subsequent access will be much faster.
@@ -376,3 +401,6 @@ Common Issues
 
 **Projection issues in GIS software**:
    GeoTIFF files use UTM projections. Most GIS software will handle this automatically.
+
+**PCA visualization issues**:
+   Ensure you have enough tiles for meaningful PCA. Single tiles may not produce good results.

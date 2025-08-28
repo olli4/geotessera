@@ -36,9 +36,17 @@ Create a GeoTessera client::
 Explore Data Availability
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Before downloading, check what data is available::
+Before downloading, check what data is available using the CLI::
 
     # Generate a coverage map
+    # CLI command (preferred):
+    # geotessera coverage --year 2024 --output global_coverage.png
+    
+    # For specific regions with boundary visualization:
+    # geotessera coverage --country "United Kingdom" --year 2024  # Shows precise UK boundaries
+    # geotessera coverage --region-file study_area.geojson --year 2024  # Shows custom region outline
+    
+    # Or using Python API:
     from geotessera.visualization import visualize_global_coverage
     
     visualize_global_coverage(
@@ -51,6 +59,8 @@ Before downloading, check what data is available::
     )
     
     print("Coverage map saved to global_coverage.png")
+    print("Next step: Download data for your region")
+    print("For better regional focus, use: geotessera coverage --country 'YourCountry'")
 
 Download and Analyze a Single Tile
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -164,11 +174,14 @@ Tutorial 2: GIS Integration Workflow
 
 This tutorial shows how to work with GeoTIFF exports for GIS software integration.
 
-Export Embeddings as GeoTIFF
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Check Coverage and Export Embeddings as GeoTIFF
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Export a region as georeferenced GeoTIFF files::
+First check coverage, then export as georeferenced GeoTIFF files::
 
+    # Step 1: Check coverage (CLI recommended)
+    # geotessera coverage --bbox "-0.2,51.4,0.1,51.6" --year 2024
+    
     from geotessera import GeoTessera
     
     gt = GeoTessera()
@@ -177,6 +190,11 @@ Export a region as georeferenced GeoTIFF files::
     bbox = (-0.2, 51.4, 0.1, 51.6)
     year = 2024
     
+    # Step 2: Download via CLI (preferred) or Python API
+    # CLI: geotessera download --bbox "-0.2,51.4,0.1,51.6" --year 2024 --output ./london_full
+    # CLI: geotessera download --bbox "-0.2,51.4,0.1,51.6" --year 2024 --bands "30,60,90" --output ./london_rgb
+    
+    # Or using Python API:
     # Export all bands
     all_files = gt.export_embedding_geotiffs(
         bbox=bbox,
@@ -186,6 +204,7 @@ Export a region as georeferenced GeoTIFF files::
     )
     
     print(f"Exported {len(all_files)} GeoTIFF files")
+    print("Next step: geotessera visualize ./london_full pca_mosaic.tif")
     
     # Export RGB subset for visualization
     rgb_files = gt.export_embedding_geotiffs(
@@ -197,6 +216,7 @@ Export a region as georeferenced GeoTIFF files::
     )
     
     print(f"Exported {len(rgb_files)} RGB GeoTIFF files")
+    print("Next step: geotessera visualize ./london_rgb pca_rgb_mosaic.tif")
 
 Inspect GeoTIFF Metadata
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -221,49 +241,43 @@ Check the georeferencing information::
         sample_data = src.read(1)  # Read first band
         print(f"Data range: [{sample_data.min():.3f}, {sample_data.max():.3f}]")
 
-Create RGB Composite
-~~~~~~~~~~~~~~~~~~~~
+Create PCA Visualization
+~~~~~~~~~~~~~~~~~~~~~~~~
 
-Create an RGB visualization from the exported bands::
+Create a PCA visualization from the exported tiles::
 
-    from geotessera.visualization import create_rgb_mosaic_from_geotiffs
+    # Using CLI:
+    # geotessera visualize ./london_rgb pca_rgb_mosaic.tif
+    # geotessera visualize ./london_full pca_full_mosaic.tif --n-components 5
     
-    # Create RGB mosaic from the 3-band files
-    mosaic_file = create_rgb_mosaic_from_geotiffs(
-        geotiff_paths=rgb_files,
-        output_path="london_rgb_mosaic.tif",
-        bands=(0, 1, 2),  # Use all 3 exported bands as RGB
-        normalize=True
-    )
+    # This creates a PCA-based RGB mosaic that:
+    # 1. Combines all embedding data across tiles
+    # 2. Applies PCA transformation for dimensionality reduction
+    # 3. Maps first 3 principal components to RGB channels
+    # 4. Eliminates tiling artifacts through consistent PCA across region
     
-    print(f"Created RGB mosaic: {mosaic_file}")
+    print("PCA mosaic created")
+    print("Next step: geotessera webmap pca_rgb_mosaic.tif --serve")
 
-Generate Web Tiles
-~~~~~~~~~~~~~~~~~~
+Generate Web Tiles and Viewer
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Create interactive web tiles from the GeoTIFF::
+Create interactive web tiles from the PCA mosaic::
 
-    from geotessera.visualization import geotiff_to_web_tiles, create_simple_web_viewer
+    # Using CLI:
+    # geotessera webmap pca_rgb_mosaic.tif --serve
     
-    # Generate web tiles
-    tiles_dir = "./london_web_tiles"
-    geotiff_to_web_tiles(
-        geotiff_path=mosaic_file,
-        output_dir=tiles_dir,
-        zoom_levels=(8, 15)
-    )
+    # This command automatically:
+    # 1. Reprojects mosaic for web viewing if needed
+    # 2. Generates web tiles at multiple zoom levels
+    # 3. Creates HTML viewer with Leaflet map
+    # 4. Starts web server and opens in browser
     
-    # Create a simple web viewer
-    create_simple_web_viewer(
-        tiles_dir=tiles_dir,
-        output_html="london_map.html",
-        center_lat=51.5,
-        center_lon=-0.05,
-        zoom=10,
-        title="London Tessera Embeddings"
-    )
+    # For custom options:
+    # geotessera webmap pca_rgb_mosaic.tif --min-zoom 6 --max-zoom 18 --output webmap/ --serve
     
-    print("Web tiles created. Open london_map.html in a browser.")
+    print("Web tiles and viewer created")
+    print("Interactive map should open in your browser")
 
 QGIS Integration
 ~~~~~~~~~~~~~~~
@@ -301,8 +315,19 @@ This tutorial covers working with large regions and multiple years of data.
 Memory-Efficient Processing
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-When working with large regions, process tiles individually::
+When working with large regions, use CLI for efficient processing::
 
+    # Use CLI for large regions
+    # Step 1: Check coverage first
+    # geotessera coverage --bbox "-3.0,50.0,2.0,53.0" --year 2024
+    
+    # Step 2: Download in smaller chunks or use selective bands
+    # geotessera download --bbox "-3.0,50.0,2.0,53.0" --year 2024 --bands "0,10,20,30,40" --output ./southern_england
+    
+    # Step 3: Create PCA visualization (handles large datasets efficiently)
+    # geotessera visualize ./southern_england pca_southern_england.tif --n-components 5
+    
+    # For Python analysis of large regions:
     from geotessera import GeoTessera
     import numpy as np
     
@@ -320,6 +345,7 @@ When working with large regions, process tiles individually::
         total_tiles = len(tiles)
         
         print(f"Processing {total_tiles} tiles...")
+        print("Consider using CLI: geotessera download + geotessera visualize for large regions")
         
         results = []
         for i, (tile_lon, tile_lat, embedding, crs, transform) in enumerate(tiles):
@@ -363,8 +389,39 @@ When working with large regions, process tiles individually::
 Batch Export for Multiple Regions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Export multiple regions efficiently::
+Export multiple regions efficiently using CLI commands::
 
+    # Use CLI for batch processing
+    # Create a shell script for batch downloads:
+    
+    #!/bin/bash
+    
+    # Check coverage for all regions first (with boundary visualization)
+    echo "Checking coverage for all regions..."
+    geotessera coverage --country "United Kingdom" --year 2024 --output uk_coverage.png  # Shows full UK boundaries
+    geotessera coverage --bbox "-0.3,51.3,0.2,51.7" --year 2024 --output london_coverage.png
+    geotessera coverage --bbox "-0.2,52.0,0.3,52.3" --year 2024 --output cambridge_coverage.png
+    geotessera coverage --bbox "-1.4,51.6,-1.1,51.9" --year 2024 --output oxford_coverage.png
+    
+    # Download regions
+    echo "Downloading regions..."
+    geotessera download --bbox "-0.3,51.3,0.2,51.7" --year 2024 --bands "10,20,30,40,50" --output ./batch_exports/london
+    geotessera download --bbox "-0.2,52.0,0.3,52.3" --year 2024 --output ./batch_exports/cambridge
+    geotessera download --bbox "-1.4,51.6,-1.1,51.9" --year 2024 --bands "0,1,2" --output ./batch_exports/oxford
+    
+    # Create PCA visualizations
+    echo "Creating PCA visualizations..."
+    geotessera visualize ./batch_exports/london pca_london.tif
+    geotessera visualize ./batch_exports/cambridge pca_cambridge.tif
+    geotessera visualize ./batch_exports/oxford pca_oxford.tif
+    
+    # Create web viewers
+    echo "Creating web viewers..."
+    geotessera webmap pca_london.tif --output london_web/ --serve &
+    geotessera webmap pca_cambridge.tif --output cambridge_web/
+    geotessera webmap pca_oxford.tif --output oxford_web/
+    
+    # For Python-based batch processing:
     def batch_export_regions(regions_config, base_output_dir):
         """Export multiple regions as GeoTIFF files."""
         import os
@@ -374,6 +431,7 @@ Export multiple regions efficiently::
         
         for region_name, config in regions_config.items():
             print(f"Processing region: {region_name}")
+            print(f"Recommend using CLI: geotessera download --bbox '{','.join(map(str, config['bbox']))}' --year {config['year']} --output ./batch_exports/{region_name}")
             
             output_dir = Path(base_output_dir) / region_name
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -388,6 +446,7 @@ Export multiple regions efficiently::
                 )
                 
                 print(f"  Exported {len(files)} files to {output_dir}")
+                print(f"  Next step: geotessera visualize {output_dir} pca_{region_name}.tif")
                 
                 # Create metadata file
                 metadata = {
@@ -395,7 +454,11 @@ Export multiple regions efficiently::
                     'bbox': config['bbox'],
                     'year': config['year'],
                     'files': files,
-                    'band_count': len(config.get('bands', list(range(128))))
+                    'band_count': len(config.get('bands', list(range(128)))),
+                    'next_steps': [
+                        f"geotessera visualize {output_dir} pca_{region_name}.tif",
+                        f"geotessera webmap pca_{region_name}.tif --serve"
+                    ]
                 }
                 
                 with open(output_dir / 'metadata.json', 'w') as f:
@@ -479,7 +542,44 @@ Compare embeddings across different years::
     plt.savefig('cambridge_temporal_trend.png', dpi=150, bbox_inches='tight')
     plt.show()
 
-Tutorial 4: Custom Analysis Workflows
+Tutorial 4: Coverage Analysis with Boundary Visualization
+--------------------------------------------------------
+
+Understanding data coverage with precise geographic boundaries.
+
+Visualizing Country Coverage
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The coverage command shows precise country boundaries when using ``--country``::
+
+    # Countries with simple boundaries
+    geotessera coverage --country "Germany" --year 2024
+    geotessera coverage --country "France" --year 2024
+    
+    # Countries with complex coastlines and islands
+    geotessera coverage --country "Greece" --year 2024     # Shows all Greek islands
+    geotessera coverage --country "United Kingdom" --year 2024  # Shows England, Scotland, Wales, N. Ireland
+    geotessera coverage --country "Indonesia" --year 2024  # Shows thousands of islands
+    
+    # Using country codes
+    geotessera coverage --country "UK" --year 2024
+    geotessera coverage --country "US" --year 2024
+
+Comparing Boundary vs Bounding Box
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+::
+
+    # Bounding box approach (rectangular, may include unwanted areas)
+    geotessera coverage --bbox "20,35,30,42" --output greece_bbox.png
+    
+    # Precise boundary approach (follows actual country borders)
+    geotessera coverage --country "Greece" --output greece_precise.png
+    
+The country approach shows only tiles that actually intersect with Greek territory,
+excluding tiles over water or neighboring countries that fall within the bounding box.
+
+Tutorial 5: Custom Analysis Workflows
 -------------------------------------
 
 Advanced analysis techniques and custom workflows.
@@ -558,217 +658,6 @@ Reduce dimensionality of the 128-channel embeddings::
     plt.savefig('pca_analysis.png', dpi=150, bbox_inches='tight')
     plt.show()
 
-Clustering Analysis
-~~~~~~~~~~~~~~~~~~
-
-Identify similar regions using clustering::
-
-    from sklearn.cluster import KMeans
-    from sklearn.metrics import silhouette_score
-    
-    def cluster_embedding_tiles(embeddings_list, n_clusters=5):
-        """Cluster embedding tiles based on their mean features."""
-        
-        # Extract mean features for each tile
-        tile_features = []
-        tile_coords = []
-        
-        for tile_lon, tile_lat, embedding, crs, transform in embeddings_list:
-            # Use mean values across spatial dimensions
-            mean_features = np.mean(embedding, axis=(0, 1))
-            tile_features.append(mean_features)
-            tile_coords.append((tile_lat, tile_lon))
-        
-        X = np.array(tile_features)
-        print(f"Clustering {X.shape[0]} tiles with {X.shape[1]} features")
-        
-        # Standardize features
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-        
-        # Perform clustering
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-        cluster_labels = kmeans.fit_predict(X_scaled)
-        
-        # Calculate silhouette score
-        silhouette_avg = silhouette_score(X_scaled, cluster_labels)
-        print(f"Silhouette score: {silhouette_avg:.3f}")
-        
-        # Organize results
-        clusters = {}
-        for i, (coords, label) in enumerate(zip(tile_coords, cluster_labels)):
-            if label not in clusters:
-                clusters[label] = []
-            clusters[label].append({
-                'coords': coords,
-                'features': tile_features[i]
-            })
-        
-        return clusters, kmeans, scaler
-    
-    # Perform clustering
-    clusters, kmeans, scaler = cluster_embedding_tiles(tiles, n_clusters=3)
-    
-    # Visualize clusters
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-    
-    # Plot 1: Geographic distribution of clusters
-    colors = ['red', 'blue', 'green', 'orange', 'purple']
-    for cluster_id, tiles in clusters.items():
-        lats = [tile['coords'][0] for tile in tiles]
-        lons = [tile['coords'][1] for tile in tiles]
-        ax1.scatter(lons, lats, c=colors[cluster_id], 
-                   label=f'Cluster {cluster_id} ({len(tiles)} tiles)',
-                   alpha=0.7, s=50)
-    
-    ax1.set_xlabel('Longitude')
-    ax1.set_ylabel('Latitude')
-    ax1.set_title('Geographic Distribution of Clusters')
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-    
-    # Plot 2: Cluster characteristics (first 10 channels)
-    for cluster_id, tiles in clusters.items():
-        mean_features = np.mean([tile['features'] for tile in tiles], axis=0)
-        ax2.plot(range(10), mean_features[:10], 'o-', 
-                label=f'Cluster {cluster_id}', color=colors[cluster_id])
-    
-    ax2.set_xlabel('Channel Index')
-    ax2.set_ylabel('Mean Feature Value')
-    ax2.set_title('Cluster Characteristics (Channels 0-9)')
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig('clustering_analysis.png', dpi=150, bbox_inches='tight')
-    plt.show()
-
-Time Series Analysis
-~~~~~~~~~~~~~~~~~~~
-
-Analyze temporal patterns in multi-year data::
-
-    def analyze_temporal_patterns(lat, lon, years, channels_of_interest):
-        """Analyze temporal patterns for specific channels at a location."""
-        
-        gt = GeoTessera()
-        temporal_data = {}
-        
-        for year in years:
-            try:
-                embedding, crs, transform = gt.fetch_embedding(lon=lon, lat=lat, year=year)
-                
-                # Extract data for channels of interest
-                year_data = {}
-                for channel in channels_of_interest:
-                    channel_data = embedding[:, :, channel]
-                    year_data[f'channel_{channel}'] = {
-                        'mean': float(np.mean(channel_data)),
-                        'std': float(np.std(channel_data)),
-                        'min': float(np.min(channel_data)),
-                        'max': float(np.max(channel_data))
-                    }
-                
-                temporal_data[year] = year_data
-                
-            except Exception as e:
-                print(f"Year {year}: {e}")
-                continue
-        
-        return temporal_data
-    
-    # Analyze temporal patterns for interesting channels
-    channels_of_interest = [10, 30, 50, 70, 90]  # Example channels
-    years_to_analyze = [2020, 2021, 2022, 2023, 2024]
-    
-    temporal_results = analyze_temporal_patterns(
-        lat=52.05, lon=0.15, 
-        years=years_to_analyze,
-        channels_of_interest=channels_of_interest
-    )
-    
-    # Plot temporal trends
-    fig, axes = plt.subplots(len(channels_of_interest), 1, 
-                           figsize=(12, 3*len(channels_of_interest)))
-    
-    if len(channels_of_interest) == 1:
-        axes = [axes]
-    
-    for i, channel in enumerate(channels_of_interest):
-        ax = axes[i]
-        
-        valid_years = []
-        means = []
-        stds = []
-        
-        for year in sorted(temporal_results.keys()):
-            if f'channel_{channel}' in temporal_results[year]:
-                valid_years.append(year)
-                means.append(temporal_results[year][f'channel_{channel}']['mean'])
-                stds.append(temporal_results[year][f'channel_{channel}']['std'])
-        
-        if valid_years:
-            ax.errorbar(valid_years, means, yerr=stds, 
-                       marker='o', capsize=5, capthick=2)
-            ax.set_title(f'Channel {channel} - Temporal Trend')
-            ax.set_ylabel('Mean Value')
-            ax.grid(True, alpha=0.3)
-            
-            if i == len(channels_of_interest) - 1:
-                ax.set_xlabel('Year')
-    
-    plt.tight_layout()
-    plt.savefig('temporal_analysis.png', dpi=150, bbox_inches='tight')
-    plt.show()
-
-Save Results and Create Report
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Generate a comprehensive analysis report::
-
-    def create_analysis_report(results_dict, output_file):
-        """Create a comprehensive analysis report."""
-        
-        report = {
-            'analysis_date': str(datetime.now()),
-            'geotessera_version': gt.version,
-            'summary': {
-                'total_tiles_analyzed': len(results_dict.get('tiles', [])),
-                'regions_covered': list(results_dict.keys()),
-                'years_analyzed': sorted(set(
-                    year for region_data in results_dict.values() 
-                    if isinstance(region_data, dict)
-                    for year in region_data.get('years', [])
-                ))
-            },
-            'detailed_results': results_dict
-        }
-        
-        with open(output_file, 'w') as f:
-            json.dump(report, f, indent=2)
-        
-        print(f"Analysis report saved to: {output_file}")
-        
-        # Create summary statistics
-        print("\n=== ANALYSIS SUMMARY ===")
-        print(f"Total tiles analyzed: {report['summary']['total_tiles_analyzed']}")
-        print(f"Regions covered: {', '.join(report['summary']['regions_covered'])}")
-        print(f"Years analyzed: {', '.join(map(str, report['summary']['years_analyzed']))}")
-    
-    # Compile all results
-    all_results = {
-        'pca_analysis': {
-            'explained_variance': pca.explained_variance_ratio_.tolist(),
-            'n_components': len(pca.explained_variance_ratio_)
-        },
-        'clustering': {
-            'n_clusters': len(clusters),
-            'cluster_sizes': {str(k): len(v) for k, v in clusters.items()},
-            'silhouette_score': float(silhouette_score(X_scaled, cluster_labels))
-        },
-        'temporal_analysis': temporal_results
-    }
-    
-    create_analysis_report(all_results, 'comprehensive_analysis_report.json')
-
-This comprehensive tutorial set covers the major use cases for GeoTessera, from basic data exploration to advanced machine learning workflows. Each tutorial builds upon the previous ones, providing a complete learning path for users.
+If you would like to now try more advanced classification, go to the
+`Tessera interactive notebook <https://github.com/ucam-eo/tessera-interactive-notebook>`_
+for a Jupyter-based label classifier application.

@@ -108,6 +108,9 @@ Before downloading, check what data is available:
 # Generate a coverage map showing all available tiles
 geotessera coverage --output coverage_map.png
 
+# Generate a coverage map for the UK
+geotessera coverage --country uk
+
 # View coverage for a specific year
 geotessera coverage --year 2024 --output coverage_2024.png
 
@@ -362,122 +365,6 @@ Options:
   -v, --verbose            Verbose output
 ```
 
-## Complete Workflows
-
-### Example 1: NumPy Array Analysis
-
-```python
-from geotessera import GeoTessera
-import numpy as np
-
-# Initialize client
-gt = GeoTessera()
-
-# Define area of interest
-bbox = (-0.15, 52.15, 0.0, 52.25)  # Cambridge area
-
-# Fetch embeddings as numpy arrays
-embeddings = gt.fetch_embeddings(bbox, year=2024)
-
-# Save arrays with metadata
-import json
-metadata = {"tiles": [], "bbox": bbox, "year": 2024}
-
-for lat, lon, embedding, crs, transform in embeddings:
-    # Save numpy array
-    filename = f"tile_{lat:.2f}_{lon:.2f}.npy"
-    np.save(filename, embedding)
-    
-    # Record metadata
-    metadata["tiles"].append({
-        "lat": lat,
-        "lon": lon,
-        "filename": filename,
-        "shape": embedding.shape
-    })
-    
-    # Perform analysis
-    print(f"Tile ({lat:.2f}, {lon:.2f}):")
-    print(f"  Shape: {embedding.shape}")
-    print(f"  Mean values (first 5 bands): {np.mean(embedding, axis=(0,1))[:5]}")
-    print(f"  Data range: [{embedding.min():.2f}, {embedding.max():.2f}]")
-
-# Save metadata
-with open("metadata.json", "w") as f:
-    json.dump(metadata, f, indent=2)
-```
-
-### Example 2: GeoTIFF Export for GIS
-
-```bash
-# 1. Download as GeoTIFF for GIS software
-geotessera download \
-  --bbox "-0.2,51.4,0.1,51.6" \
-  --format tiff \
-  --year 2024 \
-  --compress lzw \
-  --output ./london_tiles
-
-# 2. Create RGB visualization
-geotessera visualize \
-  ./london_tiles \
-  --type rgb \
-  --bands "10,30,50" \
-  --normalize \
-  --output ./london_viz
-
-# 3. Generate web tiles
-geotessera visualize \
-  ./london_tiles \
-  --type web \
-  --min-zoom 8 \
-  --max-zoom 15 \
-  --output ./london_web
-
-# 4. Serve interactive map
-geotessera serve ./london_web --open
-```
-
-### Example 3: Mixed Format Workflow
-
-```python
-from geotessera import GeoTessera
-from geotessera.visualization import create_rgb_mosaic_from_geotiffs
-
-gt = GeoTessera()
-bbox = (-0.1, 51.5, 0.0, 51.55)
-
-# Step 1: Fetch as numpy for analysis
-embeddings = gt.fetch_embeddings(bbox, year=2024)
-
-# Analyze embeddings
-selected_tiles = []
-for lat, lon, embedding, crs, transform in embeddings:
-    # Custom selection criteria
-    mean_band_50 = np.mean(embedding[:, :, 50])
-    if mean_band_50 > threshold:
-        selected_tiles.append((lat, lon))
-
-# Step 2: Export selected tiles as GeoTIFF
-files = []
-for lat, lon in selected_tiles:
-    file = gt.export_single_tile_as_tiff(
-        lat=lat, lon=lon,
-        output_path=f"selected_{lat:.2f}_{lon:.2f}.tif",
-        year=2024,
-        bands=[10, 30, 50]  # Custom band selection
-    )
-    files.append(file)
-
-# Step 3: Create mosaic
-create_rgb_mosaic_from_geotiffs(
-    geotiff_paths=files,
-    output_path="selected_mosaic.tif",
-    bands=(0, 1, 2),  # Already filtered to 3 bands
-    normalize=True
-)
-```
-
 ## Registry System
 
 ### Overview
@@ -588,15 +475,6 @@ export TESSERA_REGISTRY_DIR=/path/to/tessera-manifests
 TESSERA_DATA_DIR=/tmp/cache geotessera download ...
 ```
 
-## Performance Tips
-
-1. **Use bounding boxes efficiently**: Request only the region you need
-2. **Cache management**: Files are cached locally after first download
-3. **Band selection**: Export only required bands to reduce file sizes
-4. **Format choice**: 
-   - Use `npy` format for numerical analysis (smaller, faster)
-   - Use `tiff` format for GIS integration (georeferenced)
-
 ## Contributing
 
 Contributions are welcome! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
@@ -621,6 +499,7 @@ If you use Tessera in your research, please cite the [arXiv paper](https://arxiv
 ## Links
 
 - [Tessera Foundation Model](https://github.com/ucam-eo/tessera)
+- [Tessera Interactive Notebook](https://github.com/ucam-eo/tessera-interactive-notebook)
 - [Documentation](https://geotessera.readthedocs.io/)
 - [PyPI Package](https://pypi.org/project/geotessera/)
 - [Issue Tracker](https://github.com/ucam-eo/geotessera/issues)
