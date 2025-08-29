@@ -11,6 +11,8 @@ representation maps at 10m resolution. These embeddings compress a full year of
 temporal-spectral features into dense representations optimized for downstream
 geospatial analysis tasks. Read more details about [the model](https://github.com/ucam-eo/tessera).
 
+![Coverage map](https://raw.githubusercontent.com/ucam-eo/tessera-coverage-map/refs/heads/main/map.png)
+
 ## Table of Contents
 
 - [Installation](#installation)
