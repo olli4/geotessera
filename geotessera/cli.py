@@ -11,9 +11,8 @@ import time
 import http.server
 import socketserver
 import json
-from functools import partial
 from pathlib import Path
-from typing import Optional, Callable, List, Tuple
+from typing import Optional, Callable
 from typing_extensions import Annotated
 
 import numpy as np
@@ -568,7 +567,7 @@ def visualize(
     """
     
     # Validate output file extension
-    if not output_file.suffix.lower() in [".tif", ".tiff"]:
+    if output_file.suffix.lower() not in [".tif", ".tiff"]:
         rprint("[red]Error: Output file must have .tif or .tiff extension[/red]")
         raise typer.Exit(1)
         
@@ -620,9 +619,6 @@ def visualize(
         )
 
         try:
-            # Get GeoTessera instance
-            gt = GeoTessera()
-            
             # Create a progress callback that maps to our 5-step progress
             def visualization_progress_callback(current: float, total: float, status: str = None):
                 progress.update(task, completed=current, total=total, status=status or "Processing...")
@@ -880,8 +876,8 @@ def webmap(
         rprint(f"[red]Error: Mosaic file {rgb_mosaic} does not exist[/red]")
         raise typer.Exit(1)
     
-    if not rgb_mosaic.suffix.lower() in ['.tif', '.tiff']:
-        rprint(f"[red]Error: Input must be a GeoTIFF file (.tif/.tiff)[/red]")
+    if rgb_mosaic.suffix.lower() not in ['.tif', '.tiff']:
+        rprint("[red]Error: Input must be a GeoTIFF file (.tif/.tiff)[/red]")
         raise typer.Exit(1)
     
     # Default output directory
@@ -1009,7 +1005,7 @@ def webmap(
     rprint(f"[green]{mosaic_status}[/green]")
     
     if tiles_regenerated:
-        rprint(f"[yellow]Removed existing tiles directory for regeneration[/yellow]")
+        rprint("[yellow]Removed existing tiles directory for regeneration[/yellow]")
     
     rprint(f"[green]{tiles_status}[/green]")
     if tiles_force_hint:
@@ -1018,7 +1014,7 @@ def webmap(
     rprint(f"[green]{viewer_status}[/green]")
     
     if serve_immediately:
-        rprint(f"[blue]Starting web server...[/blue]")
+        rprint("[blue]Starting web server...[/blue]")
         # Call the serve function directly
         try:
             serve(directory=output, port=port, open_browser=True, html_file="viewer.html")

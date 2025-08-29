@@ -6,7 +6,6 @@ and mosaic creation. Web/tile generation functions are in the web submodule.
 
 from pathlib import Path
 from typing import Union, List, Tuple, Optional, Dict, Callable
-import json
 
 import numpy as np
 import geopandas as gpd
@@ -689,7 +688,7 @@ def create_pca_mosaic(
     
     # Step 2: Combine all pixel data and apply PCA
     if progress_callback:
-        progress_callback(2, 5, f"Applying PCA to combined data...")
+        progress_callback(2, 5, "Applying PCA to combined data...")
     
     # Combine all pixels from all tiles
     combined_pixels = np.vstack(all_pixels)

@@ -563,7 +563,6 @@ class GeoTessera:
         try:
             import rasterio
             from rasterio.merge import merge
-            from rasterio.warp import calculate_default_transform
             import tempfile
             import os
         except ImportError:
@@ -594,7 +593,7 @@ class GeoTessera:
                 reproject_args.append((geotiff_file, reprojected_file, target_crs, source_resolution, compress))
             
             if progress_callback:
-                progress_callback(0, total_files * 2 + 2, f"Starting reprojection...")
+                progress_callback(0, total_files * 2 + 2, "Starting reprojection...")
             
             # Sequential reprojection
             failed_files = []
@@ -606,8 +605,6 @@ class GeoTessera:
                 
                 if error:
                     failed_files.append((geotiff_paths[i], error))
-                
-                completed = i + 1
             
             if failed_files:
                 error_msg = f"Failed to reproject {len(failed_files)} files: "

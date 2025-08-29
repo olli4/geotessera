@@ -5,7 +5,7 @@ visualizations using Leaflet and other web technologies.
 """
 
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Callable
+from typing import List, Tuple, Optional, Callable
 import json
 
 
