@@ -124,8 +124,7 @@ def visualize_global_coverage(
     tessera_client,
     output_path: str = "tessera_coverage.png",
     year: Optional[int] = None,
-    figsize: Tuple[int, int] = (20, 10),
-    dpi: int = 100,
+    width_pixels: int = 2000,
     show_countries: bool = True,
     tile_color: str = "red",
     tile_alpha: float = 0.6,
@@ -148,8 +147,7 @@ def visualize_global_coverage(
         tessera_client: GeoTessera instance with loaded registries
         output_path: Output filename for the PNG map
         year: Specific year to show coverage for. If None, shows all years with multi-year coloring
-        figsize: Figure size as (width, height) in inches
-        dpi: Dots per inch for output resolution
+        width_pixels: Width of output image in pixels (height calculated automatically)
         show_countries: Whether to show country boundaries
         tile_color: Color for tile rectangles (ignored when multi_year_colors=True)
         tile_alpha: Transparency of tile rectangles (0=transparent, 1=opaque)
@@ -175,7 +173,7 @@ def visualize_global_coverage(
         >>> 
         >>> # Other examples:
         >>> visualize_global_coverage(gt, "coverage_2024.png", year=2024)
-        >>> visualize_global_coverage(gt, "coverage_all.png")  # Global view
+        >>> visualize_global_coverage(gt, "coverage_all.png", width_pixels=3000)  # High-res global view
     """
     try:
         import matplotlib.pyplot as plt
@@ -280,10 +278,27 @@ def visualize_global_coverage(
     if not progress_callback:
         print(f"Found {len(tiles)} tiles to visualize")
 
-    # Create figure and axis
+    # Calculate figure dimensions
     if progress_callback:
         progress_callback(0, 100, "Creating figure...")
-    fig, ax = plt.subplots(1, 1, figsize=figsize, dpi=dpi)
+    
+    # Determine aspect ratio based on region or global view
+    if region_bbox:
+        min_lon, min_lat, max_lon, max_lat = region_bbox
+        lon_range = max_lon - min_lon
+        lat_range = max_lat - min_lat
+        aspect_ratio = lat_range / lon_range if lon_range > 0 else 1.0
+    else:
+        # Global view: 180 degrees lat / 360 degrees lon = 0.5
+        aspect_ratio = 0.5
+    
+    # Calculate dimensions in inches (matplotlib still needs this internally)
+    # Use a fixed DPI of 100 for simplicity
+    dpi = 100
+    fig_width = width_pixels / dpi
+    fig_height = fig_width * aspect_ratio
+    
+    fig, ax = plt.subplots(1, 1, figsize=(fig_width, fig_height), dpi=dpi)
 
     # Plot world map
     if show_countries and world is not None:
@@ -308,13 +323,6 @@ def visualize_global_coverage(
 
         # Get tile bounds using the helper function
         west, south, east, north = tile_to_bounds(lon, lat)
-        
-        # Shrink tiles slightly to prevent alpha overlap on adjacent edges
-        gap = 0.001  # Small gap in degrees to prevent visual overlap
-        west += gap
-        south += gap 
-        east -= gap
-        north -= gap
 
         # Apply size multiplier if needed
         if tile_size != 1.0:

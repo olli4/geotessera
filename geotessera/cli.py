@@ -1184,13 +1184,9 @@ def coverage(
             "--tile-size", help="Size multiplier for tiles (1.0 = actual size)"
         ),
     ] = 1.0,
-    dpi: Annotated[
-        int, typer.Option("--dpi", help="Output resolution in dots per inch")
-    ] = 100,
-    width: Annotated[int, typer.Option("--width", help="Figure width in inches")] = 20,
-    height: Annotated[
-        int, typer.Option("--height", help="Figure height in inches")
-    ] = 10,
+    width_pixels: Annotated[
+        int, typer.Option("--width", help="Output image width in pixels")
+    ] = 2000,
     no_countries: Annotated[
         bool, typer.Option("--no-countries", help="Don't show country boundaries")
     ] = False,
@@ -1246,8 +1242,8 @@ def coverage(
         geotessera coverage --year 2024
 
         # Customize visualization
-        geotessera coverage --region-file area.geojson --tile-alpha 0.3 --dpi 150
-        geotessera coverage --country "Germany" --tile-alpha 0.3 --dpi 150
+        geotessera coverage --region-file area.geojson --tile-alpha 0.3 --width 3000
+        geotessera coverage --country "Germany" --tile-alpha 0.3 --width 3000
     """
     from .visualization import visualize_global_coverage
     from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
@@ -1363,8 +1359,7 @@ def coverage(
                 tessera_client=gt,
                 output_path=str(output),
                 year=year,
-                figsize=(width, height),
-                dpi=dpi,
+                width_pixels=width_pixels,
                 show_countries=show_countries_final,
                 tile_color=tile_color,
                 tile_alpha=tile_alpha,

@@ -53,7 +53,7 @@ Before downloading, check what data is available using the CLI::
         tessera_client=gt,
         output_path="global_coverage.png",
         year=2024,
-        figsize=(15, 8),
+        width_pixels=2000,
         tile_color="blue",
         tile_alpha=0.4
     )

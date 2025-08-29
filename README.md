@@ -271,8 +271,7 @@ visualize_global_coverage(
     tessera_client=gt,
     output_path="global_coverage.png",
     year=2024,  # Or None for all years
-    figsize=(20, 10),
-    dpi=100,
+    width_pixels=2000,
     tile_color="red",
     tile_alpha=0.6
 )
