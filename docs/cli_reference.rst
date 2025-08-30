@@ -49,7 +49,7 @@ Download embeddings for a region in numpy or GeoTIFF format.
 **Region Definition** (one required):
 
 * ``--bbox TEXT`` - Bounding box: 'min_lon,min_lat,max_lon,max_lat'
-* ``--region-file PATH`` - GeoJSON/Shapefile to define region
+* ``--region-file PATH`` - GeoJSON/Shapefile to define region (supports local files or URLs)
 * ``--country TEXT`` - Country name (e.g., 'United Kingdom', 'UK', 'GB')
 
 **Format Options**:
@@ -207,7 +207,7 @@ Create web tiles and viewer from a 3-band RGB mosaic.
 * ``--force/--no-force`` - Force regeneration of tiles even if they exist
 * ``--serve/--no-serve`` - Start web server immediately
 * ``-p, --port INT`` - Port for web server (default: 8000)
-* ``--region-file PATH`` - GeoJSON/Shapefile boundary to overlay
+* ``--region-file PATH`` - GeoJSON/Shapefile boundary to overlay (supports local files or URLs)
 * ``--use-gdal-raster/--use-gdal2tiles`` - Use newer gdal raster tile vs gdal2tiles (default: gdal2tiles)
 
 **Examples**::
@@ -230,31 +230,6 @@ Create web tiles and viewer from a 3-band RGB mosaic.
 3. Creates HTML viewer with Leaflet map
 4. Optionally starts web server for immediate viewing
 
-tilemap
-~~~~~~~
-
-Create an interactive HTML map showing GeoTIFF tile coverage.
-
-**Usage**::
-
-    geotessera tilemap INPUT_PATH [OPTIONS]
-
-**Required Arguments**:
-
-* ``INPUT_PATH`` - GeoTIFF file or directory
-
-**Options**:
-
-* ``-o, --output PATH`` - Output HTML file
-* ``--title TEXT`` - Map title (default: "GeoTIFF Coverage Map")
-
-**Examples**::
-
-    # Create coverage map for tiles in a directory
-    geotessera tilemap tiles/ --output coverage.html
-
-    # View the map
-    geotessera serve . --html coverage.html
 
 serve
 ~~~~~
@@ -311,7 +286,7 @@ Generate a world map showing Tessera embedding coverage.
 **Data Selection**:
 
 * ``--year INT`` - Specific year to visualize (default: all years)
-* ``--region-file PATH`` - GeoJSON/Shapefile to focus coverage map on specific region (shows boundary outline)
+* ``--region-file PATH`` - GeoJSON/Shapefile to focus coverage map on specific region (supports local files or URLs)
 * ``--country TEXT`` - Country name to focus coverage map on with precise boundary outline (e.g., 'United Kingdom', 'UK', 'GB')
 
 **Visualization Options**:

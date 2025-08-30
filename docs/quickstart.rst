@@ -35,6 +35,9 @@ For a specific region (recommended)::
 
     geotessera coverage --region-file study_area.geojson
     # Next step: geotessera download --region-file study_area.geojson --output tiles/
+    
+    # You can also use remote URLs directly:
+    geotessera coverage --region-file https://example.com/region.geojson
 
     # Or check coverage for a specific country (with precise boundary outline):
     geotessera coverage --country "United Kingdom"
@@ -267,10 +270,13 @@ Customize web tile generation::
 Coverage Maps
 ~~~~~~~~~~~~~
 
-Create HTML maps showing tile coverage::
+Create coverage maps using the coverage command to visualize data availability::
 
-    geotessera tilemap ./london_tiles --output coverage.html
-    geotessera serve . --html coverage.html
+    # Generate coverage map for your downloaded tiles
+    geotessera coverage --output my_coverage.png
+    
+    # Or generate coverage for a specific region
+    geotessera coverage --region-file area.geojson --output area_coverage.png
 
 Step 5: Advanced Workflows
 ---------------------------

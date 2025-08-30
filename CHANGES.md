@@ -1,3 +1,12 @@
+## v0.5.1
+
+- Added support for providing URLs as a `--region-file` parameter
+- Added version information to CLI help text and command titles
+- Added git manifest hash to version information for better traceability
+- Reorganized CLI command order to be more logical and intuitive
+- Removed deprecated `tilemap` command (replaced by improved `coverage` functionality)
+- Improved the `geotessera-registry` hashing to be incremental
+
 ## v0.5.0
 
 This release represents a significant architectural overhaul of GeoTessera as we
