@@ -300,8 +300,6 @@ coverage
 
 Generate a world map showing Tessera embedding coverage.
 
-⭐ **RECOMMENDED WORKFLOW**: Use this as your first step before downloading data.
-
 **Usage**::
 
     geotessera coverage [OPTIONS]

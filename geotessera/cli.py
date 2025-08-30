@@ -11,6 +11,9 @@ import time
 import http.server
 import socketserver
 import json
+import tempfile
+import urllib.request
+import urllib.parse
 from pathlib import Path
 from typing import Optional, Callable
 from typing_extensions import Annotated
@@ -37,6 +40,56 @@ from .web import (
     create_coverage_summary_map,
     prepare_mosaic_for_web,
 )
+
+
+def is_url(string: str) -> bool:
+    """Check if a string is a valid URL."""
+    try:
+        result = urllib.parse.urlparse(string)
+        return all([result.scheme, result.netloc])
+    except Exception:
+        return False
+
+
+def download_region_file(url: str) -> str:
+    """Download a region file from a URL to a temporary location.
+    
+    Args:
+        url: The URL to download from
+        
+    Returns:
+        Path to the temporary downloaded file
+        
+    Raises:
+        Exception: If download fails
+    """
+    try:
+        # Create a temporary file with appropriate extension
+        parsed_url = urllib.parse.urlparse(url)
+        path = parsed_url.path
+        if path.endswith('.geojson'):
+            suffix = '.geojson'
+        elif path.endswith('.json'):
+            suffix = '.json'
+        elif path.endswith('.shp'):
+            suffix = '.shp'
+        elif path.endswith('.gpkg'):
+            suffix = '.gpkg'
+        else:
+            # Default to geojson for unknown extensions
+            suffix = '.geojson'
+            
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        temp_path = temp_file.name
+        temp_file.close()
+        
+        # Download the file
+        urllib.request.urlretrieve(url, temp_path)
+        
+        return temp_path
+        
+    except Exception as e:
+        raise Exception(f"Failed to download region file from {url}: {e}")
 
 
 def format_bbox(bbox_coords) -> str:
@@ -235,9 +288,9 @@ def coverage(
         ),
     ] = None,
     region_file: Annotated[
-        Optional[Path],
+        Optional[str],
         typer.Option(
-            "--region-file", help="GeoJSON/Shapefile to focus coverage map on specific region", exists=True
+            "--region-file", help="GeoJSON/Shapefile to focus coverage map on specific region (file path or URL)"
         ),
     ] = None,
     country: Annotated[
@@ -282,8 +335,6 @@ def coverage(
 ):
     """Generate a world map showing Tessera embedding coverage.
 
-    ⭐ RECOMMENDED WORKFLOW: Use this as your first step before downloading data.
-    
     1. Create or obtain a GeoJSON/Shapefile of your region of interest
     2. Run this command to check data coverage: geotessera coverage --region-file your_region.geojson
     3. Review the coverage map to understand data availability
@@ -302,7 +353,6 @@ def coverage(
         # STEP 1: Check coverage for your region (recommended first step)
         geotessera coverage --region-file study_area.geojson
         geotessera coverage --region-file colombia_aoi.gpkg
-        geotessera coverage --country "United Kingdom"
         geotessera coverage --country "Colombia"
 
         # Check coverage for specific year only
@@ -311,9 +361,6 @@ def coverage(
 
         # Global coverage overview (all regions)
         geotessera coverage
-
-        # Global coverage for specific year
-        geotessera coverage --year 2024
 
         # Customize visualization
         geotessera coverage --region-file area.geojson --tile-alpha 0.3 --width 3000
@@ -325,6 +372,8 @@ def coverage(
     # Process region file or country if provided
     region_bbox = None
     country_geojson_file = None
+    region_file_temp = None  # Track if we created a temporary file
+    
     if region_file and country:
         rprint("[red]Error: Cannot specify both --region-file and --country. Choose one.[/red]")
         raise typer.Exit(1)
@@ -332,7 +381,21 @@ def coverage(
     if region_file:
         try:
             from .visualization import calculate_bbox_from_file
-            region_bbox = calculate_bbox_from_file(region_file)
+            
+            # Check if region_file is a URL
+            if is_url(region_file):
+                rprint(f"[blue]Downloading region file from URL: {region_file}[/blue]")
+                region_file_temp = download_region_file(region_file)
+                region_file_path = region_file_temp
+            else:
+                # Check if local file exists
+                region_path = Path(region_file)
+                if not region_path.exists():
+                    rprint(f"[red]Error: Region file {region_file} does not exist[/red]")
+                    raise typer.Exit(1)
+                region_file_path = str(region_path)
+            
+            region_bbox = calculate_bbox_from_file(region_file_path)
             rprint(f"[green]Region bounding box: {format_bbox(region_bbox)}[/green]")
         except Exception as e:
             rprint(f"[red]Error reading region file: {e}[/red]")
@@ -425,7 +488,7 @@ def coverage(
             # Determine which region file to use (original region file or country boundary)
             region_file_to_use = None
             if region_file:
-                region_file_to_use = str(region_file)
+                region_file_to_use = region_file_path if 'region_file_path' in locals() else str(region_file)
             elif country and 'country_geojson_file' in locals() and country_geojson_file:
                 region_file_to_use = country_geojson_file
             
@@ -493,6 +556,14 @@ def coverage(
                 os.unlink(country_geojson_file)
             except Exception:
                 pass  # Ignore cleanup errors
+        
+        # Clean up temporary region file if downloaded from URL
+        if region_file_temp:
+            try:
+                import os
+                os.unlink(region_file_temp)
+            except Exception:
+                pass  # Ignore cleanup errors
 
 
 @app.command()
@@ -503,9 +574,9 @@ def download(
         typer.Option("--bbox", help="Bounding box: 'min_lon,min_lat,max_lon,max_lat'"),
     ] = None,
     region_file: Annotated[
-        Optional[Path],
+        Optional[str],
         typer.Option(
-            "--region-file", help="GeoJSON/Shapefile to define region", exists=True
+            "--region-file", help="GeoJSON/Shapefile to define region (file path or URL)"
         ),
     ] = None,
     country: Annotated[
@@ -599,13 +670,34 @@ def download(
             raise typer.Exit(1)
     elif region_file:
         try:
-            bbox_coords = calculate_bbox_from_file(region_file)
+            # Check if region_file is a URL
+            if is_url(region_file):
+                rprint(f"[blue]Downloading region file from URL: {region_file}[/blue]")
+                region_file_path = download_region_file(region_file)
+                region_file_temp = region_file_path  # Track for cleanup
+            else:
+                # Check if local file exists
+                region_path = Path(region_file)
+                if not region_path.exists():
+                    rprint(f"[red]Error: Region file {region_file} does not exist[/red]")
+                    raise typer.Exit(1)
+                region_file_path = str(region_path)
+                region_file_temp = None
+            
+            bbox_coords = calculate_bbox_from_file(region_file_path)
             rprint(
                 f"[green]Calculated bbox from {region_file}:[/green] {format_bbox(bbox_coords)}"
             )
         except Exception as e:
             rprint(f"[red]Error reading region file: {e}[/red]")
             rprint("Supported formats: GeoJSON, Shapefile, etc.")
+            # Clean up temp file if we created one
+            if 'region_file_temp' in locals() and region_file_temp:
+                try:
+                    import os
+                    os.unlink(region_file_temp)
+                except Exception:
+                    pass
             raise typer.Exit(1)
     elif country:
         # Create progress bar for country data download
@@ -903,6 +995,14 @@ def download(
             rprint("\n[dim]Full traceback:[/dim]")
             console.print_exception()
         raise typer.Exit(1)
+    finally:
+        # Clean up temporary region file if downloaded from URL
+        if 'region_file_temp' in locals() and region_file_temp:
+            try:
+                import os
+                os.unlink(region_file_temp)
+            except Exception:
+                pass  # Ignore cleanup errors
 
 
 @app.command()
@@ -1058,11 +1158,10 @@ def webmap(
     ] = False,
     port: Annotated[int, typer.Option("--port", "-p", help="Port for web server")] = 8000,
     region_file: Annotated[
-        Optional[Path],
+        Optional[str],
         typer.Option(
             "--region-file",
-            help="GeoJSON/Shapefile boundary to overlay",
-            exists=True,
+            help="GeoJSON/Shapefile boundary to overlay (file path or URL)",
         ),
     ] = None,
     use_gdal_raster: Annotated[
@@ -1090,6 +1189,33 @@ def webmap(
     if rgb_mosaic.suffix.lower() not in ['.tif', '.tiff']:
         rprint("[red]Error: Input must be a GeoTIFF file (.tif/.tiff)[/red]")
         raise typer.Exit(1)
+    
+    # Handle region file URL download
+    region_file_temp = None
+    region_file_path = None
+    if region_file:
+        try:
+            if is_url(region_file):
+                rprint(f"[blue]Downloading region file from URL: {region_file}[/blue]")
+                region_file_temp = download_region_file(region_file)
+                region_file_path = region_file_temp
+            else:
+                # Check if local file exists
+                region_path = Path(region_file)
+                if not region_path.exists():
+                    rprint(f"[red]Error: Region file {region_file} does not exist[/red]")
+                    raise typer.Exit(1)
+                region_file_path = str(region_path)
+        except Exception as e:
+            rprint(f"[red]Error processing region file: {e}[/red]")
+            # Clean up temp file if we created one
+            if region_file_temp:
+                try:
+                    import os
+                    os.unlink(region_file_temp)
+                except Exception:
+                    pass
+            raise typer.Exit(1)
     
     # Default output directory
     if output is None:
@@ -1199,7 +1325,7 @@ def webmap(
                 center_lat=center_lat,
                 zoom=initial_zoom,
                 title=f"GeoTessera v{__version__} - {rgb_mosaic.name}",
-                region_file=str(region_file) if region_file else None,
+                region_file=region_file_path if region_file_path else None,
             )
             
             progress.update(task3, completed=100)
@@ -1238,6 +1364,14 @@ def webmap(
     else:
         rprint("[blue]To view the map, start a web server:[/blue]")
         rprint(f"[cyan]  geotessera serve {output} --port {port}[/cyan]")
+    
+    # Clean up temporary region file if downloaded from URL
+    if region_file_temp:
+        try:
+            import os
+            os.unlink(region_file_temp)
+        except Exception:
+            pass  # Ignore cleanup errors
 
 
 @app.command()

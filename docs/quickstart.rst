@@ -17,7 +17,7 @@ Verify the installation::
 Step 1: Check Data Availability
 --------------------------------
 
-⭐ **RECOMMENDED FIRST STEP**: Before downloading embeddings, check what data is available for your region of interest.
+Before downloading embeddings, we recommend check what data is available for your region of interest.
 
 Generate a global coverage map::
 
