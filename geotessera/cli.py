@@ -103,6 +103,398 @@ def create_download_progress_callback(progress: Progress, task_id: TaskID) -> Ca
 
 
 @app.command()
+def info(
+    geotiffs: Annotated[
+        Optional[Path],
+        typer.Option("--geotiffs", help="Analyze GeoTIFF files/directory"),
+    ] = None,
+    dataset_version: Annotated[
+        str,
+        typer.Option(
+            "--dataset-version", help="Tessera dataset version (e.g., v1, v2)"
+        ),
+    ] = "v1",
+    verbose: Annotated[
+        bool, typer.Option("--verbose", "-v", help="Verbose output")
+    ] = False,
+):
+    """Show information about GeoTIFF files or library."""
+
+    if geotiffs:
+        # Analyze GeoTIFF files
+        if geotiffs.is_file():
+            geotiff_paths = [str(geotiffs)]
+        else:
+            geotiff_paths = list(map(str, geotiffs.glob("*.tif")))
+            geotiff_paths.extend(map(str, geotiffs.glob("*.tiff")))
+
+        if not geotiff_paths:
+            rprint(f"[red]No GeoTIFF files found in {geotiffs}[/red]")
+            raise typer.Exit(1)
+
+        coverage = analyze_geotiff_coverage(geotiff_paths)
+
+        # Create analysis table
+        analysis_table = Table(show_header=False, box=None)
+        analysis_table.add_row("Total files:", str(coverage["total_files"]))
+        analysis_table.add_row("Years:", ", ".join(coverage["years"]))
+        analysis_table.add_row("CRS:", ", ".join(coverage["crs"]))
+
+        rprint(
+            Panel(
+                analysis_table,
+                title="[bold]📊 GeoTIFF Analysis[/bold]",
+                border_style="blue",
+            )
+        )
+
+        bounds = coverage["bounds"]
+
+        bounds_table = Table(show_header=False, box=None)
+        bounds_table.add_row(
+            "Longitude:", f"{bounds['min_lon']:.6f} to {bounds['max_lon']:.6f}"
+        )
+        bounds_table.add_row(
+            "Latitude:", f"{bounds['min_lat']:.6f} to {bounds['max_lat']:.6f}"
+        )
+
+        rprint(
+            Panel(
+                bounds_table, title="[bold]🗺️ Bounding Box[/bold]", border_style="green"
+            )
+        )
+
+        bands_table = Table(show_header=True, header_style="bold blue")
+        bands_table.add_column("Band Count")
+        bands_table.add_column("Files", justify="right")
+
+        for bands_count, count in coverage["band_counts"].items():
+            bands_table.add_row(f"{bands_count} bands", str(count))
+
+        rprint(
+            Panel(
+                bands_table,
+                title="[bold]🎵 Band Information[/bold]",
+                border_style="cyan",
+            )
+        )
+
+        if verbose:
+            tiles_table = Table(show_header=True, header_style="bold blue")
+            tiles_table.add_column("Filename")
+            tiles_table.add_column("Coordinates")
+            tiles_table.add_column("Bands", justify="right")
+
+            for tile in coverage["tiles"][:10]:
+                tiles_table.add_row(
+                    Path(tile["path"]).name,
+                    f"({tile['tile_lat']}, {tile['tile_lon']})",
+                    str(tile["bands"]),
+                )
+
+            rprint(
+                Panel(
+                    tiles_table,
+                    title="[bold]📁 First 10 Tiles[/bold]",
+                    border_style="yellow",
+                )
+            )
+
+    else:
+        # Show library info
+        gt = GeoTessera(dataset_version=dataset_version)
+        years = gt.registry.get_available_years()
+
+        info_table = Table(show_header=False, box=None)
+        info_table.add_row("Version:", gt.version)
+        info_table.add_row("Available years:", ", ".join(map(str, years)))
+        info_table.add_row(
+            "Registry loaded blocks:", str(len(gt.registry.loaded_blocks))
+        )
+
+        rprint(
+            Panel(
+                info_table,
+                title="[bold]🌍 GeoTessera Library Info[/bold]",
+                border_style="blue",
+            )
+        )
+
+
+@app.command()
+def coverage(
+    output: Annotated[
+        Path, typer.Option("--output", "-o", help="Output PNG file path")
+    ] = Path("tessera_coverage.png"),
+    year: Annotated[
+        Optional[int],
+        typer.Option(
+            "--year",
+            help="Specific year to visualize (e.g., 2024). If not specified, shows multi-year analysis.",
+        ),
+    ] = None,
+    region_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--region-file", help="GeoJSON/Shapefile to focus coverage map on specific region", exists=True
+        ),
+    ] = None,
+    country: Annotated[
+        Optional[str],
+        typer.Option(
+            "--country", help="Country name to focus coverage map on (e.g., 'United Kingdom', 'UK', 'GB')"
+        ),
+    ] = None,
+    tile_color: Annotated[
+        str, typer.Option("--tile-color", help="Color for tile rectangles (when not using multi-year colors)")
+    ] = "red",
+    tile_alpha: Annotated[
+        float, typer.Option("--tile-alpha", help="Transparency of tiles (0.0-1.0)")
+    ] = 0.6,
+    tile_size: Annotated[
+        float,
+        typer.Option(
+            "--tile-size", help="Size multiplier for tiles (1.0 = actual size)"
+        ),
+    ] = 1.0,
+    width_pixels: Annotated[
+        int, typer.Option("--width", help="Output image width in pixels")
+    ] = 2000,
+    no_countries: Annotated[
+        bool, typer.Option("--no-countries", help="Don't show country boundaries")
+    ] = False,
+    no_multi_year_colors: Annotated[
+        bool, typer.Option("--no-multi-year-colors", help="Disable multi-year color coding")
+    ] = False,
+    dataset_version: Annotated[
+        str, typer.Option("--dataset-version", help="Tessera dataset version")
+    ] = "v1",
+    cache_dir: Annotated[
+        Optional[Path], typer.Option("--cache-dir", help="Cache directory")
+    ] = None,
+    registry_dir: Annotated[
+        Optional[Path], typer.Option("--registry-dir", help="Registry directory")
+    ] = None,
+    verbose: Annotated[
+        bool, typer.Option("--verbose", "-v", help="Verbose output")
+    ] = False,
+):
+    """Generate a world map showing Tessera embedding coverage.
+
+    ⭐ RECOMMENDED WORKFLOW: Use this as your first step before downloading data.
+    
+    1. Create or obtain a GeoJSON/Shapefile of your region of interest
+    2. Run this command to check data coverage: geotessera coverage --region-file your_region.geojson
+    3. Review the coverage map to understand data availability
+    4. Proceed to download data: geotessera download --region-file your_region.geojson
+
+    Creates a PNG visualization with available tiles overlaid on a world map,
+    helping users understand data availability for their regions of interest.
+    Can focus on a specific region for detailed coverage analysis.
+    
+    By default, when no specific year is requested, the map uses three colors to show:
+    - Green: All available years present for this tile
+    - Blue: Only the latest year available for this tile  
+    - Orange: Partial years coverage (some combination of years)
+
+    Examples:
+        # STEP 1: Check coverage for your region (recommended first step)
+        geotessera coverage --region-file study_area.geojson
+        geotessera coverage --region-file colombia_aoi.gpkg
+        geotessera coverage --country "United Kingdom"
+        geotessera coverage --country "Colombia"
+
+        # Check coverage for specific year only
+        geotessera coverage --region-file study_area.shp --year 2024
+        geotessera coverage --country "UK" --year 2024
+
+        # Global coverage overview (all regions)
+        geotessera coverage
+
+        # Global coverage for specific year
+        geotessera coverage --year 2024
+
+        # Customize visualization
+        geotessera coverage --region-file area.geojson --tile-alpha 0.3 --width 3000
+        geotessera coverage --country "Germany" --tile-alpha 0.3 --width 3000
+    """
+    from .visualization import visualize_global_coverage
+    from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
+
+    # Process region file or country if provided
+    region_bbox = None
+    country_geojson_file = None
+    if region_file and country:
+        rprint("[red]Error: Cannot specify both --region-file and --country. Choose one.[/red]")
+        raise typer.Exit(1)
+    
+    if region_file:
+        try:
+            from .visualization import calculate_bbox_from_file
+            region_bbox = calculate_bbox_from_file(region_file)
+            rprint(f"[green]Region bounding box: {format_bbox(region_bbox)}[/green]")
+        except Exception as e:
+            rprint(f"[red]Error reading region file: {e}[/red]")
+            raise typer.Exit(1)
+    elif country:
+        # Create progress bar for country data download
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("•"),
+            TextColumn("[dim]{task.fields[status]}", justify="left"),
+            TimeRemainingColumn(),
+            console=console,
+        ) as progress:
+            country_task = progress.add_task(
+                "🌍 Loading country data...", total=100, status="Checking cache..."
+            )
+
+            def country_progress_callback(current: int, total: int, status: str = None):
+                progress.update(
+                    country_task,
+                    completed=current,
+                    total=total,
+                    status=status or "Processing...",
+                )
+
+            try:
+                # Get country lookup instance 
+                from .country import get_country_lookup
+                country_lookup = get_country_lookup(progress_callback=country_progress_callback)
+                
+                # Get both bbox and geometry
+                region_bbox = country_lookup.get_bbox(country)
+                country_gdf = country_lookup.get_geometry(country)
+                
+                # Create temporary GeoJSON file for the country boundary
+                import tempfile
+                import os
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.geojson', delete=False) as tmp:
+                    country_gdf.to_file(tmp.name, driver='GeoJSON')
+                    country_geojson_file = tmp.name
+                
+                progress.update(country_task, completed=100, status="Complete")
+            except ValueError as e:
+                rprint(f"[red]Error: {e}[/red]")
+                rprint(
+                    "[blue]Use 'geotessera countries list' to see available countries[/blue]"
+                )
+                raise typer.Exit(1)
+            except Exception as e:
+                rprint(f"[red]Error fetching country data: {e}[/red]")
+                raise typer.Exit(1)
+        
+        rprint(f"[green]Using country '{country}': {format_bbox(region_bbox)}[/green]")
+
+    # Initialize GeoTessera
+    if verbose:
+        rprint("[blue]Initializing GeoTessera...[/blue]")
+
+    gt = GeoTessera(
+        dataset_version=dataset_version,
+        cache_dir=str(cache_dir) if cache_dir else None,
+        registry_dir=str(registry_dir) if registry_dir else None,
+    )
+
+    # Generate coverage map
+    try:
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("•"),
+            TextColumn("[dim]{task.fields[status]}", justify="left"),
+            TimeRemainingColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(
+                "🔄 Generating coverage map...", total=100, status="Starting..."
+            )
+
+            if verbose:
+                rprint(
+                    f"[blue]Generating coverage map for year: {year if year else 'All years'}[/blue]"
+                )
+
+            # When using region files or countries, default to no countries for cleaner view
+            show_countries_final = not no_countries and not region_file and not country
+            
+            # Determine which region file to use (original region file or country boundary)
+            region_file_to_use = None
+            if region_file:
+                region_file_to_use = str(region_file)
+            elif country and 'country_geojson_file' in locals() and country_geojson_file:
+                region_file_to_use = country_geojson_file
+            
+            output_path = visualize_global_coverage(
+                tessera_client=gt,
+                output_path=str(output),
+                year=year,
+                width_pixels=width_pixels,
+                show_countries=show_countries_final,
+                tile_color=tile_color,
+                tile_alpha=tile_alpha,
+                tile_size=tile_size,
+                multi_year_colors=not no_multi_year_colors,
+                progress_callback=create_progress_callback(progress, task),
+                region_bbox=region_bbox,
+                region_file=region_file_to_use,
+            )
+
+        rprint(f"[green]✅ Coverage map saved to: {output_path}[/green]")
+        
+        # Show next steps hint
+        if region_file:
+            rprint("[blue]Next step: Download data for your region:[/blue]")
+            rprint(f"[cyan]  geotessera download --region-file {region_file} --output tiles/[/cyan]")
+        elif country:
+            rprint("[blue]Next step: Download data for your country:[/blue]")
+            rprint(f"[cyan]  geotessera download --country \"{country}\" --output tiles/[/cyan]")
+        else:
+            rprint("[blue]Next step: Download data for a specific region:[/blue]")
+            rprint("[cyan]  geotessera download --bbox 'lon1,lat1,lon2,lat2' --output tiles/[/cyan]")
+
+        # Show summary statistics
+        available_embeddings = gt.registry.get_available_embeddings()
+        if available_embeddings:
+            if year:
+                tile_count = len(
+                    [(y, lon, lat) for y, lon, lat in available_embeddings if y == year]
+                )
+                rprint(f"[cyan]📊 Tiles shown: {tile_count:,} (year {year})[/cyan]")
+            else:
+                unique_tiles = len(
+                    set((lon, lat) for _, lon, lat in available_embeddings)
+                )
+                years = sorted(set(y for y, _, _ in available_embeddings))
+                rprint(f"[cyan]📊 Unique tile locations: {unique_tiles:,}[/cyan]")
+                if years:
+                    rprint(f"[cyan]📅 Years covered: {min(years)}-{max(years)}[/cyan]")
+
+    except ImportError:
+        rprint("[red]Error: Missing required dependencies[/red]")
+        rprint("[yellow]Please install: pip install matplotlib geodatasets[/yellow]")
+        raise typer.Exit(1)
+    except Exception as e:
+        rprint(f"[red]Error generating coverage map: {e}[/red]")
+        if verbose:
+            import traceback
+
+            traceback.print_exc()
+        raise typer.Exit(1)
+    finally:
+        # Clean up temporary country GeoJSON file if created
+        if country_geojson_file and (not region_file or country_geojson_file != str(region_file)):
+            try:
+                import os
+                os.unlink(country_geojson_file)
+            except Exception:
+                pass  # Ignore cleanup errors
+
+
+@app.command()
 def download(
     output: Annotated[Path, typer.Option("--output", "-o", help="Output directory")],
     bbox: Annotated[
@@ -648,188 +1040,6 @@ def visualize(
 
 
 @app.command()
-def tilemap(
-    input_path: Annotated[Path, typer.Argument(help="GeoTIFF file or directory")],
-    output_html: Annotated[Path, typer.Option("--output", "-o", help="Output HTML file")] = None,
-    title: Annotated[str, typer.Option("--title", help="Map title")] = "GeoTIFF Coverage Map",
-):
-    """Create an interactive HTML map showing GeoTIFF tile coverage.
-    
-    This command analyzes local GeoTIFF files and creates an interactive
-    Leaflet map showing their spatial coverage and metadata.
-    
-    Examples:
-        # Create coverage map for tiles in a directory
-        geotessera tilemap tiles/ --output coverage.html
-        
-        # View the map
-        geotessera serve . --html coverage.html
-    """
-    # Find GeoTIFF files
-    if input_path.is_file():
-        geotiff_paths = [str(input_path)]
-        if output_html is None:
-            output_html = Path(f"{input_path.stem}_coverage.html")
-    else:
-        geotiff_paths = list(map(str, input_path.glob("*.tif")))
-        geotiff_paths.extend(map(str, input_path.glob("*.tiff")))
-        if output_html is None:
-            output_html = Path(f"{input_path.name}_coverage.html")
-
-    if not geotiff_paths:
-        rprint(f"[red]No GeoTIFF files found in {input_path}[/red]")
-        raise typer.Exit(1)
-
-    rprint(f"[blue]Found {len(geotiff_paths)} GeoTIFF files[/blue]")
-
-    try:
-        create_coverage_summary_map(
-            geotiff_paths=geotiff_paths,
-            output_html=str(output_html),
-            title=title,
-        )
-        
-        rprint(f"[green]Created coverage map: {output_html}[/green]")
-        rprint("[blue]To view the map, start a web server:[/blue]")
-        rprint(f"[cyan]  geotessera serve . --html {output_html.name}[/cyan]")
-
-    except Exception as e:
-        rprint(f"[red]Error creating coverage map: {e}[/red]")
-        raise typer.Exit(1)
-
-
-@app.command()
-def serve(
-    directory: Annotated[
-        Path, typer.Argument(help="Directory containing web visualization files")
-    ],
-    port: Annotated[
-        int, typer.Option("--port", "-p", help="Port number for web server")
-    ] = 8000,
-    open_browser: Annotated[
-        bool, typer.Option("--open/--no-open", help="Automatically open browser")
-    ] = True,
-    html_file: Annotated[
-        Optional[str],
-        typer.Option(
-            "--html", help="Specific HTML file to serve (relative to directory)"
-        ),
-    ] = None,
-):
-    """Start a web server to serve visualization files.
-
-    This is needed for leaflet-based web visualizations to work properly
-    since they require HTTP access to load tiles and other resources.
-    """
-    if not directory.exists():
-        rprint(f"[red]Error: Directory {directory} does not exist[/red]")
-        raise typer.Exit(1)
-
-    if not directory.is_dir():
-        rprint(f"[red]Error: {directory} is not a directory[/red]")
-        raise typer.Exit(1)
-
-    # Change to the directory to serve
-    original_dir = Path.cwd()
-
-    class QuietHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
-        def log_message(self, format, *args):
-            # Only log errors, not every request
-            if args[1] != "200":
-                super().log_message(format, *args)
-
-    try:
-        # Find available port
-        while True:
-            try:
-                with socketserver.TCPServer(("", port), QuietHTTPRequestHandler):
-                    break
-            except OSError:
-                port += 1
-                if port > 9000:
-                    rprint("[red]Error: Could not find available port[/red]")
-                    raise typer.Exit(1)
-
-        rprint(f"[green]Starting web server on port {port}[/green]")
-        rprint(f"[blue]Serving directory: {directory.absolute()}[/blue]")
-
-        # Debug: Show directory contents
-        try:
-            contents = list(directory.iterdir())
-            rprint(
-                f"[yellow]Directory contains: {[p.name for p in contents[:10]]}{'...' if len(contents) > 10 else ''}[/yellow]"
-            )
-        except Exception as e:
-            rprint(f"[yellow]Could not list directory contents: {e}[/yellow]")
-
-        # Determine what to open in browser
-        if html_file:
-            html_path = directory / html_file
-            if not html_path.exists():
-                rprint(f"[yellow]Warning: HTML file {html_file} not found[/yellow]")
-                browser_url = f"http://localhost:{port}/"
-            else:
-                browser_url = f"http://localhost:{port}/{html_file}"
-        else:
-            # Look for common HTML files
-            common_names = ["index.html", "viewer.html", "map.html", "coverage.html"]
-            found_html = None
-            for name in common_names:
-                if (directory / name).exists():
-                    found_html = name
-                    break
-
-            if found_html:
-                browser_url = f"http://localhost:{port}/{found_html}"
-                rprint(f"[blue]Found HTML file: {found_html}[/blue]")
-            else:
-                browser_url = f"http://localhost:{port}/"
-
-        # Start server in background thread
-        def start_server():
-            import os
-
-            os.chdir(directory)
-            try:
-                with socketserver.TCPServer(
-                    ("", port), QuietHTTPRequestHandler
-                ) as httpd:
-                    httpd.serve_forever()
-            except KeyboardInterrupt:
-                pass
-            finally:
-                os.chdir(original_dir)
-
-        server_thread = threading.Thread(target=start_server, daemon=True)
-        server_thread.start()
-
-        # Give server a moment to start
-        time.sleep(0.5)
-
-        rprint(f"[green]✅ Web server running at: http://localhost:{port}/[/green]")
-
-        if open_browser:
-            rprint(f"[blue]Opening browser: {browser_url}[/blue]")
-            webbrowser.open(browser_url)
-        else:
-            rprint(f"[blue]Open in browser: {browser_url}[/blue]")
-
-        rprint("\n[yellow]Press Ctrl+C to stop the server[/yellow]")
-
-        try:
-            # Keep main thread alive
-            while server_thread.is_alive():
-                time.sleep(1)
-        except KeyboardInterrupt:
-            rprint("\n[green]Stopping web server...[/green]")
-            raise typer.Exit(0)
-
-    except Exception as e:
-        rprint(f"[red]Error starting web server: {e}[/red]")
-        raise typer.Exit(1)
-
-
-@app.command()
 def webmap(
     rgb_mosaic: Annotated[Path, typer.Argument(help="3-band RGB mosaic GeoTIFF file")],
     output: Annotated[Path, typer.Option("--output", "-o", help="Output directory")] = None,
@@ -1030,395 +1240,134 @@ def webmap(
 
 
 @app.command()
-def info(
-    geotiffs: Annotated[
-        Optional[Path],
-        typer.Option("--geotiffs", help="Analyze GeoTIFF files/directory"),
-    ] = None,
-    dataset_version: Annotated[
-        str,
-        typer.Option(
-            "--dataset-version", help="Tessera dataset version (e.g., v1, v2)"
-        ),
-    ] = "v1",
-    verbose: Annotated[
-        bool, typer.Option("--verbose", "-v", help="Verbose output")
-    ] = False,
-):
-    """Show information about GeoTIFF files or library."""
-
-    if geotiffs:
-        # Analyze GeoTIFF files
-        if geotiffs.is_file():
-            geotiff_paths = [str(geotiffs)]
-        else:
-            geotiff_paths = list(map(str, geotiffs.glob("*.tif")))
-            geotiff_paths.extend(map(str, geotiffs.glob("*.tiff")))
-
-        if not geotiff_paths:
-            rprint(f"[red]No GeoTIFF files found in {geotiffs}[/red]")
-            raise typer.Exit(1)
-
-        coverage = analyze_geotiff_coverage(geotiff_paths)
-
-        # Create analysis table
-        analysis_table = Table(show_header=False, box=None)
-        analysis_table.add_row("Total files:", str(coverage["total_files"]))
-        analysis_table.add_row("Years:", ", ".join(coverage["years"]))
-        analysis_table.add_row("CRS:", ", ".join(coverage["crs"]))
-
-        rprint(
-            Panel(
-                analysis_table,
-                title="[bold]📊 GeoTIFF Analysis[/bold]",
-                border_style="blue",
-            )
-        )
-
-        bounds = coverage["bounds"]
-
-        bounds_table = Table(show_header=False, box=None)
-        bounds_table.add_row(
-            "Longitude:", f"{bounds['min_lon']:.6f} to {bounds['max_lon']:.6f}"
-        )
-        bounds_table.add_row(
-            "Latitude:", f"{bounds['min_lat']:.6f} to {bounds['max_lat']:.6f}"
-        )
-
-        rprint(
-            Panel(
-                bounds_table, title="[bold]🗺️ Bounding Box[/bold]", border_style="green"
-            )
-        )
-
-        bands_table = Table(show_header=True, header_style="bold blue")
-        bands_table.add_column("Band Count")
-        bands_table.add_column("Files", justify="right")
-
-        for bands_count, count in coverage["band_counts"].items():
-            bands_table.add_row(f"{bands_count} bands", str(count))
-
-        rprint(
-            Panel(
-                bands_table,
-                title="[bold]🎵 Band Information[/bold]",
-                border_style="cyan",
-            )
-        )
-
-        if verbose:
-            tiles_table = Table(show_header=True, header_style="bold blue")
-            tiles_table.add_column("Filename")
-            tiles_table.add_column("Coordinates")
-            tiles_table.add_column("Bands", justify="right")
-
-            for tile in coverage["tiles"][:10]:
-                tiles_table.add_row(
-                    Path(tile["path"]).name,
-                    f"({tile['tile_lat']}, {tile['tile_lon']})",
-                    str(tile["bands"]),
-                )
-
-            rprint(
-                Panel(
-                    tiles_table,
-                    title="[bold]📁 First 10 Tiles[/bold]",
-                    border_style="yellow",
-                )
-            )
-
-    else:
-        # Show library info
-        gt = GeoTessera(dataset_version=dataset_version)
-        years = gt.registry.get_available_years()
-
-        info_table = Table(show_header=False, box=None)
-        info_table.add_row("Version:", gt.version)
-        info_table.add_row("Available years:", ", ".join(map(str, years)))
-        info_table.add_row(
-            "Registry loaded blocks:", str(len(gt.registry.loaded_blocks))
-        )
-
-        rprint(
-            Panel(
-                info_table,
-                title="[bold]🌍 GeoTessera Library Info[/bold]",
-                border_style="blue",
-            )
-        )
-
-
-@app.command()
-def coverage(
-    output: Annotated[
-        Path, typer.Option("--output", "-o", help="Output PNG file path")
-    ] = Path("tessera_coverage.png"),
-    year: Annotated[
-        Optional[int],
-        typer.Option(
-            "--year",
-            help="Specific year to visualize (e.g., 2024). If not specified, shows multi-year analysis.",
-        ),
-    ] = None,
-    region_file: Annotated[
-        Optional[Path],
-        typer.Option(
-            "--region-file", help="GeoJSON/Shapefile to focus coverage map on specific region", exists=True
-        ),
-    ] = None,
-    country: Annotated[
+def serve(
+    directory: Annotated[
+        Path, typer.Argument(help="Directory containing web visualization files")
+    ],
+    port: Annotated[
+        int, typer.Option("--port", "-p", help="Port number for web server")
+    ] = 8000,
+    open_browser: Annotated[
+        bool, typer.Option("--open/--no-open", help="Automatically open browser")
+    ] = True,
+    html_file: Annotated[
         Optional[str],
         typer.Option(
-            "--country", help="Country name to focus coverage map on (e.g., 'United Kingdom', 'UK', 'GB')"
+            "--html", help="Specific HTML file to serve (relative to directory)"
         ),
     ] = None,
-    tile_color: Annotated[
-        str, typer.Option("--tile-color", help="Color for tile rectangles (when not using multi-year colors)")
-    ] = "red",
-    tile_alpha: Annotated[
-        float, typer.Option("--tile-alpha", help="Transparency of tiles (0.0-1.0)")
-    ] = 0.6,
-    tile_size: Annotated[
-        float,
-        typer.Option(
-            "--tile-size", help="Size multiplier for tiles (1.0 = actual size)"
-        ),
-    ] = 1.0,
-    width_pixels: Annotated[
-        int, typer.Option("--width", help="Output image width in pixels")
-    ] = 2000,
-    no_countries: Annotated[
-        bool, typer.Option("--no-countries", help="Don't show country boundaries")
-    ] = False,
-    no_multi_year_colors: Annotated[
-        bool, typer.Option("--no-multi-year-colors", help="Disable multi-year color coding")
-    ] = False,
-    dataset_version: Annotated[
-        str, typer.Option("--dataset-version", help="Tessera dataset version")
-    ] = "v1",
-    cache_dir: Annotated[
-        Optional[Path], typer.Option("--cache-dir", help="Cache directory")
-    ] = None,
-    registry_dir: Annotated[
-        Optional[Path], typer.Option("--registry-dir", help="Registry directory")
-    ] = None,
-    verbose: Annotated[
-        bool, typer.Option("--verbose", "-v", help="Verbose output")
-    ] = False,
 ):
-    """Generate a world map showing Tessera embedding coverage.
+    """Start a web server to serve visualization files.
 
-    ⭐ RECOMMENDED WORKFLOW: Use this as your first step before downloading data.
-    
-    1. Create or obtain a GeoJSON/Shapefile of your region of interest
-    2. Run this command to check data coverage: geotessera coverage --region-file your_region.geojson
-    3. Review the coverage map to understand data availability
-    4. Proceed to download data: geotessera download --region-file your_region.geojson
-
-    Creates a PNG visualization with available tiles overlaid on a world map,
-    helping users understand data availability for their regions of interest.
-    Can focus on a specific region for detailed coverage analysis.
-    
-    By default, when no specific year is requested, the map uses three colors to show:
-    - Green: All available years present for this tile
-    - Blue: Only the latest year available for this tile  
-    - Orange: Partial years coverage (some combination of years)
-
-    Examples:
-        # STEP 1: Check coverage for your region (recommended first step)
-        geotessera coverage --region-file study_area.geojson
-        geotessera coverage --region-file colombia_aoi.gpkg
-        geotessera coverage --country "United Kingdom"
-        geotessera coverage --country "Colombia"
-
-        # Check coverage for specific year only
-        geotessera coverage --region-file study_area.shp --year 2024
-        geotessera coverage --country "UK" --year 2024
-
-        # Global coverage overview (all regions)
-        geotessera coverage
-
-        # Global coverage for specific year
-        geotessera coverage --year 2024
-
-        # Customize visualization
-        geotessera coverage --region-file area.geojson --tile-alpha 0.3 --width 3000
-        geotessera coverage --country "Germany" --tile-alpha 0.3 --width 3000
+    This is needed for leaflet-based web visualizations to work properly
+    since they require HTTP access to load tiles and other resources.
     """
-    from .visualization import visualize_global_coverage
-    from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
-
-    # Process region file or country if provided
-    region_bbox = None
-    country_geojson_file = None
-    if region_file and country:
-        rprint("[red]Error: Cannot specify both --region-file and --country. Choose one.[/red]")
+    if not directory.exists():
+        rprint(f"[red]Error: Directory {directory} does not exist[/red]")
         raise typer.Exit(1)
-    
-    if region_file:
-        try:
-            from .visualization import calculate_bbox_from_file
-            region_bbox = calculate_bbox_from_file(region_file)
-            rprint(f"[green]Region bounding box: {format_bbox(region_bbox)}[/green]")
-        except Exception as e:
-            rprint(f"[red]Error reading region file: {e}[/red]")
-            raise typer.Exit(1)
-    elif country:
-        # Create progress bar for country data download
-        with Progress(
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TextColumn("•"),
-            TextColumn("[dim]{task.fields[status]}", justify="left"),
-            TimeRemainingColumn(),
-            console=console,
-        ) as progress:
-            country_task = progress.add_task(
-                "🌍 Loading country data...", total=100, status="Checking cache..."
-            )
 
-            def country_progress_callback(current: int, total: int, status: str = None):
-                progress.update(
-                    country_task,
-                    completed=current,
-                    total=total,
-                    status=status or "Processing...",
-                )
+    if not directory.is_dir():
+        rprint(f"[red]Error: {directory} is not a directory[/red]")
+        raise typer.Exit(1)
 
-            try:
-                # Get country lookup instance 
-                from .country import get_country_lookup
-                country_lookup = get_country_lookup(progress_callback=country_progress_callback)
-                
-                # Get both bbox and geometry
-                region_bbox = country_lookup.get_bbox(country)
-                country_gdf = country_lookup.get_geometry(country)
-                
-                # Create temporary GeoJSON file for the country boundary
-                import tempfile
-                import os
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.geojson', delete=False) as tmp:
-                    country_gdf.to_file(tmp.name, driver='GeoJSON')
-                    country_geojson_file = tmp.name
-                
-                progress.update(country_task, completed=100, status="Complete")
-            except ValueError as e:
-                rprint(f"[red]Error: {e}[/red]")
-                rprint(
-                    "[blue]Use 'geotessera countries list' to see available countries[/blue]"
-                )
-                raise typer.Exit(1)
-            except Exception as e:
-                rprint(f"[red]Error fetching country data: {e}[/red]")
-                raise typer.Exit(1)
-        
-        rprint(f"[green]Using country '{country}': {format_bbox(region_bbox)}[/green]")
+    # Change to the directory to serve
+    original_dir = Path.cwd()
 
-    # Initialize GeoTessera
-    if verbose:
-        rprint("[blue]Initializing GeoTessera...[/blue]")
+    class QuietHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, format, *args):
+            # Only log errors, not every request
+            if args[1] != "200":
+                super().log_message(format, *args)
 
-    gt = GeoTessera(
-        dataset_version=dataset_version,
-        cache_dir=str(cache_dir) if cache_dir else None,
-        registry_dir=str(registry_dir) if registry_dir else None,
-    )
-
-    # Generate coverage map
     try:
-        with Progress(
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TextColumn("•"),
-            TextColumn("[dim]{task.fields[status]}", justify="left"),
-            TimeRemainingColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task(
-                "🔄 Generating coverage map...", total=100, status="Starting..."
-            )
-
-            if verbose:
-                rprint(
-                    f"[blue]Generating coverage map for year: {year if year else 'All years'}[/blue]"
-                )
-
-            # When using region files or countries, default to no countries for cleaner view
-            show_countries_final = not no_countries and not region_file and not country
-            
-            # Determine which region file to use (original region file or country boundary)
-            region_file_to_use = None
-            if region_file:
-                region_file_to_use = str(region_file)
-            elif country and 'country_geojson_file' in locals() and country_geojson_file:
-                region_file_to_use = country_geojson_file
-            
-            output_path = visualize_global_coverage(
-                tessera_client=gt,
-                output_path=str(output),
-                year=year,
-                width_pixels=width_pixels,
-                show_countries=show_countries_final,
-                tile_color=tile_color,
-                tile_alpha=tile_alpha,
-                tile_size=tile_size,
-                multi_year_colors=not no_multi_year_colors,
-                progress_callback=create_progress_callback(progress, task),
-                region_bbox=region_bbox,
-                region_file=region_file_to_use,
-            )
-
-        rprint(f"[green]✅ Coverage map saved to: {output_path}[/green]")
-        
-        # Show next steps hint
-        if region_file:
-            rprint("[blue]Next step: Download data for your region:[/blue]")
-            rprint(f"[cyan]  geotessera download --region-file {region_file} --output tiles/[/cyan]")
-        elif country:
-            rprint("[blue]Next step: Download data for your country:[/blue]")
-            rprint(f"[cyan]  geotessera download --country \"{country}\" --output tiles/[/cyan]")
-        else:
-            rprint("[blue]Next step: Download data for a specific region:[/blue]")
-            rprint("[cyan]  geotessera download --bbox 'lon1,lat1,lon2,lat2' --output tiles/[/cyan]")
-
-        # Show summary statistics
-        available_embeddings = gt.registry.get_available_embeddings()
-        if available_embeddings:
-            if year:
-                tile_count = len(
-                    [(y, lon, lat) for y, lon, lat in available_embeddings if y == year]
-                )
-                rprint(f"[cyan]📊 Tiles shown: {tile_count:,} (year {year})[/cyan]")
-            else:
-                unique_tiles = len(
-                    set((lon, lat) for _, lon, lat in available_embeddings)
-                )
-                years = sorted(set(y for y, _, _ in available_embeddings))
-                rprint(f"[cyan]📊 Unique tile locations: {unique_tiles:,}[/cyan]")
-                if years:
-                    rprint(f"[cyan]📅 Years covered: {min(years)}-{max(years)}[/cyan]")
-
-    except ImportError:
-        rprint("[red]Error: Missing required dependencies[/red]")
-        rprint("[yellow]Please install: pip install matplotlib geodatasets[/yellow]")
-        raise typer.Exit(1)
-    except Exception as e:
-        rprint(f"[red]Error generating coverage map: {e}[/red]")
-        if verbose:
-            import traceback
-
-            traceback.print_exc()
-        raise typer.Exit(1)
-    finally:
-        # Clean up temporary country GeoJSON file if created
-        if country_geojson_file and (not region_file or country_geojson_file != str(region_file)):
+        # Find available port
+        while True:
             try:
-                import os
-                os.unlink(country_geojson_file)
-            except Exception:
-                pass  # Ignore cleanup errors
+                with socketserver.TCPServer(("", port), QuietHTTPRequestHandler):
+                    break
+            except OSError:
+                port += 1
+                if port > 9000:
+                    rprint("[red]Error: Could not find available port[/red]")
+                    raise typer.Exit(1)
+
+        rprint(f"[green]Starting web server on port {port}[/green]")
+        rprint(f"[blue]Serving directory: {directory.absolute()}[/blue]")
+
+        # Debug: Show directory contents
+        try:
+            contents = list(directory.iterdir())
+            rprint(
+                f"[yellow]Directory contains: {[p.name for p in contents[:10]]}{'...' if len(contents) > 10 else ''}[/yellow]"
+            )
+        except Exception as e:
+            rprint(f"[yellow]Could not list directory contents: {e}[/yellow]")
+
+        # Determine what to open in browser
+        if html_file:
+            html_path = directory / html_file
+            if not html_path.exists():
+                rprint(f"[yellow]Warning: HTML file {html_file} not found[/yellow]")
+                browser_url = f"http://localhost:{port}/"
+            else:
+                browser_url = f"http://localhost:{port}/{html_file}"
+        else:
+            # Look for common HTML files
+            common_names = ["index.html", "viewer.html", "map.html", "coverage.html"]
+            found_html = None
+            for name in common_names:
+                if (directory / name).exists():
+                    found_html = name
+                    break
+
+            if found_html:
+                browser_url = f"http://localhost:{port}/{found_html}"
+                rprint(f"[blue]Found HTML file: {found_html}[/blue]")
+            else:
+                browser_url = f"http://localhost:{port}/"
+
+        # Start server in background thread
+        def start_server():
+            import os
+
+            os.chdir(directory)
+            try:
+                with socketserver.TCPServer(
+                    ("", port), QuietHTTPRequestHandler
+                ) as httpd:
+                    httpd.serve_forever()
+            except KeyboardInterrupt:
+                pass
+            finally:
+                os.chdir(original_dir)
+
+        server_thread = threading.Thread(target=start_server, daemon=True)
+        server_thread.start()
+
+        # Give server a moment to start
+        time.sleep(0.5)
+
+        rprint(f"[green]✅ Web server running at: http://localhost:{port}/[/green]")
+
+        if open_browser:
+            rprint(f"[blue]Opening browser: {browser_url}[/blue]")
+            webbrowser.open(browser_url)
+        else:
+            rprint(f"[blue]Open in browser: {browser_url}[/blue]")
+
+        rprint("\n[yellow]Press Ctrl+C to stop the server[/yellow]")
+
+        try:
+            # Keep main thread alive
+            while server_thread.is_alive():
+                time.sleep(1)
+        except KeyboardInterrupt:
+            rprint("\n[green]Stopping web server...[/green]")
+            raise typer.Exit(0)
+
+    except Exception as e:
+        rprint(f"[red]Error starting web server: {e}[/red]")
+        raise typer.Exit(1)
 
 
 def main():
