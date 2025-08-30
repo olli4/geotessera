@@ -425,7 +425,17 @@ class Registry:
                         capture_output=True,
                     )
 
-                    print("✓ tessera-manifests updated to latest version")
+                    # Get the current git short hash
+                    result = subprocess.run(
+                        ["git", "rev-parse", "--short", "HEAD"],
+                        cwd=manifests_dir,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                    short_hash = result.stdout.strip()
+
+                    print(f"✓ tessera-manifests updated to latest version ({short_hash})")
                 except subprocess.CalledProcessError as e:
                     print(f"Warning: Failed to update tessera-manifests: {e}")
         else:

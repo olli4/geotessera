@@ -18,6 +18,7 @@ from typing_extensions import Annotated
 import numpy as np
 import typer
 from rich.console import Console
+from geotessera import __version__
 from rich.progress import Progress, TaskID, BarColumn, TextColumn, TimeRemainingColumn
 from rich.panel import Panel
 from rich.table import Table
@@ -62,7 +63,7 @@ def format_bbox(bbox_coords) -> str:
 
 app = typer.Typer(
     name="geotessera",
-    help="GeoTessera: Download satellite embedding tiles as GeoTIFFs",
+    help=f"GeoTessera v{__version__}: Download satellite embedding tiles as GeoTIFFs",
     add_completion=False,
     rich_markup_mode="rich",
 )
@@ -215,7 +216,7 @@ def info(
         rprint(
             Panel(
                 info_table,
-                title="[bold]🌍 GeoTessera Library Info[/bold]",
+                title=f"[bold]🌍 GeoTessera v{__version__} Library Info[/bold]",
                 border_style="blue",
             )
         )
@@ -688,7 +689,7 @@ def download(
     rprint(
         Panel(
             info_table,
-            title="[bold]Region of Interest Download[/bold]",
+            title=f"[bold]GeoTessera v{__version__} - Region of Interest Download[/bold]",
             border_style="blue",
         )
     )
@@ -1197,7 +1198,7 @@ def webmap(
                 center_lon=center_lon,
                 center_lat=center_lat,
                 zoom=initial_zoom,
-                title=f"GeoTessera - {rgb_mosaic.name}",
+                title=f"GeoTessera v{__version__} - {rgb_mosaic.name}",
                 region_file=str(region_file) if region_file else None,
             )
             
@@ -1368,6 +1369,13 @@ def serve(
     except Exception as e:
         rprint(f"[red]Error starting web server: {e}[/red]")
         raise typer.Exit(1)
+
+
+@app.command()
+def version():
+    """Print the geotessera library version."""
+    from geotessera import __version__
+    print(__version__)
 
 
 def main():
