@@ -419,7 +419,7 @@ class Registry:
                     )
 
                     subprocess.run(
-                        ["git", "reset", "--hard", "origin/20250823-rev"],
+                        ["git", "reset", "--hard", "origin/main"],
                         cwd=manifests_dir,
                         check=True,
                         capture_output=True,
