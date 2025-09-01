@@ -342,7 +342,7 @@ def generate_tiff_checksums(base_dir, force=False):
     # Check if SHA256SUM already exists and force is not enabled
     sha256sum_file = os.path.join(base_dir, "SHA256SUM")
     if not force and os.path.exists(sha256sum_file):
-        print(f"SHA256SUM file already exists. Skipping (use --force to regenerate)")
+        print("SHA256SUM file already exists. Skipping (use --force to regenerate)")
         return 0
 
     # Find all .tiff files
@@ -776,6 +776,348 @@ def hash_command(args):
     return 0
 
 
+def analyze_registry_changes():
+    """Analyze git changes in registry files and summarize by year."""
+    try:
+        # Get all changed registry files (staged, unstaged, and untracked)
+        registry_files_changed = set()
+        
+        # Single git status call to get all changes
+        result = subprocess.run(
+            ['git', 'status', '--porcelain'],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        
+        for line in result.stdout.strip().split('\n'):
+            if not line:
+                continue
+            # Parse git status output: XY filename (where XY is 2-char status)
+            if len(line) >= 3:
+                # Git status porcelain format: first 2 chars are status, then filename
+                # Handle both "XY filename" and "XY  filename" formats
+                filename = line[2:].lstrip()  # Skip status and any spaces
+                
+                if is_registry_file(filename):
+                    registry_files_changed.add(filename)
+        
+        if not registry_files_changed:
+            return {}, []
+        
+        # Analyze each changed file
+        changes_by_year = defaultdict(lambda: {'added': 0, 'modified': 0})
+        registry_files_list = []
+        
+        for file_path in registry_files_changed:
+            if not os.path.exists(file_path):
+                continue
+                
+            year = extract_year_from_filename(file_path)
+            is_new_file = is_untracked_file(file_path)
+            
+            if is_new_file:
+                entries = count_entries_in_registry_file(file_path)
+                changes_by_year[year]['added'] += entries
+                registry_files_list.append(('A', file_path))
+            else:
+                added, removed = count_file_diff_entries(file_path)
+                net_change = added - removed
+                if net_change > 0:
+                    changes_by_year[year]['added'] += net_change
+                elif net_change < 0:
+                    changes_by_year[year]['modified'] += abs(net_change)
+                registry_files_list.append(('M', file_path))
+        
+        return changes_by_year, registry_files_list
+        
+    except subprocess.CalledProcessError as e:
+        return None, f"Git command failed: {e}"
+    except Exception as e:
+        return None, f"Error analyzing changes: {e}"
+
+
+def extract_year_from_filename(file_path):
+    """Extract year from registry filename.
+    
+    Registry filenames follow these exact patterns:
+    - embeddings_YYYY_lonX_latY.txt -> returns YYYY
+    - landmasks_lonX_latY.txt -> returns None (no year)
+    - registry_YYYY.txt -> returns YYYY
+    - registry.txt -> returns None (master registry)
+    """
+    filename = os.path.basename(file_path)
+    
+    # embeddings_YYYY_lonX_latY.txt
+    if filename.startswith('embeddings_'):
+        parts = filename.split('_')
+        if len(parts) >= 2 and parts[1].isdigit() and len(parts[1]) == 4:
+            return int(parts[1])
+    
+    # registry_YYYY.txt
+    elif filename.startswith('registry_') and filename.endswith('.txt'):
+        year_str = filename[9:-4]  # Extract between 'registry_' and '.txt'
+        if year_str.isdigit() and len(year_str) == 4:
+            return int(year_str)
+    
+    # landmasks and master registry have no year
+    return None
+
+
+def is_registry_file(file_path):
+    """Check if a file is a registry file we should analyze."""
+    if not file_path.endswith('.txt'):
+        return False
+    
+    filename = os.path.basename(file_path)
+    return any(keyword in filename for keyword in ['registry', 'embeddings', 'landmasks'])
+
+
+def count_entries_in_registry_file(file_path):
+    """Count the number of entries in a registry file."""
+    if not os.path.exists(file_path):
+        return 0
+        
+    try:
+        with open(file_path, 'r') as f:
+            count = 0
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    count += 1
+            return count
+    except Exception:
+        return 0
+
+
+def is_untracked_file(file_path):
+    """Check if a file is untracked (new)."""
+    try:
+        result = subprocess.run(
+            ['git', 'ls-files', '--error-unmatch', file_path],
+            capture_output=True,
+            text=True
+        )
+        return result.returncode != 0  # Non-zero means untracked
+    except Exception:
+        return False
+
+
+def count_file_diff_entries(file_path):
+    """Count added and removed entries in a modified registry file."""
+    try:
+        # Get the diff for this file
+        result = subprocess.run(
+            ['git', 'diff', 'HEAD', file_path],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        
+        if not result.stdout.strip():
+            return 0, 0  # No changes
+        
+        added = 0
+        removed = 0
+        
+        for line in result.stdout.split('\n'):
+            if line.startswith('+') and not line.startswith('+++'):
+                # Count non-comment, non-empty lines
+                content = line[1:].strip()  # Remove the '+' prefix
+                if content and not content.startswith('#'):
+                    added += 1
+            elif line.startswith('-') and not line.startswith('---'):
+                # Count non-comment, non-empty lines
+                content = line[1:].strip()  # Remove the '-' prefix
+                if content and not content.startswith('#'):
+                    removed += 1
+        
+        return added, removed
+        
+    except Exception:
+        return 0, 0
+
+
+
+
+def create_commit_message(changes_by_year, registry_files_changed):
+    """Create a concise commit message from the changes analysis."""
+    
+    # Calculate totals
+    total_added = sum(year_data['added'] for year_data in changes_by_year.values())
+    total_modified = sum(year_data['modified'] for year_data in changes_by_year.values())
+    
+    # Create summary line
+    summary_parts = []
+    if total_added > 0:
+        summary_parts.append(f"{total_added} tiles added")
+    if total_modified > 0:
+        summary_parts.append(f"{total_modified} tiles modified")
+    
+    summary = f"Update registry: {', '.join(summary_parts)}" if summary_parts else "Update registry files"
+    
+    # Create concise message with year breakdown
+    message_parts = [summary]
+    
+    if changes_by_year and len(changes_by_year) > 1:  # Only show breakdown if multiple years
+        message_parts.append("")
+        for year in sorted(y for y in changes_by_year.keys() if y is not None):
+            year_data = changes_by_year[year]
+            changes = []
+            if year_data['added'] > 0:
+                changes.append(f"+{year_data['added']}")
+            if year_data['modified'] > 0:
+                changes.append(f"~{year_data['modified']}")
+            if changes:
+                message_parts.append(f"{year}: {', '.join(changes)}")
+    
+    return "\n".join(message_parts)
+
+
+def commit_command(args):
+    """Analyze registry changes and create a commit with summary."""
+    console = Console()
+    
+    # Check if we're in a git repository
+    try:
+        subprocess.run(['git', 'rev-parse', '--git-dir'], 
+                      capture_output=True, check=True)
+    except subprocess.CalledProcessError:
+        console.print("[red]Error: Not in a git repository[/red]")
+        console.print("[dim]Run this command from within a git repository[/dim]")
+        return 1
+    
+    console.print(Panel.fit("📊 Analyzing Registry Changes", style="cyan"))
+    
+    # Check if git is properly configured
+    try:
+        subprocess.run(['git', 'config', 'user.name'], 
+                      capture_output=True, check=True)
+        subprocess.run(['git', 'config', 'user.email'], 
+                      capture_output=True, check=True)
+    except subprocess.CalledProcessError:
+        console.print("[red]Error: Git user.name and user.email must be configured[/red]")
+        console.print("[dim]Run: git config user.name 'Your Name' && git config user.email 'your@email.com'[/dim]")
+        return 1
+    
+    # Analyze changes
+    changes_by_year, registry_files_changed = analyze_registry_changes()
+    
+    if changes_by_year is None:
+        console.print(f"[red]Error analyzing changes: {registry_files_changed}[/red]")
+        return 1
+    
+    if not registry_files_changed:
+        console.print("[yellow]No registry file changes detected[/yellow]")
+        console.print("[dim]Only .txt files with 'registry', 'embeddings', or 'landmasks' in the name are analyzed[/dim]")
+        return 0
+    
+    # Display summary
+    console.print(f"[green]Found {len(registry_files_changed)} registry files with changes[/green]")
+    
+    # Display file-by-file breakdown
+    console.print("\n[blue]Changed files:[/blue]")
+    for status, file_path in registry_files_changed[:10]:  # Show first 10
+        status_str = {'A': '[green]Added[/green]', 'M': '[yellow]Modified[/yellow]', 'D': '[red]Deleted[/red]'}.get(status, status)
+        console.print(f"  {status_str}: {file_path}")
+    
+    if len(registry_files_changed) > 10:
+        console.print(f"  [dim]... and {len(registry_files_changed) - 10} more files[/dim]")
+    
+    if changes_by_year:
+        console.print("\n[blue]Summary by year:[/blue]")
+        total_added = 0
+        total_modified = 0
+        
+        for year in sorted(changes_by_year.keys(), key=lambda x: (x is None, x)):
+            year_str = str(year) if year else "unknown"
+            year_data = changes_by_year[year]
+            
+            change_parts = []
+            if year_data['added'] > 0:
+                change_parts.append(f"[green]+{year_data['added']} tiles[/green]")
+                total_added += year_data['added']
+            if year_data['modified'] > 0:
+                change_parts.append(f"[yellow]~{year_data['modified']} modified[/yellow]")
+                total_modified += year_data['modified']
+            
+            if change_parts:
+                console.print(f"  {year_str}: {', '.join(change_parts)}")
+        console.print(f"\n[bold]Total: [green]+{total_added} added[/green]" + (f" / [yellow]~{total_modified} modified[/yellow]" if total_modified > 0 else "") + " tiles[/bold]")
+    
+    # Validate we have something to commit
+    if all(year_data['added'] == 0 and year_data['modified'] == 0 for year_data in changes_by_year.values()):
+        console.print("[yellow]Warning: No tile changes detected in registry files[/yellow]")
+        console.print("[dim]Files may have been reformatted without content changes[/dim]")
+    
+    # Stage registry files
+    console.print("\n[blue]Staging registry files...[/blue]")
+    staged_files = []
+    failed_files = []
+    
+    for status, file_path in registry_files_changed:
+        if os.path.exists(file_path):  # Only add files that exist
+            try:
+                subprocess.run(['git', 'add', file_path], check=True, capture_output=True)
+                staged_files.append(file_path)
+            except subprocess.CalledProcessError as e:
+                failed_files.append((file_path, str(e)))
+    
+    if staged_files:
+        console.print(f"[green]✓ Staged {len(staged_files)} files successfully[/green]")
+    
+    if failed_files:
+        console.print(f"[yellow]⚠ Failed to stage {len(failed_files)} files:[/yellow]")
+        for file_path, error in failed_files[:3]:  # Show first 3 failures
+            console.print(f"  {file_path}: {error}")
+        if len(failed_files) > 3:
+            console.print(f"  [dim]... and {len(failed_files) - 3} more failures[/dim]")
+    
+    # Check if there's anything staged
+    try:
+        result = subprocess.run(['git', 'diff', '--staged', '--name-only'], 
+                              capture_output=True, text=True, check=True)
+        if not result.stdout.strip():
+            console.print("[yellow]No files staged for commit[/yellow]")
+            return 1
+    except subprocess.CalledProcessError:
+        console.print("[red]Error checking staged files[/red]")
+        return 1
+    
+    # Create commit message
+    commit_message = create_commit_message(changes_by_year, registry_files_changed)
+    
+    console.print("\n[blue]Commit message:[/blue]")
+    console.print(Panel(commit_message, style="dim"))
+    
+    # Create the commit
+    console.print("[blue]Creating commit...[/blue]")
+    try:
+        result = subprocess.run([
+            'git', 'commit', '-m', commit_message
+        ], capture_output=True, text=True, check=True)
+        
+        console.print("[green]✓ Commit created successfully[/green]")
+        
+        # Show the commit hash and stats
+        commit_result = subprocess.run(['git', 'rev-parse', 'HEAD'], 
+                                     capture_output=True, text=True, check=True)
+        commit_hash = commit_result.stdout.strip()[:8]
+        console.print(f"[cyan]Commit: {commit_hash}[/cyan]")
+        
+        # Show commit stats
+        if result.stdout.strip():
+            console.print(f"[dim]{result.stdout.strip()}[/dim]")
+        
+        return 0
+        
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Error creating commit: {e}[/red]")
+        if e.stderr:
+            console.print(f"[dim]Git error: {e.stderr.decode() if isinstance(e.stderr, bytes) else e.stderr}[/dim]")
+        return 1
+
+
 def main():
     """Main entry point for the geotessera-registry CLI tool."""
     parser = argparse.ArgumentParser(
@@ -803,6 +1145,14 @@ Examples:
   # This will:
   # - Read SHA256 files from grid subdirectories and generate block-based registry files
   # - Read SHA256SUM file from TIFF directory and generate landmask registry files
+  
+  # Analyze registry changes and create a git commit with detailed summary
+  geotessera-registry commit
+  
+  # This will:
+  # - Analyze git changes in registry files
+  # - Summarize changes by year (tiles added/removed/modified)
+  # - Stage registry files and create a commit with detailed message
 
 This tool is intended for GeoTessera data maintainers to generate the registry
 files that are distributed with the package. End users typically don't need
@@ -861,6 +1211,13 @@ Directory Structure:
         help="Output directory for registry files (default: same as base_dir)",
     )
     scan_parser.set_defaults(func=scan_command)
+
+    # Commit command
+    commit_parser = subparsers.add_parser(
+        "commit",
+        help="Analyze registry changes and create a git commit with detailed summary",
+    )
+    commit_parser.set_defaults(func=commit_command)
 
     args = parser.parse_args()
 
