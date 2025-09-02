@@ -1055,6 +1055,37 @@ class Registry:
             List of (year, lon, lat) tuples for all available embedding tiles
         """
         return self._available_embeddings.copy()
+    
+    def get_manifest_info(self) -> Tuple[Optional[str], str]:
+        """Get the git short hash and repository URL of the tessera-manifests.
+        
+        Returns:
+            Tuple of (git_hash, repo_url) where git_hash may be None if not available
+        """
+        import subprocess
+        from pathlib import Path
+        
+        git_hash = None
+        repo_url = self._manifests_repo_url
+        
+        # Try to get git hash if we have a local manifest directory
+        if self._registry_dir:
+            # The registry_dir points to the 'registry' subdirectory, so go up one level
+            manifest_dir = Path(self._registry_dir).parent
+            if manifest_dir.exists() and (manifest_dir / ".git").exists():
+                try:
+                    result = subprocess.run(
+                        ["git", "rev-parse", "--short", "HEAD"],
+                        cwd=manifest_dir,
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    git_hash = result.stdout.strip()
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    pass
+        
+        return git_hash, repo_url
 
     def ensure_all_blocks_loaded(self, progress_callback: Optional[callable] = None):
         """Ensure all registry blocks are loaded for complete coverage information.

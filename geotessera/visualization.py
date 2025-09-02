@@ -393,22 +393,34 @@ def visualize_global_coverage(
     # Add grid
     ax.grid(True, alpha=0.3, linestyle="--")
 
-    # Add statistics text
+    # Add statistics text with timestamp and manifest info
     if progress_callback:
         progress_callback(80, 100, "Adding statistics...")
+    
+    from datetime import datetime
+    current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
     stats_text = f"Total tiles: {len(tiles):,}"
     if year is None:
         years = sorted(set(y for y, _, _ in available_embeddings))
         if years:
             stats_text += f"\nYears: {min(years)}-{max(years)}"
+    stats_text += f"\nGenerated: {current_timestamp}"
+    
+    git_hash, repo_url = tessera_client.registry.get_manifest_info()
+    if "github.com" in repo_url:
+        repo_name = repo_url.split("github.com/")[-1].replace(".git", "")
+        stats_text += f"\nRepo: {repo_name}"
+    if git_hash:
+        stats_text += f"\nHash: {git_hash}"
 
     ax.text(
         0.02,
-        0.98,
+        0.5,
         stats_text,
         transform=ax.transAxes,
         fontsize=10,
-        verticalalignment="top",
+        verticalalignment="center",
         bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
     )
 
