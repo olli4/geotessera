@@ -33,6 +33,7 @@ dependencies = [
     "geodatasets>=2024.8.0",
     "scikit-learn>=1.7.1",
     "scikit-image>=0.25.2",
+    "pyarrow>=17.0.0",
 ]
 
 [project.urls]

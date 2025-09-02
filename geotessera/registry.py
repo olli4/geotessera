@@ -17,6 +17,7 @@ import re
 import pooch
 import numpy as np
 import logging
+import pandas as pd
 
 # Configure pooch logging after importing pooch
 pooch.get_logger().setLevel(logging.ERROR)
@@ -345,6 +346,11 @@ class Registry:
 
         # Initialize pooch instances
         self._initialize_pooch()
+        
+        # Check for Parquet database
+        self._parquet_db_path = None
+        self._parquet_data = None
+        self._try_load_parquet_database()
 
     def _resolve_registry_dir(
         self, registry_dir: Optional[Union[str, Path]]
@@ -813,7 +819,8 @@ class Registry:
         """Load only the registry blocks needed for a specific region and return available tiles.
 
         This is much more efficient than loading all blocks globally when only
-        working with a specific geographic region.
+        working with a specific geographic region. If a Parquet database is available,
+        it will be used for faster querying.
 
         Args:
             bounds: Geographic bounds as (min_lon, min_lat, max_lon, max_lat)
@@ -824,6 +831,18 @@ class Registry:
         """
         min_lon, min_lat, max_lon, max_lat = bounds
 
+        # Try to use Parquet database first if available
+        if self.has_parquet_database():
+            print(f"Using Parquet database for region query: "
+                  f"({min_lon:.4f}, {min_lat:.4f}, {max_lon:.4f}, {max_lat:.4f})")
+            tiles_from_parquet = self.get_parquet_tiles_for_region(bounds, year)
+            if tiles_from_parquet:
+                print(f"Found {len(tiles_from_parquet)} tiles from Parquet database")
+                return tiles_from_parquet
+            else:
+                print("No tiles found in Parquet database, falling back to block loading")
+
+        # Fallback to traditional block loading
         # Get all blocks that intersect with the region
         required_blocks = blocks_in_bounds(min_lon, max_lon, min_lat, max_lat)
 
@@ -1086,6 +1105,70 @@ class Registry:
                     pass
         
         return git_hash, repo_url
+
+    def _try_load_parquet_database(self):
+        """Try to load Parquet database if available."""
+            
+        if self._registry_dir:
+            # Look for Parquet database in registry directory or parent
+            registry_path = Path(self._registry_dir)
+            
+            # Check in parent directory first (alongside registry dir)
+            parent_parquet = registry_path.parent / "registry.parquet"
+            if parent_parquet.exists():
+                self._parquet_db_path = str(parent_parquet)
+                return
+                
+            # Check in registry directory itself
+            registry_parquet = registry_path / "registry.parquet"
+            if registry_parquet.exists():
+                self._parquet_db_path = str(registry_parquet)
+                return
+
+    def _load_parquet_data(self):
+        """Load Parquet database into memory if not already loaded."""
+        if not self._parquet_db_path:
+            return False
+            
+        if self._parquet_data is None:
+            try:
+                self._parquet_data = pd.read_parquet(self._parquet_db_path)
+                print(f"Loaded Parquet database: {self._parquet_db_path} ({len(self._parquet_data):,} records)")
+                return True
+            except Exception as e:
+                print(f"Warning: Could not load Parquet database {self._parquet_db_path}: {e}")
+                return False
+        return True
+
+    def get_parquet_tiles_for_region(self, bounds: Tuple[float, float, float, float], year: int) -> List[Tuple[float, float]]:
+        """Get tiles from Parquet database for a specific region and year.
+        
+        Args:
+            bounds: Geographic bounds as (min_lon, min_lat, max_lon, max_lat)  
+            year: Year of embeddings
+            
+        Returns:
+            List of (tile_lon, tile_lat) tuples for tiles available in the region
+        """
+        if not self._load_parquet_data():
+            return []
+            
+        min_lon, min_lat, max_lon, max_lat = bounds
+        
+        # Filter data by year and spatial bounds
+        filtered = self._parquet_data[
+            (self._parquet_data['year'] == year) &
+            (self._parquet_data['lon'] >= min_lon - 0.05) &  # Account for tile size
+            (self._parquet_data['lon'] <= max_lon + 0.05) &
+            (self._parquet_data['lat'] >= min_lat - 0.05) &
+            (self._parquet_data['lat'] <= max_lat + 0.05)
+        ]
+        
+        return [(row.lon, row.lat) for _, row in filtered.iterrows()]
+
+    def has_parquet_database(self) -> bool:
+        """Check if Parquet database is available."""
+        return self._parquet_db_path is not None
 
     def ensure_all_blocks_loaded(self, progress_callback: Optional[callable] = None):
         """Ensure all registry blocks are loaded for complete coverage information.
