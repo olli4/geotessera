@@ -1,3 +1,7 @@
+## v0.5.2
+
+- cli: Add date/time/repo/hash information to the coverage maps
+
 ## v0.5.1
 
 - Added support for providing URLs as a `--region-file` parameter
