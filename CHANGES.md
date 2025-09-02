@@ -1,6 +1,7 @@
 ## v0.5.2
 
 - cli: Add date/time/repo/hash information to the coverage maps
+- cli(registry): Add commit command to help automation of manifests
 
 ## v0.5.1
 
