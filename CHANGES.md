@@ -1,3 +1,8 @@
+## v0.6.0 
+
+- Add support for a Parquet registry as an alternative source to
+  lookup tile information.
+
 ## v0.5.2 (2025-09-02)
 
 - cli: Add date/time/repo/hash information to the coverage maps
