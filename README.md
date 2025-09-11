@@ -200,7 +200,7 @@ from geotessera import GeoTessera
 gt = GeoTessera()
 
 # Method 1: Fetch a single tile
-embedding, crs, transform = gt.fetch_embedding(lat=52.05, lon=0.15, year=2024)
+embedding, crs, transform = gt.fetch_embedding(lon=0.15, lat=52.05, year=2024)
 print(f"Shape: {embedding.shape}")  # e.g., (1200, 1200, 128)
 print(f"CRS: {crs}")  # Coordinate reference system from landmask
 
@@ -208,7 +208,7 @@ print(f"CRS: {crs}")  # Coordinate reference system from landmask
 bbox = (-0.2, 51.4, 0.1, 51.6)  # (min_lon, min_lat, max_lon, max_lat)
 embeddings = gt.fetch_embeddings(bbox, year=2024)
 
-for tile_lat, tile_lon, embedding_array, crs, transform in embeddings:
+for tile_lon, tile_lat, embedding_array, crs, transform in embeddings:
     print(f"Tile ({tile_lat}, {tile_lon}): {embedding_array.shape}")
 ```
 
@@ -243,7 +243,7 @@ files = gt.export_embedding_geotiffs(
 # Fetch and process embeddings directly
 embeddings = gt.fetch_embeddings(bbox, year=2024)
 
-for lat, lon, embedding, crs, transform in embeddings:
+for lon, lat, embedding, crs, transform in embeddings:
     # Compute statistics
     mean_values = np.mean(embedding, axis=(0, 1))  # Mean per channel
     std_values = np.std(embedding, axis=(0, 1))    # Std per channel
@@ -259,18 +259,19 @@ for lat, lon, embedding, crs, transform in embeddings:
 
 ```python
 from geotessera.visualization import (
-    create_rgb_mosaic_from_geotiffs,
+    create_rgb_mosaic,
+    visualize_global_coverage
+)
+from geotessera.web import (
     create_coverage_summary_map,
-    visualize_global_coverage,
     geotiff_to_web_tiles
 )
 
 # Create an RGB mosaic from multiple GeoTIFF files
-create_rgb_mosaic_from_geotiffs(
+create_rgb_mosaic(
     geotiff_paths=["tile1.tif", "tile2.tif"],
     output_path="mosaic.tif",
-    bands=(0, 1, 2),  # RGB bands
-    normalize=True  # Normalize to 0-255
+    bands=(0, 1, 2)  # RGB bands
 )
 
 # Generate web tiles for interactive maps
