@@ -1,0 +1,93 @@
+name: Embedding Request
+description: Request precomputed embeddings for a specific region/years (2017–2024). Please fill out all required fields.
+title: "[Embedding Request] ORG / YEARS / ROI summary"
+labels:
+  - embedding-request
+assignees: []  # Optional: fill in default maintainers' GitHub IDs
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for your request! Please follow the format below. 
+        • Coordinates must be in **lon,lat** (WGS84) with **4 decimal places** (e.g., `103.1234,30.5678`).  
+        • ROI should be a bounding box (Left/Right/Top/Bottom).
+
+  - type: input
+    id: org
+    attributes:
+      label: 1) Your organization
+      description: e.g., University of Cambridge / UESTC / Company X
+      placeholder: e.g., University of Cambridge
+    validations:
+      required: true
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: 2) Intended use
+      description: Briefly describe how you plan to use these embeddings (project/paper/course/demo, tasks like retrieval/classification/clustering/visualization, etc.)
+      placeholder: e.g., For downstream evaluation in project XXX (retrieval/classification/…)
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: "3) ROI (bounding box) – please provide **four points** as **lon,lat** with **4 decimals**."
+
+  - type: input
+    id: roi_left
+    attributes:
+      label: ROI – Left Top (lon,lat)
+      placeholder: "e.g., 103.1234,30.5678"
+    validations:
+      required: true
+
+  - type: input
+    id: roi_right
+    attributes:
+      label: ROI – Right Top (lon,lat)
+      placeholder: "e.g., 104.4321,30.5678"
+    validations:
+      required: true
+
+  - type: input
+    id: roi_top
+    attributes:
+      label: ROI – Left Bottom (lon,lat)
+      placeholder: "e.g., 103.7777,31.0000"
+    validations:
+      required: true
+
+  - type: input
+    id: roi_bottom
+    attributes:
+      label: ROI – Right Bottom (lon,lat)
+      placeholder: "e.g., 103.7777,30.1000"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: years
+    attributes:
+      label: 4) Years (multi-select)
+      description: Choose one or more years between 2017–2024.
+      multiple: true
+      options:
+        - "2017"
+        - "2018"
+        - "2019"
+        - "2020"
+        - "2021"
+        - "2022"
+        - "2023"
+        - "2024"
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional info (optional)
+      description: e.g., whether near-year/near-area substitution is acceptable, deadlines, etc.
+      placeholder: Leave blank if not applicable
