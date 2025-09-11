@@ -62,9 +62,9 @@ Visualization utilities for creating maps, web tiles, and interactive visualizat
 **Key Features:**
 
 * :func:`~geotessera.visualization.visualize_global_coverage` - Create global coverage maps
-* :func:`~geotessera.visualization.create_rgb_mosaic_from_geotiffs` - Combine multiple GeoTIFFs into a mosaic
-* :func:`~geotessera.visualization.geotiff_to_web_tiles` - Generate web tiles for interactive maps
-* :func:`~geotessera.visualization.create_coverage_summary_map` - Create coverage summary visualizations
+* :func:`~geotessera.visualization.create_rgb_mosaic` - Combine multiple GeoTIFFs into a mosaic
+* :func:`~geotessera.web.geotiff_to_web_tiles` - Generate web tiles for interactive maps
+* :func:`~geotessera.web.create_coverage_summary_map` - Create coverage summary visualizations
 
 .. automodule:: geotessera.visualization
    :members:
@@ -141,16 +141,15 @@ Create Visualizations
 Generate visualizations::
 
     from geotessera.visualization import (
-        create_rgb_mosaic_from_geotiffs,
+        create_rgb_mosaic,
         visualize_global_coverage
     )
     
     # Create RGB mosaic
-    create_rgb_mosaic_from_geotiffs(
+    create_rgb_mosaic(
         geotiff_paths=rgb_files,
         output_path="mosaic.tif",
-        bands=(0, 1, 2),
-        normalize=True
+        bands=(0, 1, 2)
     )
     
     # Create coverage map
