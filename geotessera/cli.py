@@ -37,7 +37,6 @@ from .visualization import (
 from .web import (
     geotiff_to_web_tiles,
     create_simple_web_viewer,
-    create_coverage_summary_map,
     prepare_mosaic_for_web,
 )
 
