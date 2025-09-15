@@ -1,4 +1,4 @@
-## v0.6.0 
+## v0.6.0 (2025-09-15)
 
 - registry: Add support for a Parquet registry as an alternative source
   to lookup tile information (#16).
