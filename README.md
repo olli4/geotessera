@@ -517,3 +517,8 @@ If you use Tessera in your research, please cite the [arXiv paper](https://arxiv
 - [Documentation](https://geotessera.readthedocs.io/)
 - [PyPI Package](https://pypi.org/project/geotessera/)
 - [Issue Tracker](https://github.com/ucam-eo/geotessera/issues)
+
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ucam-eo/geotessera&type=Date)](https://www.star-history.com/#ucam-eo/geotessera&Date)
