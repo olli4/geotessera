@@ -6,7 +6,7 @@ The library focusses on:
 """
 
 from pathlib import Path
-from typing import Union, List, Tuple, Optional, Dict
+from typing import Union, List, Tuple, Optional, Dict, Generator
 import json
 import numpy as np
 
@@ -59,12 +59,26 @@ class GeoTessera:
         """Get the GeoTessera library version."""
         return __version__
 
-    def fetch_embeddings(
+    def embeddings_count(self, bbox: Tuple[float, float, float, float], year: int = 2024) -> int:
+            """Get total number of embedding tiles within a bounding box.
+
+            Args:
+                bbox: Bounding box as (min_lon, min_lat, max_lon, max_lat)
+                year: Year of embeddings to consider
+
+            Returns:
+                Total number of tiles in the bounding box
+            """
+            tiles = self.registry.load_blocks_for_region(bbox, year)
+            return len(tiles)
+
+    # returns a generator
+    def fetch_embeddings_lazy(
         self,
         bbox: Tuple[float, float, float, float],
         year: int = 2024,
         progress_callback: Optional[callable] = None,
-    ) -> List[Tuple[float, float, np.ndarray, object, object]]:
+    ) -> Generator[Tuple[float, float, np.ndarray, object, object], None, None]:
         """Fetch all embedding tiles within a bounding box with CRS information.
 
         Args:
@@ -84,7 +98,6 @@ class GeoTessera:
         tiles_to_download = self.registry.load_blocks_for_region(bbox, year)
 
         # Download each tile with progress tracking
-        results = []
         total_tiles = len(tiles_to_download)
 
         for i, (tile_lon, tile_lat) in enumerate(tiles_to_download):
@@ -108,7 +121,8 @@ class GeoTessera:
                 embedding, crs, transform = self.fetch_embedding(
                     tile_lon, tile_lat, year, tile_progress_callback
                 )
-                results.append((tile_lon, tile_lat, embedding, crs, transform))
+
+                yield tile_lon, tile_lat, embedding, crs, transform
 
                 # Update progress for completed tile
                 if progress_callback:
@@ -130,7 +144,33 @@ class GeoTessera:
                     )
                 continue
 
-        return results
+        return None
+
+    def fetch_embeddings(
+        self,
+        bbox: Tuple[float, float, float, float],
+        year: int = 2024,
+        progress_callback: Optional[callable] = None,
+    ) -> List[Tuple[float, float, np.ndarray, object, object]]:
+        """Fetch all embedding tiles within a bounding box with CRS information.
+
+        Args:
+            bbox: Bounding box as (min_lon, min_lat, max_lon, max_lat)
+            year: Year of embeddings to download
+            progress_callback: Optional callback function(current, total) for progress tracking
+
+        Returns:
+            List of (tile_lon, tile_lat, embedding_array, crs, transform) tuples where:
+            - tile_lon: Tile center longitude
+            - tile_lat: Tile center latitude
+            - embedding_array: shape (H, W, 128) with dequantized values
+            - crs: CRS object from rasterio (coordinate reference system)
+            - transform: Affine transform from rasterio
+        """
+        
+        results = list(self.fetch_embeddings_lazy(bbox, year, progress_callback))
+
+        return results    
 
     def fetch_embedding(
         self,
@@ -601,7 +641,7 @@ class GeoTessera:
                 if progress_callback:
                     progress_callback(i, total_files * 2 + 2, f"Reprojecting file {i+1}/{total_files}...")
                 
-                result_file, error = self._reproject_geotiff_file(args)
+                _, error = self._reproject_geotiff_file(args)
                 
                 if error:
                     failed_files.append((geotiff_paths[i], error))
