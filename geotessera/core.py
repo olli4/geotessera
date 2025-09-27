@@ -79,7 +79,8 @@ class GeoTessera:
         year: int = 2024,
         progress_callback: Optional[callable] = None,
     ) -> Generator[Tuple[float, float, np.ndarray, object, object], None, None]:
-        """Fetch all embedding tiles within a bounding box with CRS information.
+        """Lazily fetches all embedding tiles within a bounding box with CRS information.
+        Use as a generator to process tiles one at a time in a memory-efficient manner.
 
         Args:
             bbox: Bounding box as (min_lon, min_lat, max_lon, max_lat)
@@ -87,7 +88,7 @@ class GeoTessera:
             progress_callback: Optional callback function(current, total) for progress tracking
 
         Returns:
-            List of (tile_lon, tile_lat, embedding_array, crs, transform) tuples where:
+            Generator of (tile_lon, tile_lat, embedding_array, crs, transform) tuples where:
             - tile_lon: Tile center longitude
             - tile_lat: Tile center latitude
             - embedding_array: shape (H, W, 128) with dequantized values
@@ -152,7 +153,8 @@ class GeoTessera:
         year: int = 2024,
         progress_callback: Optional[callable] = None,
     ) -> List[Tuple[float, float, np.ndarray, object, object]]:
-        """Fetch all embedding tiles within a bounding box with CRS information.
+        """Eagerly fetch all embedding tiles within a bounding box with CRS information.
+        For large areas, consider using fetch_embeddings_lazy() instead.
 
         Args:
             bbox: Bounding box as (min_lon, min_lat, max_lon, max_lat)
