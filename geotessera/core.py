@@ -73,7 +73,7 @@ class GeoTessera:
             return len(tiles)
 
     # returns a generator
-    def fetch_embeddings_lazy(
+    def fetch_embeddings(
         self,
         bbox: Tuple[float, float, float, float],
         year: int = 2024,
@@ -145,34 +145,7 @@ class GeoTessera:
                     )
                 continue
 
-        return None
-
-    def fetch_embeddings(
-        self,
-        bbox: Tuple[float, float, float, float],
-        year: int = 2024,
-        progress_callback: Optional[callable] = None,
-    ) -> List[Tuple[float, float, np.ndarray, object, object]]:
-        """Eagerly fetch all embedding tiles within a bounding box with CRS information.
-        For large areas, consider using fetch_embeddings_lazy() instead.
-
-        Args:
-            bbox: Bounding box as (min_lon, min_lat, max_lon, max_lat)
-            year: Year of embeddings to download
-            progress_callback: Optional callback function(current, total) for progress tracking
-
-        Returns:
-            List of (tile_lon, tile_lat, embedding_array, crs, transform) tuples where:
-            - tile_lon: Tile center longitude
-            - tile_lat: Tile center latitude
-            - embedding_array: shape (H, W, 128) with dequantized values
-            - crs: CRS object from rasterio (coordinate reference system)
-            - transform: Affine transform from rasterio
-        """
-        
-        results = list(self.fetch_embeddings_lazy(bbox, year, progress_callback))
-
-        return results    
+        return None 
 
     def fetch_embedding(
         self,
