@@ -206,9 +206,10 @@ print(f"CRS: {crs}")  # Coordinate reference system from landmask
 
 # Method 2: Fetch all tiles in a bounding box
 bbox = (-0.2, 51.4, 0.1, 51.6)  # (min_lon, min_lat, max_lon, max_lat)
-embeddings = gt.fetch_embeddings(bbox, year=2024)
+tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+embeddings = gt.fetch_embeddings(tiles_to_fetch)
 
-for tile_lon, tile_lat, embedding_array, crs, transform in embeddings:
+for year, tile_lon, tile_lat, embedding_array, crs, transform in embeddings:
     print(f"Tile ({tile_lat}, {tile_lon}): {embedding_array.shape}")
 ```
 
@@ -241,7 +242,8 @@ files = gt.export_embedding_geotiffs(
 
 ```python
 # Fetch and process embeddings directly
-embeddings = gt.fetch_embeddings(bbox, year=2024)
+tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+embeddings = gt.fetch_embeddings(tiles_to_fetch)
 
 for lon, lat, embedding, crs, transform in embeddings:
     # Compute statistics

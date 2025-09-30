@@ -801,25 +801,26 @@ def download(
                 "🔄 Processing tiles...", total=100, status="Starting..."
             )
 
+            tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox_coords, year=year)
+            
+            if not tiles_to_fetch:
+                rprint(
+                    "[yellow]⚠️  No tiles found in the specified region.[/yellow]"
+                )
+                rprint(
+                    "Try expanding your bounding box or checking data availability."
+                )
+                return
+
             if format == "tiff":
                 # Export as GeoTIFF files
                 files = gt.export_embedding_geotiffs(
-                    bbox=bbox_coords,
+                    tiles_to_fetch,
                     output_dir=output,
-                    year=year,
                     bands=bands_list,
                     compress=compress,
                     progress_callback=create_download_progress_callback(progress, task),
                 )
-
-                if not files:
-                    rprint(
-                        "[yellow]⚠️  No tiles found in the specified region.[/yellow]"
-                    )
-                    rprint(
-                        "Try expanding your bounding box or checking data availability."
-                    )
-                    return
 
                 rprint(
                     f"\n[green]✅ SUCCESS: Exported {len(files)} GeoTIFF files[/green]"
@@ -832,20 +833,11 @@ def download(
             else:  # format == 'npy'
                 # Export as numpy arrays
                 # Fetch embeddings as numpy arrays
+                
                 embeddings = gt.fetch_embeddings(
-                    bbox=bbox_coords,
-                    year=year,
+                    tiles_to_fetch,
                     progress_callback=create_download_progress_callback(progress, task),
                 )
-
-                if not embeddings:
-                    rprint(
-                        "[yellow]⚠️  No tiles found in the specified region.[/yellow]"
-                    )
-                    rprint(
-                        "Try expanding your bounding box or checking data availability."
-                    )
-                    return
 
                 # Create output directory
                 output.mkdir(parents=True, exist_ok=True)
@@ -854,7 +846,7 @@ def download(
                 
                 files = []
 
-                for tile_lon, tile_lat, embedding_array, crs, transform in embeddings:
+                for year, tile_lon, tile_lat, embedding_array, crs, transform in embeddings:
                     # Apply band selection if specified
                     if bands_list:
                         embedding_array = embedding_array[:, :, bands_list]
@@ -928,7 +920,7 @@ def download(
                     files.append(str(json_filepath))
 
                 rprint(
-                    f"\n[green]✅ SUCCESS: Exported {len(embeddings)} numpy arrays[/green]"
+                    f"\n[green]✅ SUCCESS: Exported {len(tiles_to_fetch)} numpy arrays[/green]"
                 )
                 rprint("   Landmask TIFF files downloaded for each tile")
                 rprint("   Comprehensive JSON metadata files created for each tile")

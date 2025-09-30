@@ -84,9 +84,10 @@ Python API usage::
     
     # Method 2: Fetch all tiles in a bounding box
     bbox = (-0.2, 51.4, 0.1, 51.6)  # (min_lon, min_lat, max_lon, max_lat)
-    tiles = gt.fetch_embeddings(bbox, year=2024)
+    tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+    tiles = gt.fetch_embeddings(tiles_to_fetch)
     
-    for tile_lon, tile_lat, embedding, crs, transform in tiles:
+    for year, tile_lon, tile_lat, embedding, crs, transform in tiles:
         print(f"Tile ({tile_lon}, {tile_lat}): {embedding.shape}")
     
     # Export as GeoTIFF files with preserved UTM projections

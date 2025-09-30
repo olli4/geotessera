@@ -132,13 +132,14 @@ Download and analyze multiple tiles for a region::
     bbox = (0.0, 52.0, 0.3, 52.2)  # (min_lon, min_lat, max_lon, max_lat)
     
     # Fetch all tiles in the region with projection info
-    tiles = gt.fetch_embeddings(bbox, year=2024)
+    tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+    tiles = gt.fetch_embeddings(tiles_to_fetch)
     
-    print(f"Found {len(tiles)} tiles in the region")
+    print(f"Found {len(tiles_to_fetch)} tiles in the region")
     
     # Analyze each tile
     tile_stats = []
-    for tile_lon, tile_lat, embedding, crs, transform in tiles:
+    for year, tile_lon, tile_lat, embedding, crs, transform in tiles:
         stats = {
             'lat': tile_lat,
             'lon': tile_lon,
@@ -164,7 +165,7 @@ Save the analysis results for later use::
         json.dump(tile_stats, f, indent=2)
     
     # Save raw embeddings for further analysis  
-    for i, (tile_lon, tile_lat, embedding, crs, transform) in enumerate(tiles):
+    for i, (year, tile_lon, tile_lat, embedding, crs, transform) in enumerate(tiles):
         filename = f'cambridge_tile_{tile_lat:.2f}_{tile_lon:.2f}.npy'
         np.save(filename, embedding)
         print(f"Saved {filename}")
@@ -196,10 +197,10 @@ First check coverage, then export as georeferenced GeoTIFF files::
     
     # Or using Python API:
     # Export all bands
+    tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=year)
     all_files = gt.export_embedding_geotiffs(
-        bbox=bbox,
+        tiles_to_fetch,
         output_dir="./london_full",
-        year=year,
         compress="lzw"
     )
     
@@ -208,9 +209,8 @@ First check coverage, then export as georeferenced GeoTIFF files::
     
     # Export RGB subset for visualization
     rgb_files = gt.export_embedding_geotiffs(
-        bbox=bbox,
+        tiles_to_fetch,
         output_dir="./london_rgb",
-        year=year,
         bands=[30, 60, 90],  # Custom RGB bands
         compress="lzw"
     )
@@ -341,14 +341,15 @@ When working with large regions, use CLI for efficient processing::
         """Process a large region without loading all tiles into memory."""
         
         # Get list of available tiles (metadata only)
-        tiles = gt.fetch_embeddings(bbox, year)
-        total_tiles = len(tiles)
+        tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+        total_tiles = len(tiles_to_fetch)
+        tiles = gt.fetch_embeddings(tiles_to_fetch)
         
         print(f"Processing {total_tiles} tiles...")
         print("Consider using CLI: geotessera download + geotessera visualize for large regions")
         
         results = []
-        for i, (tile_lon, tile_lat, embedding, crs, transform) in enumerate(tiles):
+        for i, (year, tile_lon, tile_lat, embedding, crs, transform) in enumerate(tiles):
             # Process one tile at a time
             result = analysis_func(embedding, tile_lat, tile_lon)
             results.append(result)
@@ -437,10 +438,10 @@ Export multiple regions efficiently using CLI commands::
             output_dir.mkdir(parents=True, exist_ok=True)
             
             try:
+                tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=config['bbox'], year=config['year'])
                 files = gt.export_embedding_geotiffs(
-                    bbox=config['bbox'],
+                    tiles_to_fetch,
                     output_dir=str(output_dir),
-                    year=config['year'],
                     bands=config.get('bands', None),
                     compress="lzw"
                 )
@@ -600,7 +601,7 @@ Reduce dimensionality of the 128-channel embeddings::
         all_pixels = []
         tile_info = []
         
-        for tile_lon, tile_lat, embedding, crs, transform in embeddings_list:
+        for year, tile_lon, tile_lat, embedding, crs, transform in embeddings_list:
             # Reshape from (H, W, 128) to (H*W, 128)
             pixels = embedding.reshape(-1, embedding.shape[-1])
             all_pixels.append(pixels)
@@ -633,7 +634,8 @@ Reduce dimensionality of the 128-channel embeddings::
     # Example usage
     gt = GeoTessera()
     bbox = (-0.1, 51.9, 0.1, 52.1)  # Small region around Cambridge
-    tiles = gt.fetch_embeddings(bbox, year=2024)
+    tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+    tiles = list(gt.fetch_embeddings(tiles_to_fetch))
     
     X_pca, pca, scaler, tile_info = perform_pca_analysis(tiles, n_components=5)
     

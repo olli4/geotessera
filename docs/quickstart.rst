@@ -162,9 +162,10 @@ Fetch a single embedding tile with CRS information::
 Fetch multiple tiles in a bounding box::
 
     bbox = (-0.2, 51.4, 0.1, 51.6)  # (min_lon, min_lat, max_lon, max_lat)
-    tiles = gt.fetch_embeddings(bbox, year=2024)
+    tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+    tiles = gt.fetch_embeddings(tiles_to_fetch)
     
-    for tile_lon, tile_lat, embedding_array, crs, transform in tiles:
+    for year, tile_lon, tile_lat, embedding_array, crs, transform in tiles:
         print(f"Tile ({tile_lon}, {tile_lat}): {embedding_array.shape}")
         print(f"  CRS: {crs}")
         
@@ -297,7 +298,8 @@ Complete analysis workflow::
     bbox = (-0.15, 52.15, 0.0, 52.25)  # Cambridge area
     
     # Fetch embeddings
-    embeddings = gt.fetch_embeddings(bbox, year=2024)
+    tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+    embeddings = gt.fetch_embeddings(tiles_to_fetch)
     
     # Analyze each tile
     results = []
@@ -354,7 +356,8 @@ Use both numpy and GeoTIFF formats in the same workflow::
     
     # Step 1: Analyze with numpy arrays
     print("Analyzing embeddings...")
-    tiles = gt.fetch_embeddings(bbox, year=2024)
+    tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+    tiles = gt.fetch_embeddings(tiles_to_fetch)
     
     # Custom analysis to select interesting tiles
     selected_coords = []
