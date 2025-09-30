@@ -194,7 +194,7 @@ class TestUTMProjectionExportSimple:
         gt = GeoTessera()
 
         # Mock the embedding fetch system
-        gt.registry.load_blocks_for_region = Mock(return_value=[(51.55, -0.05)])
+        gt.registry.load_blocks_for_region = Mock(return_value=[(2024, 51.55, -0.05)])
         gt.registry.ensure_tile_block_loaded = Mock()
         gt.registry.fetch = Mock(return_value="/fake/path")
 
@@ -228,10 +228,10 @@ class TestUTMProjectionExportSimple:
 
                             with tempfile.TemporaryDirectory() as temp_dir:
                                 # Export tiles
+                                tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=(-0.1, 51.5, 0.0, 51.6), year=2024)
                                 gt.export_embedding_geotiffs(
-                                    bbox=(-0.1, 51.5, 0.0, 51.6),
+                                    tiles_to_fetch,
                                     output_dir=temp_dir,
-                                    year=2024,
                                 )
 
                                 # Verify UTM projection was used

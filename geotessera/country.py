@@ -322,8 +322,8 @@ def get_country_bbox(
     return get_country_lookup(progress_callback).get_bbox(country_name)
 
 
-def get_country_tiles(country_name: str, year: int = 2024) -> List[Tuple[float, float]]:
-    """Get list of GeoTessera tile coordinates that intersect with country."""
+def get_country_tiles(country_name: str, year: int = 2024) -> List[Tuple[int, float, float]]:
+    """Get list of GeoTessera tile (year, tile_lon, tile_lat) tuples that intersect with country."""
     from .core import GeoTessera
 
     # Get country bounding box
@@ -332,6 +332,6 @@ def get_country_tiles(country_name: str, year: int = 2024) -> List[Tuple[float, 
 
     # Use existing registry to find tiles in the bounding box
     gt = GeoTessera()
-    tiles = gt.registry.load_blocks_for_region(bbox, year)
+    tiles = gt.registry.load_blocks_for_region(bounds=bbox, year=year)
 
     return tiles

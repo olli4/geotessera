@@ -18,7 +18,8 @@ Simplified Usage:
     >>>
     >>> # Fetch embedding tiles in a bounding box
     >>> bbox = (-0.2, 51.4, 0.1, 51.6)  # London area
-    >>> tiles = gt.fetch_embeddings(bbox, year=2024)
+    >>> tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+    >>> tiles = gt.fetch_embeddings(tiles_to_fetch)
     >>>
     >>> # Export as individual GeoTIFF files
     >>> files = gt.export_embedding_geotiffs(

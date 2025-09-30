@@ -102,9 +102,10 @@ Initialize and fetch embeddings::
     
     # Fetch region with projection info
     bbox = (-0.2, 51.4, 0.1, 51.6)
-    tiles = gt.fetch_embeddings(bbox, year=2024)
+    tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+    tiles = gt.fetch_embeddings(tiles_to_fetch)
     
-    for tile_lon, tile_lat, embedding, crs, transform in tiles:
+    for year, tile_lon, tile_lat, embedding, crs, transform in tiles:
         print(f"Tile ({tile_lon}, {tile_lat}): {embedding.shape}, CRS: {crs}")
 
 Export to GeoTIFF
@@ -114,16 +115,14 @@ Export embeddings for GIS use with preserved projections::
 
     # Export all bands with native UTM projections
     files = gt.export_embedding_geotiffs(
-        bbox=bbox,
+        files_to_fetch,
         output_dir="./output",
-        year=2024
     )
     
     # Export specific bands
     rgb_files = gt.export_embedding_geotiffs(
-        bbox=bbox,
+        files_to_fetch,
         output_dir="./rgb_output", 
-        year=2024,
         bands=[0, 1, 2]  # Each tile preserves its native UTM projection
     )
     

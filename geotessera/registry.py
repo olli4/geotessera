@@ -464,7 +464,7 @@ class Registry:
         2. Land mask fetcher for GeoTIFF files containing binary land/water
            masks and coordinate reference system metadata
 
-        Registry files are loaded lazily per year to improve performance.
+        Registry files are loaded lazily to improve performance.
         """
         cache_path = (
             self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
@@ -809,7 +809,7 @@ class Registry:
 
     def load_blocks_for_region(
         self, bounds: Tuple[float, float, float, float], year: int
-    ) -> List[Tuple[float, float]]:
+    ) -> List[Tuple[int, float, float]]:
         """Load only the registry blocks needed for a specific region and return available tiles.
 
         This is much more efficient than loading all blocks globally when only
@@ -820,7 +820,7 @@ class Registry:
             year: Year of embeddings to load
 
         Returns:
-            List of (tile_lon, tile_lat) tuples for tiles available in the region
+            List of (year, tile_lon, tile_lat) tuples for tiles available in the region
         """
         min_lon, min_lat, max_lon, max_lat = bounds
 
@@ -890,7 +890,7 @@ class Registry:
                 and tile_min_lat < max_lat
                 and tile_max_lat > min_lat
             ):
-                tiles_in_region.append((lon, lat))
+                tiles_in_region.append((year, lon, lat))
 
         return tiles_in_region
 

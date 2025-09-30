@@ -26,6 +26,9 @@ class GeoTessera:
     - Download tiles within a bounding box to numpy arrays
     - Export individual tiles as GeoTIFF files with correct metadata
     - Manage registry and data access
+
+    Attributes:
+        registry: geotessera.registry.Registry instance for data discovery and access
     """
 
     def __init__(
@@ -59,49 +62,33 @@ class GeoTessera:
         """Get the GeoTessera library version."""
         return __version__
 
-    def embeddings_count(self, bbox: Tuple[float, float, float, float], year: int = 2024) -> int:
-            """Get total number of embedding tiles within a bounding box.
-
-            Args:
-                bbox: Bounding box as (min_lon, min_lat, max_lon, max_lat)
-                year: Year of embeddings to consider
-
-            Returns:
-                Total number of tiles in the bounding box
-            """
-            tiles = self.registry.load_blocks_for_region(bbox, year)
-            return len(tiles)
-
     # returns a generator
     def fetch_embeddings(
         self,
-        bbox: Tuple[float, float, float, float],
-        year: int = 2024,
+        tiles_to_fetch: List[Tuple[int, float, float]],
         progress_callback: Optional[callable] = None,
-    ) -> Generator[Tuple[float, float, np.ndarray, object, object], None, None]:
-        """Lazily fetches all embedding tiles within a bounding box with CRS information.
+    ) -> Generator[Tuple[int, float, float, np.ndarray, object, object], None, None]:
+        """Lazily fetches all requested tiles with CRS information.
         Use as a generator to process tiles one at a time in a memory-efficient manner.
+        The list of tiles to fetch can be obtained by registry.load_blocks_for_region().
 
         Args:
-            bbox: Bounding box as (min_lon, min_lat, max_lon, max_lat)
-            year: Year of embeddings to download
+            tiles_to_fetch: List of tiles to fetch as (year, tile_lon, tile_lat) tuples
             progress_callback: Optional callback function(current, total) for progress tracking
 
         Returns:
-            Generator of (tile_lon, tile_lat, embedding_array, crs, transform) tuples where:
+            Generator of (year, tile_lon, tile_lat, embedding_array, crs, transform) tuples where:
+            - year: Tile year
             - tile_lon: Tile center longitude
             - tile_lat: Tile center latitude
             - embedding_array: shape (H, W, 128) with dequantized values
             - crs: CRS object from rasterio (coordinate reference system)
             - transform: Affine transform from rasterio
         """
-        # Load registry blocks for this region and get available tiles directly
-        tiles_to_download = self.registry.load_blocks_for_region(bbox, year)
-
         # Download each tile with progress tracking
-        total_tiles = len(tiles_to_download)
+        total_tiles = len(tiles_to_fetch)
 
-        for i, (tile_lon, tile_lat) in enumerate(tiles_to_download):
+        for i, (year, tile_lon, tile_lat) in enumerate(tiles_to_fetch):
             try:
                 # Create a sub-progress callback for this tile's downloads
                 def tile_progress_callback(
@@ -123,7 +110,7 @@ class GeoTessera:
                     tile_lon, tile_lat, year, tile_progress_callback
                 )
 
-                yield tile_lon, tile_lat, embedding, crs, transform
+                yield year, tile_lon, tile_lat, embedding, crs, transform
 
                 # Update progress for completed tile
                 if progress_callback:
@@ -412,19 +399,18 @@ class GeoTessera:
 
     def export_embedding_geotiffs(
         self,
-        bbox: Tuple[float, float, float, float],
+        tiles_to_fetch: List[Tuple[int, float, float]],
         output_dir: Union[str, Path],
-        year: int = 2024,
         bands: Optional[List[int]] = None,
         compress: str = "lzw",
         progress_callback: Optional[callable] = None,
     ) -> List[str]:
         """Export all embedding tiles in bounding box as individual GeoTIFF files with native UTM projections.
+        The list of tiles to fetch can be obtained by registry.load_blocks_for_region().
 
         Args:
-            bbox: Bounding box as (min_lon, min_lat, max_lon, max_lat)
+            tiles_to_fetch: List of tiles to fetch as (year, tile_lon, tile_lat) tuples
             output_dir: Directory to save GeoTIFF files
-            year: Year of embeddings to export
             bands: List of band indices to export (None = all 128 bands)
             compress: Compression method for GeoTIFF
             progress_callback: Optional callback function(current, total) for progress tracking
@@ -459,7 +445,8 @@ class GeoTessera:
         if progress_callback:
             progress_callback(0, 100, "Loading registry blocks...")
 
-        tiles = self.fetch_embeddings(bbox, year, fetch_progress_callback)
+        tiles = self.fetch_embeddings(tiles_to_fetch, fetch_progress_callback)
+        total_tiles = len(tiles_to_fetch)
 
         if not tiles:
             print("No tiles found in bounding box")
@@ -467,14 +454,13 @@ class GeoTessera:
 
         if progress_callback:
             progress_callback(
-                50, 100, f"Fetched {len(tiles)} tiles, starting GeoTIFF export..."
+                50, 100, f"Fetched {total_tiles} tiles, starting GeoTIFF export..."
             )
 
         created_files = []
-        total_tiles = len(tiles)
 
         # Sequential GeoTIFF writing
-        for i, (tile_lon, tile_lat, embedding, crs, transform) in enumerate(tiles):
+        for i, (year, tile_lon, tile_lat, embedding, crs, transform) in enumerate(tiles):
             # Create filename first for progress reporting
             filename = f"tessera_{year}_lat{tile_lat:.2f}_lon{tile_lon:.2f}.tif"
             output_path = output_dir / filename
@@ -692,22 +678,22 @@ class GeoTessera:
     
     def apply_pca_to_embeddings(
         self,
-        embeddings: List[Tuple[float, float, np.ndarray, object, object]],
+        embeddings: List[Tuple[int, float, float, np.ndarray, object, object]],
         n_components: int = 3,
         standardize: bool = True,
         progress_callback: Optional[callable] = None,
-    ) -> List[Tuple[float, float, np.ndarray, object, object, Dict]]:
+    ) -> List[Tuple[int, float, float, np.ndarray, object, object, Dict]]:
         """Apply PCA to embedding tiles for visualization.
         
         Args:
-            embeddings: List of (tile_lon, tile_lat, embedding_array, crs, transform) tuples
+            embeddings: List of (year, tile_lon, tile_lat, embedding_array, crs, transform) tuples
             n_components: Number of principal components to extract (default: 3 for RGB)
             standardize: Whether to standardize features before PCA
             progress_callback: Optional callback function(current, total, status) for progress tracking
             
         Returns:
             List of tuples with PCA-transformed data:
-                (tile_lon, tile_lat, pca_array, crs, transform, pca_info)
+                (year, tile_lon, tile_lat, pca_array, crs, transform, pca_info)
             where pca_info contains:
                 - explained_variance: Explained variance ratio for each component
                 - total_variance: Total explained variance
@@ -732,7 +718,7 @@ class GeoTessera:
         if progress_callback:
             progress_callback(0, total_tiles, "Starting PCA analysis...")
         
-        for i, (tile_lon, tile_lat, embedding, crs, transform) in enumerate(embeddings):
+        for i, (year, tile_lon, tile_lat, embedding, crs, transform) in enumerate(embeddings):
             if progress_callback:
                 progress_callback(i, total_tiles, f"Processing tile {i+1}/{total_tiles}: ({tile_lat:.2f}, {tile_lon:.2f})")
             
@@ -765,7 +751,7 @@ class GeoTessera:
                 'standardized': standardize,
             }
             
-            pca_results.append((tile_lon, tile_lat, pca_image, crs, transform, pca_info))
+            pca_results.append((year, tile_lon, tile_lat, pca_image, crs, transform, pca_info))
         
         if progress_callback:
             progress_callback(total_tiles, total_tiles, "PCA analysis complete")
@@ -774,9 +760,8 @@ class GeoTessera:
     
     def export_pca_geotiffs(
         self,
-        bbox: Tuple[float, float, float, float],
+        tiles_to_fetch: List[Tuple[int, float, float]],
         output_dir: Union[str, Path],
-        year: int = 2024,
         n_components: int = 3,
         standardize: bool = True,
         compress: str = "lzw",
@@ -789,9 +774,8 @@ class GeoTessera:
         the results as GeoTIFF files suitable for RGB visualization.
         
         Args:
-            bbox: Bounding box as (min_lon, min_lat, max_lon, max_lat)
+            tiles_to_fetch: List of tiles as (year, tile_lon, tile_lat) tuples
             output_dir: Directory to save PCA GeoTIFF files
-            year: Year of embeddings to export
             n_components: Number of principal components (default: 3 for RGB)
             standardize: Whether to standardize features before PCA
             compress: Compression method for GeoTIFF
@@ -821,7 +805,7 @@ class GeoTessera:
         if progress_callback:
             progress_callback(0, 100, "Fetching embedding tiles...")
         
-        embeddings = self.fetch_embeddings(bbox, year, fetch_progress)
+        embeddings = self.fetch_embeddings(tiles_to_fetch, fetch_progress)
         
         if not embeddings:
             if progress_callback:
@@ -854,7 +838,7 @@ class GeoTessera:
                     global_min[j] = min(global_min[j], np.nanmin(comp))
                     global_max[j] = max(global_max[j], np.nanmax(comp))
         
-        for i, (tile_lon, tile_lat, pca_image, crs, transform, pca_info) in enumerate(pca_results):
+        for i, (year, tile_lon, tile_lat, pca_image, crs, transform, pca_info) in enumerate(pca_results):
             if progress_callback:
                 export_progress = int(70 + (i / total_tiles) * 30)
                 filename = f"tessera_{year}_lat{tile_lat:.2f}_lon{tile_lon:.2f}_pca.tif"

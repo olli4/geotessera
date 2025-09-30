@@ -73,7 +73,7 @@ class TestGeoTIFFMetadataTags:
         # Setup mocks
         mock_registry_instance = Mock()
         mock_registry_class.return_value = mock_registry_instance
-        mock_registry_instance.load_blocks_for_region.return_value = [(-0.15, 51.55)]
+        mock_registry_instance.load_blocks_for_region.return_value = [(2024, -0.15, 51.55)]
         mock_registry_instance.available_embeddings = [(2024, -0.15, 51.55)]
         mock_registry_instance.ensure_block_loaded.return_value = None
         mock_registry_instance.fetch.return_value = "/fake/path"
@@ -101,8 +101,9 @@ class TestGeoTIFFMetadataTags:
                         gt = GeoTessera(dataset_version="v2")
 
                         # Export tiles
+                        tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=(-0.1, 51.5, 0.0, 51.6), year=2024)
                         gt.export_embedding_geotiffs(
-                            bbox=(-0.1, 51.5, 0.0, 51.6), output_dir=temp_dir, year=2024
+                            tiles_to_fetch, output_dir=temp_dir
                         )
 
                         # Check that update_tags was called with correct metadata
