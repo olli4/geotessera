@@ -78,7 +78,11 @@ class GeoTessera:
         bbox: Tuple[float, float, float, float],
         year: int = 2024,
         progress_callback: Optional[callable] = None,
-    ) -> Generator[Tuple[float, float, np.ndarray, object, object], None, None]:
+        with_count: bool = False,
+    ) -> Union[
+        Generator[Tuple[float, float, np.ndarray, object, object], None, None],
+        Tuple[Generator[Tuple[float, float, np.ndarray, object, object], None, None], int],
+    ]:
         """Lazily fetches all embedding tiles within a bounding box with CRS information.
         Use as a generator to process tiles one at a time in a memory-efficient manner.
 
@@ -86,14 +90,18 @@ class GeoTessera:
             bbox: Bounding box as (min_lon, min_lat, max_lon, max_lat)
             year: Year of embeddings to download
             progress_callback: Optional callback function(current, total) for progress tracking
+            with_count: If True, also return the number of embedding tiles
 
         Returns:
-            Generator of (tile_lon, tile_lat, embedding_array, crs, transform) tuples where:
-            - tile_lon: Tile center longitude
-            - tile_lat: Tile center latitude
-            - embedding_array: shape (H, W, 128) with dequantized values
-            - crs: CRS object from rasterio (coordinate reference system)
-            - transform: Affine transform from rasterio
+            - If with_count=False (default):
+                Generator of (tile_lon, tile_lat, embedding_array, crs, transform) tuples where:
+                    - tile_lon: Tile center longitude
+                    - tile_lat: Tile center latitude
+                    - embedding_array: shape (H, W, 128) with dequantized values
+                    - crs: CRS object from rasterio (coordinate reference system)
+                    - transform: Affine transform from rasterio
+            - If with_count=True: 
+                A (generator, count) tuple, where count is the number of embedding tiles.
         """
         # Load registry blocks for this region and get available tiles directly
         tiles_to_download = self.registry.load_blocks_for_region(bbox, year)
@@ -101,51 +109,55 @@ class GeoTessera:
         # Download each tile with progress tracking
         total_tiles = len(tiles_to_download)
 
-        for i, (tile_lon, tile_lat) in enumerate(tiles_to_download):
-            try:
-                # Create a sub-progress callback for this tile's downloads
-                def tile_progress_callback(
-                    current: int, total: int, status: str = None
-                ):
+        def generator():
+            for i, (tile_lon, tile_lat) in enumerate(tiles_to_download):
+                try:
+                    # Create a sub-progress callback for this tile's downloads
+                    def tile_progress_callback(
+                        current: int, total: int, status: str = None
+                    ):
+                        if progress_callback:
+                            # Map individual file progress to overall tile progress
+                            tile_progress = (
+                                i * 100 + (current / max(total, 1)) * 100
+                            ) / total_tiles
+                            tile_status = (
+                                f"Tile {i + 1}/{total_tiles}: {status}"
+                                if status
+                                else f"Fetching tile {i + 1}/{total_tiles}"
+                            )
+                            progress_callback(int(tile_progress), 100, tile_status)
+
+                    embedding, crs, transform = self.fetch_embedding(
+                        tile_lon, tile_lat, year, tile_progress_callback
+                    )
+
+                    yield tile_lon, tile_lat, embedding, crs, transform
+
+                    # Update progress for completed tile
                     if progress_callback:
-                        # Map individual file progress to overall tile progress
-                        tile_progress = (
-                            i * 100 + (current / max(total, 1)) * 100
-                        ) / total_tiles
-                        tile_status = (
-                            f"Tile {i + 1}/{total_tiles}: {status}"
-                            if status
-                            else f"Fetching tile {i + 1}/{total_tiles}"
+                        progress_callback(
+                            (i + 1) * 100 // total_tiles,
+                            100,
+                            f"Completed tile {i + 1}/{total_tiles}",
                         )
-                        progress_callback(int(tile_progress), 100, tile_status)
 
-                embedding, crs, transform = self.fetch_embedding(
-                    tile_lon, tile_lat, year, tile_progress_callback
-                )
-
-                yield tile_lon, tile_lat, embedding, crs, transform
-
-                # Update progress for completed tile
-                if progress_callback:
-                    progress_callback(
-                        (i + 1) * 100 // total_tiles,
-                        100,
-                        f"Completed tile {i + 1}/{total_tiles}",
+                except Exception as e:
+                    print(
+                        f"Warning: Failed to download tile ({tile_lat:.2f}, {tile_lon:.2f}): {e}"
                     )
+                    if progress_callback:
+                        progress_callback(
+                            (i + 1) * 100 // total_tiles,
+                            100,
+                            f"Failed tile {i + 1}/{total_tiles}",
+                        )
+                    continue
 
-            except Exception as e:
-                print(
-                    f"Warning: Failed to download tile ({tile_lat:.2f}, {tile_lon:.2f}): {e}"
-                )
-                if progress_callback:
-                    progress_callback(
-                        (i + 1) * 100 // total_tiles,
-                        100,
-                        f"Failed tile {i + 1}/{total_tiles}",
-                    )
-                continue
-
-        return None 
+        if with_count:
+            return generator(), total_tiles
+        else:
+            return generator()
 
     def fetch_embedding(
         self,
@@ -459,7 +471,7 @@ class GeoTessera:
         if progress_callback:
             progress_callback(0, 100, "Loading registry blocks...")
 
-        tiles = self.fetch_embeddings(bbox, year, fetch_progress_callback)
+        tiles, total_tiles = self.fetch_embeddings(bbox, year, fetch_progress_callback, with_count=True)
 
         if not tiles:
             print("No tiles found in bounding box")
@@ -467,11 +479,10 @@ class GeoTessera:
 
         if progress_callback:
             progress_callback(
-                50, 100, f"Fetched {len(tiles)} tiles, starting GeoTIFF export..."
+                50, 100, f"Fetched {total_tiles} tiles, starting GeoTIFF export..."
             )
 
         created_files = []
-        total_tiles = len(tiles)
 
         # Sequential GeoTIFF writing
         for i, (tile_lon, tile_lat, embedding, crs, transform) in enumerate(tiles):

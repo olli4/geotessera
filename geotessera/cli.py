@@ -832,10 +832,11 @@ def download(
             else:  # format == 'npy'
                 # Export as numpy arrays
                 # Fetch embeddings as numpy arrays
-                embeddings = gt.fetch_embeddings(
+                embeddings, num_embeddings = gt.fetch_embeddings(
                     bbox=bbox_coords,
                     year=year,
                     progress_callback=create_download_progress_callback(progress, task),
+                    with_count=True,
                 )
 
                 if not embeddings:
@@ -928,7 +929,7 @@ def download(
                     files.append(str(json_filepath))
 
                 rprint(
-                    f"\n[green]✅ SUCCESS: Exported {len(embeddings)} numpy arrays[/green]"
+                    f"\n[green]✅ SUCCESS: Exported {num_embeddings} numpy arrays[/green]"
                 )
                 rprint("   Landmask TIFF files downloaded for each tile")
                 rprint("   Comprehensive JSON metadata files created for each tile")

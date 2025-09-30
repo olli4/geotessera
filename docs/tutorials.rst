@@ -132,9 +132,9 @@ Download and analyze multiple tiles for a region::
     bbox = (0.0, 52.0, 0.3, 52.2)  # (min_lon, min_lat, max_lon, max_lat)
     
     # Fetch all tiles in the region with projection info
-    tiles = gt.fetch_embeddings(bbox, year=2024)
+    tiles, num_tiles = gt.fetch_embeddings(bbox, year=2024, with_count=True)
     
-    print(f"Found {len(tiles)} tiles in the region")
+    print(f"Found {num_tiles} tiles in the region")
     
     # Analyze each tile
     tile_stats = []
@@ -341,8 +341,7 @@ When working with large regions, use CLI for efficient processing::
         """Process a large region without loading all tiles into memory."""
         
         # Get list of available tiles (metadata only)
-        tiles = gt.fetch_embeddings(bbox, year)
-        total_tiles = len(tiles)
+        tiles, total_tiles = gt.fetch_embeddings(bbox, year, with_count=True)
         
         print(f"Processing {total_tiles} tiles...")
         print("Consider using CLI: geotessera download + geotessera visualize for large regions")
@@ -635,7 +634,7 @@ Reduce dimensionality of the 128-channel embeddings::
     bbox = (-0.1, 51.9, 0.1, 52.1)  # Small region around Cambridge
     tiles = gt.fetch_embeddings(bbox, year=2024)
     
-    X_pca, pca, scaler, tile_info = perform_pca_analysis(tiles, n_components=5)
+    X_pca, pca, scaler, tile_info = perform_pca_analysis(list(tiles), n_components=5)
     
     # Visualize first two principal components
     plt.figure(figsize=(12, 5))
