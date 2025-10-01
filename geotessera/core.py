@@ -6,7 +6,7 @@ The library focusses on:
 """
 
 from pathlib import Path
-from typing import Union, List, Tuple, Optional, Dict, Generator
+from typing import Union, List, Tuple, Optional, Dict, Generator, Iterable
 import json
 import numpy as np
 
@@ -65,7 +65,7 @@ class GeoTessera:
     # returns a generator
     def fetch_embeddings(
         self,
-        tiles_to_fetch: List[Tuple[int, float, float]],
+        tiles_to_fetch: Iterable[Tuple[int, float, float]],
         progress_callback: Optional[callable] = None,
     ) -> Generator[Tuple[int, float, float, np.ndarray, object, object], None, None]:
         """Lazily fetches all requested tiles with CRS information.
@@ -399,7 +399,7 @@ class GeoTessera:
 
     def export_embedding_geotiffs(
         self,
-        tiles_to_fetch: List[Tuple[int, float, float]],
+        tiles_to_fetch: Iterable[Tuple[int, float, float]],
         output_dir: Union[str, Path],
         bands: Optional[List[int]] = None,
         compress: str = "lzw",
@@ -760,7 +760,7 @@ class GeoTessera:
     
     def export_pca_geotiffs(
         self,
-        tiles_to_fetch: List[Tuple[int, float, float]],
+        tiles_to_fetch: Iterable[Tuple[int, float, float]],
         output_dir: Union[str, Path],
         n_components: int = 3,
         standardize: bool = True,
