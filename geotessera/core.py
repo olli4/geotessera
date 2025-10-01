@@ -86,7 +86,8 @@ class GeoTessera:
             - transform: Affine transform from rasterio
         """
         # Download each tile with progress tracking
-        total_tiles = len(tiles_to_fetch)
+        if progress_callback:
+            total_tiles = len(tiles_to_fetch)
 
         for i, (year, tile_lon, tile_lat) in enumerate(tiles_to_fetch):
             try:
@@ -435,18 +436,18 @@ class GeoTessera:
 
         # Create a wrapper callback to handle two-phase progress
         def fetch_progress_callback(current: int, total: int, status: str = None):
-            if progress_callback:
-                # Phase 1: Fetching tiles (0-50% of total progress)
-                overall_progress = int((current / total) * 50)
-                display_status = status or f"Fetching tile {current}/{total}"
-                progress_callback(overall_progress, 100, display_status)
+            # Phase 1: Fetching tiles (0-50% of total progress)
+            overall_progress = int((current / total) * 50)
+            display_status = status or f"Fetching tile {current}/{total}"
+            progress_callback(overall_progress, 100, display_status)
 
         # Fetch tiles with progress tracking
         if progress_callback:
             progress_callback(0, 100, "Loading registry blocks...")
 
-        tiles = self.fetch_embeddings(tiles_to_fetch, fetch_progress_callback)
-        total_tiles = len(tiles_to_fetch)
+        tiles = self.fetch_embeddings(tiles_to_fetch, fetch_progress_callback if progress_callback else None)
+        if progress_callback:
+            total_tiles = len(tiles_to_fetch)
 
         if not tiles:
             print("No tiles found in bounding box")
@@ -798,14 +799,13 @@ class GeoTessera:
         
         # Phase 1: Fetch embeddings (0-40% progress)
         def fetch_progress(current, total, status=None):
-            if progress_callback:
-                overall_progress = int((current / total) * 40)
-                progress_callback(overall_progress, 100, status or f"Fetching tile {current}/{total}")
+            overall_progress = int((current / total) * 40)
+            progress_callback(overall_progress, 100, status or f"Fetching tile {current}/{total}")
         
         if progress_callback:
             progress_callback(0, 100, "Fetching embedding tiles...")
         
-        embeddings = self.fetch_embeddings(tiles_to_fetch, fetch_progress)
+        embeddings = self.fetch_embeddings(tiles_to_fetch, fetch_progress if progress_callback else None)
         
         if not embeddings:
             if progress_callback:
@@ -814,17 +814,17 @@ class GeoTessera:
         
         # Phase 2: Apply PCA (40-70% progress)
         def pca_progress(current, total, status=None):
-            if progress_callback:
-                overall_progress = int(40 + (current / total) * 30)
-                progress_callback(overall_progress, 100, status or f"Applying PCA to tile {current}/{total}")
+            overall_progress = int(40 + (current / total) * 30)
+            progress_callback(overall_progress, 100, status or f"Applying PCA to tile {current}/{total}")
         
         pca_results = self.apply_pca_to_embeddings(
-            embeddings, n_components, standardize, pca_progress
+            embeddings, n_components, standardize, pca_progress if progress_callback else None
         )
         
         # Phase 3: Export GeoTIFFs (70-100% progress)
         created_files = []
-        total_tiles = len(pca_results)
+        if progress_callback:
+            total_tiles = len(pca_results)
         
         # Calculate global min/max if normalize is True (for consistent scaling across tiles)
         if normalize:
