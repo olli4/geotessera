@@ -12,7 +12,7 @@ Key Features:
     - Separate visualization utilities for creating maps and web viewers
     - Clean CLI interface for common workflows
 
-Simplified Usage:
+Usage:
     >>> from geotessera import GeoTessera
     >>> gt = GeoTessera()
     >>>
@@ -23,7 +23,7 @@ Simplified Usage:
     >>>
     >>> # Export as individual GeoTIFF files
     >>> files = gt.export_embedding_geotiffs(
-    ...     bbox=bbox,
+    ...     tiles_to_fetch,
     ...     output_dir="tiles/",
     ...     bands=[0, 1, 2]  # Select specific bands
     ... )
