@@ -23,7 +23,10 @@ If some **years (2017–2024) / areas** are still missing for your use case, ple
 - 👉 **[Open an Embedding Request](../../issues/new?template=embedding-request.yml&labels=embedding-request)**
 - Please include: **your organization, intended use, ROI as a bounding box with four points (lon,lat, 4 decimals), and the year(s)**.
 
-After you submit the request, we will **prioritize your ROI** and notify you via a comment in the issue once the embeddings are ready.
+After you submit the request, we will **prioritize your ROI** and notify you via a comment in the issue once the embeddings are ready. 
+
+**A request for support**
+Due to limited compute resources, we're unable to fulfill embedding requests covering large geographic areas or requiring substantial processing time. To help us serve the community better, we kindly ask requesters—especially those from commercial organizations or those requiring large-scale processing—to sponsor their requests by providing us with Azure credits. Importantly, the resulting outputs will be contributed to our global embeddings database, making them freely available for the entire research and user community. This approach allows us to scale our service while building a shared resource that benefits everyone.  If you are in a position to support us in this way, please contact Prof. S.Keshav at sk818@cam.ac.uk. We greatly appreciate your understanding and support in making Tessera more accessible to all.
 
 ## Table of Contents
 
