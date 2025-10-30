@@ -49,7 +49,7 @@ This design enables the use of standard GIS tools and libraries for all
 downstream processing, keeping GeoTessera focused on reliable data access.
 """
 
-from .core import GeoTessera
+from .core import GeoTessera, dequantize_embedding
 from . import visualization
 from . import web
 from . import registry
@@ -62,4 +62,4 @@ except importlib.metadata.PackageNotFoundError:
     # Fallback for development installs
     __version__ = "unknown"
 
-__all__ = ["GeoTessera", "visualization", "web", "registry"]
+__all__ = ["GeoTessera", "dequantize_embedding", "visualization", "web", "registry"]

@@ -120,31 +120,34 @@ The Tessera embeddings use a **0.1-degree grid system**:
 File Structure and Downloads
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-When you request embeddings, GeoTessera downloads several files via Pooch:
+When you request embeddings, GeoTessera downloads files directly via HTTP to temporary locations:
 
 **Embedding Files** (via ``fetch_embedding``):
 
 1. **Quantized embeddings** (``grid_X.XX_Y.YY.npy``):
-   
+
    * Shape: ``(height, width, 128)``
    * Data type: int8 (quantized for storage efficiency)
    * Contains the compressed embedding values
 
 2. **Scale files** (``grid_X.XX_Y.YY_scales.npy``):
-   
+
    * Shape: ``(height, width)`` or ``(height, width, 128)``
    * Data type: float32
    * Contains scale factors for dequantization
 
 3. **Dequantization**: ``final_embedding = quantized_embedding * scales``
 
+4. **Temporary Storage**: Files are downloaded to temp locations and automatically cleaned up after processing
+
 **Landmask Files** (with CRS and masks for GeoTIFF export):
 
 * **Landmask tiles** (``grid_X.XX_Y.YY.tiff``):
-  
+
   * Provide UTM projection information
   * Define precise geospatial transforms
   * Contain land/water masks
+  * Also downloaded to temp locations and cleaned up after use
 
 The geotessera CLI can also export these into GeoTIFF format with each band
 dequantised into 128-bands and with the GeoTIFF CRS metadata intact.
@@ -156,33 +159,41 @@ Data Flow
 
     User Request (lat/lon bbox)
         ↓
-    Registry Lookup (find available tiles)
+    Parquet Registry Lookup (find available tiles from registry.parquet)
         ↓
-    Download Files (via Pooch with caching)
-        ├── embedding.npy (quantized)
-        └── embedding_scales.npy
+    Direct HTTP Downloads to Temp Files
+        ├── embedding.npy (quantized) → temp file
+        └── embedding_scales.npy → temp file
         ↓
     Dequantization (multiply arrays)
+        ↓
+    Automatic Cleanup (delete temp files)
         ↓
     Output Format
         ├── NumPy arrays → Direct analysis
         └── GeoTIFF → GIS integration
 
+**Storage Note**: Only the Parquet registry (~few MB) is cached locally. All embedding data
+is downloaded on-demand to temporary files and immediately cleaned up, resulting in zero
+persistent storage overhead for tile data.
+
 Registry System
 ~~~~~~~~~~~~~~~
 
-GeoTessera uses a hosted, versioned registry system for efficient data access:
+GeoTessera uses a Parquet-based registry system for efficient data access:
 
-* **Block-based organization**: Registry divided into 5×5 degree geographic blocks
-* **Lazy loading**: Only loads registry blocks for the region you're accessing  
-* **Automatic caching**: Downloads are cached locally using Pooch
-* **Integrity checking**: SHA256 checksums ensure data integrity
+* **Single Parquet file**: All tile metadata stored in one efficient ``registry.parquet`` file
+* **Fast queries**: Uses pandas DataFrames for efficient spatial and temporal filtering
+* **Block-based organization**: Internal 5×5 degree geographic blocks for efficient queries
+* **Minimal storage**: Registry file is ~few MB and cached locally
+* **Integrity checking**: SHA256 checksums ensure data integrity during downloads
 
 The registry can be loaded from multiple sources:
 
-1. **Local directory** (via ``--registry-dir`` or ``registry_dir`` parameter)
-2. **Environment variable** (``TESSERA_REGISTRY_DIR``)
-3. **Auto-cloned repository** (default, from GitHub)
+1. **Default remote** (recommended, downloads and caches automatically)
+2. **Local file** (via ``--registry-path`` parameter)
+3. **Local directory** (via ``--registry-dir`` parameter, looks for ``registry.parquet``)
+4. **Custom URL** (via ``--registry-url`` parameter)
 
 Understanding Tessera Embeddings
 --------------------------------
@@ -203,8 +214,9 @@ Data Organization
 
 **Remote Server Structure**::
 
-    dl-2.tessera.wiki/
+    https://dl2.geotessera.org/
     ├── v1/                              # Dataset version
+    │   ├── registry.parquet             # Parquet registry with all metadata
     │   ├── 2024/                        # Year
     │   │   ├── grid_0.15_52.05/         # Tile (named by center coords)
     │   │   │   ├── grid_0.15_52.05.npy              # Quantized embeddings
@@ -217,12 +229,10 @@ Data Organization
 **Local Cache Structure**::
 
     ~/.cache/geotessera/                 # Default cache location
-    ├── tessera-manifests/               # Auto-cloned registry
-    │   └── registry/
-    ├── pooch/                           # Downloaded data files
-    │   ├── grid_0.15_52.05.npy
-    │   ├── grid_0.15_52.05_scales.npy
-    │   └── ...
+    └── registry.parquet                 # Cached Parquet registry (~few MB)
+
+    # Note: Embedding and landmask tiles are NOT cached persistently.
+    # They are downloaded to temporary files and immediately cleaned up after use.
 
 Embeddings are organized by:
 
@@ -230,19 +240,31 @@ Embeddings are organized by:
 * **Location**: Global 0.1-degree grid system
 * **Format**: NumPy arrays with shape (height, width, 128)
 
-Environment Configuration
--------------------------
+Cache Configuration
+-------------------
 
-You can configure GeoTessera using environment variables::
+Control where the Parquet registry is cached::
 
-    # Set custom cache directory for downloaded files
-    export TESSERA_DATA_DIR=/path/to/cache
-    
-    # Use local registry directory  
-    export TESSERA_REGISTRY_DIR=/path/to/tessera-manifests
-    
-    # Or configure per-command
-    TESSERA_DATA_DIR=/tmp/cache geotessera download ...
+    from geotessera import GeoTessera
+
+    # Use custom cache directory for registry
+    gt = GeoTessera(cache_dir="/path/to/cache")
+
+    # Use default cache location (recommended)
+    gt = GeoTessera()
+
+Or via CLI::
+
+    # Specify custom cache directory
+    geotessera download --cache-dir /path/to/cache ...
+
+    # Use default cache location
+    geotessera download ...
+
+Default cache locations (when not specified):
+
+* **Linux/macOS**: ``~/.cache/geotessera/``
+* **Windows**: ``%LOCALAPPDATA%/geotessera/``
 
 Documentation Sections
 -----------------------

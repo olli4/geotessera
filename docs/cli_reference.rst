@@ -9,26 +9,32 @@ Global Options
 All commands support these global options::
 
     --dataset-version TEXT    Tessera dataset version (default: v1)
-    --cache-dir PATH         Custom cache directory
-    --registry-dir PATH      Custom registry directory
+    --cache-dir PATH         Custom cache directory for registry
+    --registry-path PATH     Path to registry.parquet file
+    --registry-dir PATH      Directory containing registry.parquet
+    --registry-url URL       URL to download registry from
     --verbose, -v            Enable verbose output
     --help                   Show help message
 
-Environment Variables
----------------------
+Cache Configuration
+-------------------
 
-Configure GeoTessera using environment variables:
+Control where the Parquet registry is cached:
 
 .. code-block:: bash
 
-    # Set custom cache directory
-    export TESSERA_DATA_DIR=/path/to/cache
-    
-    # Use local registry directory
-    export TESSERA_REGISTRY_DIR=/path/to/tessera-manifests
-    
-    # Use per-command
-    TESSERA_DATA_DIR=/tmp/cache geotessera download ...
+    # Use custom cache directory for registry
+    geotessera download --cache-dir /path/to/cache ...
+
+    # Use local registry file
+    geotessera download --registry-path /path/to/registry.parquet ...
+
+    # Default cache locations (if not specified):
+    # - Linux/macOS: ~/.cache/geotessera/
+    # - Windows: %LOCALAPPDATA%/geotessera/
+
+Note: Embedding tiles are downloaded to temporary files and immediately cleaned up.
+Only the registry file (~few MB) is cached.
 
 Commands
 --------

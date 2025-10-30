@@ -157,9 +157,13 @@ def create_download_progress_callback(progress: Progress, task_id: TaskID) -> Ca
 
 @app.command()
 def info(
+    tiles_dir: Annotated[
+        Optional[Path],
+        typer.Option("--tiles", help="Analyze tile files/directory (GeoTIFF or NPY format)"),
+    ] = None,
     geotiffs: Annotated[
         Optional[Path],
-        typer.Option("--geotiffs", help="Analyze GeoTIFF files/directory"),
+        typer.Option("--geotiffs", help="(Deprecated: use --tiles) Analyze GeoTIFF files/directory"),
     ] = None,
     dataset_version: Annotated[
         str,
@@ -171,32 +175,76 @@ def info(
         bool, typer.Option("--verbose", "-v", help="Verbose output")
     ] = False,
 ):
-    """Show information about GeoTIFF files or library."""
+    """Show information about tile files or library.
 
-    if geotiffs:
-        # Analyze GeoTIFF files
-        if geotiffs.is_file():
-            geotiff_paths = [str(geotiffs)]
-        else:
-            geotiff_paths = list(map(str, geotiffs.glob("*.tif")))
-            geotiff_paths.extend(map(str, geotiffs.glob("*.tiff")))
+    Supports both GeoTIFF and NPY format tiles (auto-detected).
+    """
 
-        if not geotiff_paths:
-            rprint(f"[red]No GeoTIFF files found in {geotiffs}[/red]")
+    # Support both --tiles and --geotiffs for backwards compatibility
+    input_path = tiles_dir or geotiffs
+
+    if input_path:
+        # Analyze tiles using Tile abstraction (supports both formats)
+        from geotessera.tiles import discover_tiles
+
+        tiles = discover_tiles(input_path)
+
+        if not tiles:
+            rprint(f"[red]No tiles found in {input_path}[/red]")
+            rprint("[yellow]Supported formats:[/yellow]")
+            rprint("  - GeoTIFF: *.tif/*.tiff files")
+            rprint("  - NPY: embeddings/{year}/*.npy + landmasks/*.tif structure")
             raise typer.Exit(1)
 
-        coverage = analyze_geotiff_coverage(geotiff_paths)
+        # Build coverage info from tiles
+        coverage = {
+            "total_files": len(tiles),
+            "years": sorted(list(set(str(t.year) for t in tiles))),
+            "crs": list(set(str(t.crs) for t in tiles)),
+            "band_counts": {},
+            "bounds": {
+                "min_lon": float("inf"),
+                "min_lat": float("inf"),
+                "max_lon": float("-inf"),
+                "max_lat": float("-inf"),
+            },
+            "tiles": [],
+            "format": tiles[0]._format if tiles else "unknown",
+        }
+
+        # Process each tile
+        for tile in tiles:
+            # Update bounds (use tile coordinates for efficiency)
+            coverage["bounds"]["min_lon"] = min(coverage["bounds"]["min_lon"], tile.lon - 0.05)
+            coverage["bounds"]["min_lat"] = min(coverage["bounds"]["min_lat"], tile.lat - 0.05)
+            coverage["bounds"]["max_lon"] = max(coverage["bounds"]["max_lon"], tile.lon + 0.05)
+            coverage["bounds"]["max_lat"] = max(coverage["bounds"]["max_lat"], tile.lat + 0.05)
+
+            # Track band count (from metadata, not loading data)
+            band_count = 128  # All tiles have 128 channels
+            coverage["band_counts"][band_count] = coverage["band_counts"].get(band_count, 0) + 1
+
+            # Tile info for verbose output
+            if verbose:
+                coverage["tiles"].append({
+                    "path": tile.grid_name,
+                    "year": str(tile.year),
+                    "tile_lat": tile.lat,
+                    "tile_lon": tile.lon,
+                    "bands": band_count,
+                })
 
         # Create analysis table
         analysis_table = Table(show_header=False, box=None)
-        analysis_table.add_row("Total files:", str(coverage["total_files"]))
+        analysis_table.add_row("Total tiles:", str(coverage["total_files"]))
+        analysis_table.add_row("Format:", coverage["format"].upper())
         analysis_table.add_row("Years:", ", ".join(coverage["years"]))
         analysis_table.add_row("CRS:", ", ".join(coverage["crs"]))
 
         rprint(
             Panel(
                 analysis_table,
-                title="[bold]📊 GeoTIFF Analysis[/bold]",
+                title="[bold]📊 Tile Analysis[/bold]",
                 border_style="blue",
             )
         )
@@ -258,12 +306,22 @@ def info(
         gt = GeoTessera(dataset_version=dataset_version)
         years = gt.registry.get_available_years()
 
+        # Count tiles per year using fast pandas operations
+        tiles_per_year = gt.registry.get_tile_counts_by_year()
+
+        # Count total landmasks using fast pandas operations
+        total_landmasks = gt.registry.get_landmask_count()
+
         info_table = Table(show_header=False, box=None)
         info_table.add_row("Version:", gt.version)
         info_table.add_row("Available years:", ", ".join(map(str, years)))
-        info_table.add_row(
-            "Registry loaded blocks:", str(len(gt.registry.loaded_blocks))
-        )
+
+        # Show tiles per year
+        for year in years:
+            count = tiles_per_year.get(year, 0)
+            info_table.add_row(f"  {year} tiles:", f"{count:,}")
+
+        info_table.add_row("Total landmasks:", f"{total_landmasks:,}")
 
         rprint(
             Panel(
@@ -277,7 +335,7 @@ def info(
 @app.command()
 def coverage(
     output: Annotated[
-        Path, typer.Option("--output", "-o", help="Output PNG file path")
+        Path, typer.Option("--output", "-o", help="Output PNG file path (JSON and HTML will be created in same directory)")
     ] = Path("tessera_coverage.png"),
     year: Annotated[
         Optional[int],
@@ -326,44 +384,38 @@ def coverage(
         Optional[Path], typer.Option("--cache-dir", help="Cache directory")
     ] = None,
     registry_dir: Annotated[
-        Optional[Path], typer.Option("--registry-dir", help="Registry directory")
+        Optional[Path], typer.Option("--registry-dir", help="Directory containing registry.parquet and landmasks.parquet files")
     ] = None,
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Verbose output")
     ] = False,
 ):
-    """Generate a world map showing Tessera embedding coverage.
+    """Generate coverage visualizations showing Tessera embedding availability.
 
-    1. Create or obtain a GeoJSON/Shapefile of your region of interest
-    2. Run this command to check data coverage: geotessera coverage --region-file your_region.geojson
-    3. Review the coverage map to understand data availability
-    4. Proceed to download data: geotessera download --region-file your_region.geojson
+    This command generates THREE outputs in one pass:
+    1. PNG map - Static visualization with tiles overlaid on world map
+    2. coverage.json - JSON data file with global tile coverage information
+    3. globe.html - Interactive 3D globe visualization
 
-    Creates a PNG visualization with available tiles overlaid on a world map,
-    helping users understand data availability for their regions of interest.
-    Can focus on a specific region for detailed coverage analysis.
-    
-    By default, when no specific year is requested, the map uses three colors to show:
+    The PNG map supports regional filtering, year selection, and customization.
+    The HTML globe shows global multi-year coverage with interactive hover tooltips.
+
+    For PNG maps, when no specific year is requested, uses three colors:
     - Green: All available years present for this tile
-    - Blue: Only the latest year available for this tile  
+    - Blue: Only the latest year available for this tile
     - Orange: Partial years coverage (some combination of years)
 
     Examples:
-        # STEP 1: Check coverage for your region (recommended first step)
+        # Generate coverage visualizations for a region
         geotessera coverage --region-file study_area.geojson
-        geotessera coverage --region-file colombia_aoi.gpkg
-        geotessera coverage --country "Colombia"
+        # Creates: tessera_coverage.png, coverage.json, globe.html
 
-        # Check coverage for specific year only
-        geotessera coverage --region-file study_area.shp --year 2024
-        geotessera coverage --country "UK" --year 2024
+        # Specify output location
+        geotessera coverage --country "Colombia" -o maps/colombia.png
+        # Creates: maps/colombia.png, maps/coverage.json, maps/globe.html
 
-        # Global coverage overview (all regions)
-        geotessera coverage
-
-        # Customize visualization
+        # Customize PNG visualization
         geotessera coverage --region-file area.geojson --tile-alpha 0.3 --width 3000
-        geotessera coverage --country "Germany" --tile-alpha 0.3 --width 3000
     """
     from .visualization import visualize_global_coverage
     from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
@@ -536,6 +588,37 @@ def coverage(
                 if years:
                     rprint(f"[cyan]📅 Years covered: {min(years)}-{max(years)}[/cyan]")
 
+        # Also generate JSON + HTML globe visualization
+        rprint("\n[blue]Generating interactive globe visualization...[/blue]")
+        try:
+            # Determine output paths for JSON and HTML in same directory as PNG
+            output_dir = Path(output_path).parent
+            json_path = output_dir / "coverage.json"
+            texture_path = output_dir / "coverage_texture.png"
+            globe_html_path = output_dir / "globe.html"
+
+            # Export coverage map data
+            coverage_data = gt.export_coverage_map(output_file=str(json_path))
+
+            # Generate coverage texture (server-side for performance)
+            rprint("[blue]Generating coverage texture (3600x1800 pixels)...[/blue]")
+            gt.generate_coverage_texture(coverage_data, output_file=str(texture_path))
+
+            # Generate globe.html
+            with open(globe_html_path, 'w') as f:
+                f.write(_get_globe_html_template())
+
+            rprint(f"[green]✅ Coverage data exported to: {json_path}[/green]")
+            rprint(f"[green]✅ Coverage texture exported to: {texture_path}[/green]")
+            rprint(f"[green]✅ Globe viewer exported to: {globe_html_path}[/green]")
+            rprint(f"[dim]   Open {globe_html_path} in a web browser for interactive visualization[/dim]")
+
+        except Exception as e:
+            rprint(f"[yellow]Warning: Failed to generate globe visualization: {e}[/yellow]")
+            if verbose:
+                import traceback
+                traceback.print_exc()
+
     except ImportError:
         rprint("[red]Error: Missing required dependencies[/red]")
         rprint("[yellow]Please install: pip install matplotlib geodatasets[/yellow]")
@@ -613,7 +696,7 @@ def download(
         Optional[Path], typer.Option("--cache-dir", help="Cache directory")
     ] = None,
     registry_dir: Annotated[
-        Optional[Path], typer.Option("--registry-dir", help="Registry directory")
+        Optional[Path], typer.Option("--registry-dir", help="Directory containing registry.parquet and landmasks.parquet files")
     ] = None,
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Verbose output")
@@ -623,26 +706,20 @@ def download(
 
     Supports two output formats:
     - tiff: Georeferenced GeoTIFF files with proper CRS metadata (default)
-    - npy: Raw numpy arrays with accompanying landmask TIFFs and metadata JSON files
+    - npy: Quantized numpy arrays with separate scales files and landmask TIFFs
 
     For GeoTIFF format, each tile preserves the original UTM coordinate system.
-    For numpy format, arrays are saved with landmask TIFF files and comprehensive JSON metadata files alongside each .npy file.
 
-    JSON Metadata File Format (for npy format):
-    Each embedding_<lat>_<lon>.npy file has a corresponding embedding_<lat>_<lon>.json file containing:
-    {
-        "lat": <tile_latitude>,
-        "lon": <tile_longitude>, 
-        "filename": "<npy_filename>",
-        "shape": [height, width, channels],
-        "bands": [list of band indices included],
-        "crs": "<coordinate_reference_system>",
-        "transform": [rasterio transform coefficients],
-        "year": <data_year>,
-        "dataset_version": "<version_string>",
-        "created_at": "<ISO_timestamp>",
-        "download_bbox": [min_lon, min_lat, max_lon, max_lat]
-    }
+    For numpy format, downloads quantized embeddings in the registry structure:
+    - embeddings/{year}/grid_{lon:.2f}_{lat:.2f}.npy (quantized embedding data)
+    - embeddings/{year}/grid_{lon:.2f}_{lat:.2f}_scales.npy (dequantization scales)
+    - landmasks/landmask_{lon:.2f}_{lat:.2f}.tif (landmask TIFF)
+
+    The NPY format supports resume - if a download is interrupted, running the command
+    again will skip files that already exist and only download missing files.
+
+    Note: Band selection (--bands) is only supported for TIFF format. The NPY format
+    downloads the full quantized embeddings as they exist in the registry.
     """
     
     # Initialize GeoTessera
@@ -798,7 +875,7 @@ def download(
             console=console,
         ) as progress:
             task = progress.add_task(
-                "🔄 Processing tiles...", total=100, status="Starting..."
+                "📥 Downloading tiles...", total=100, status="Starting..."
             )
 
             tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox_coords, year=year)
@@ -831,102 +908,212 @@ def download(
                 rprint("   Files can be individually inspected and processed")
 
             else:  # format == 'npy'
-                # Export as numpy arrays
-                # Fetch embeddings as numpy arrays
-                
-                embeddings = gt.fetch_embeddings(
-                    tiles_to_fetch,
-                    progress_callback=create_download_progress_callback(progress, task),
-                )
+                # Export as quantized numpy arrays with scales
+                import shutil
+                from .registry import tile_to_embedding_paths, tile_to_landmask_filename
 
-                # Create output directory
+                # Create output directory structure
                 output.mkdir(parents=True, exist_ok=True)
 
-                import datetime
-                
                 files = []
+                downloaded_files = 0
+                skipped_files = 0
+                total_files = len(tiles_to_fetch) * 3  # embedding + scales + landmask per tile
 
-                for year, tile_lon, tile_lat, embedding_array, crs, transform in embeddings:
-                    # Apply band selection if specified
-                    if bands_list:
-                        embedding_array = embedding_array[:, :, bands_list]
+                # Calculate total download size from registry
+                progress.update(task, completed=0, total=100, status="Calculating download size...")
 
-                    # Save numpy array
-                    filename = f"embedding_{tile_lat:.2f}_{tile_lon:.2f}.npy"
-                    filepath = output / filename
-                    np.save(filepath, embedding_array)
-                    files.append(str(filepath))
+                # Verify registry has file_size column
+                if 'file_size' not in gt.registry._registry_gdf.columns:
+                    raise ValueError(
+                        "Registry is missing 'file_size' column. "
+                        "Please update your registry to a version that includes file size metadata."
+                    )
 
-                    # Download and save landmask TIFF file
-                    try:
-                        from .registry import tile_to_landmask_filename
-                        
-                        landmask_filename = tile_to_landmask_filename(tile_lon, tile_lat)
-                        
-                        # Ensure tile registry block is loaded
-                        gt.registry.ensure_tile_block_loaded(tile_lon, tile_lat)
-                        
-                        # Fetch landmask file
-                        landmask_cache_path = gt.registry.fetch_landmask(
-                            landmask_filename, progressbar=False
+                if gt.registry._landmasks_df is None or 'file_size' not in gt.registry._landmasks_df.columns:
+                    raise ValueError(
+                        "Landmasks registry is missing or lacks 'file_size' column. "
+                        "Please update your registry to a version that includes file size metadata."
+                    )
+
+                total_bytes = 0
+                file_sizes = {}  # Cache file sizes: path -> bytes
+
+                def get_file_size_from_registry(year, lon, lat):
+                    """Get file size from registry by querying year, lon, lat coordinates."""
+                    matches = gt.registry._registry_gdf[
+                        (gt.registry._registry_gdf['year'] == year) &
+                        (gt.registry._registry_gdf['lon'] == lon) &
+                        (gt.registry._registry_gdf['lat'] == lat)
+                    ]
+                    if len(matches) == 0:
+                        raise ValueError(f"Tile not found in registry: year={year}, lon={lon}, lat={lat}")
+                    return int(matches.iloc[0]['file_size'])
+
+                def get_landmask_size_from_registry(lon, lat):
+                    """Get landmask file size from landmasks registry by querying lon, lat coordinates."""
+                    matches = gt.registry._landmasks_df[
+                        (gt.registry._landmasks_df['lon'] == lon) &
+                        (gt.registry._landmasks_df['lat'] == lat)
+                    ]
+                    if len(matches) == 0:
+                        raise ValueError(f"Landmask not found in registry: lon={lon}, lat={lat}")
+                    return int(matches.iloc[0]['file_size'])
+
+                for tile_year, tile_lon, tile_lat in tiles_to_fetch:
+                    embedding_final = output / "embeddings" / str(tile_year) / f"grid_{tile_lon:.2f}_{tile_lat:.2f}.npy"
+                    scales_final = output / "embeddings" / str(tile_year) / f"grid_{tile_lon:.2f}_{tile_lat:.2f}_scales.npy"
+                    landmask_final = output / "landmasks" / f"landmask_{tile_lon:.2f}_{tile_lat:.2f}.tif"
+
+                    # Create cache keys for tracking file sizes
+                    embedding_key = f"embedding_{tile_year}_{tile_lon}_{tile_lat}"
+                    scales_key = f"scales_{tile_year}_{tile_lon}_{tile_lat}"
+                    landmask_key = f"landmask_{tile_lon}_{tile_lat}"
+
+                    # Only count files that need downloading
+                    if not embedding_final.exists():
+                        # Query registry for embedding size (embedding + scales share same hash/size record)
+                        size = get_file_size_from_registry(tile_year, tile_lon, tile_lat)
+                        file_sizes[embedding_key] = size
+                        total_bytes += size
+
+                    if not scales_final.exists():
+                        # Query registry for scales size (separate file but tracked together)
+                        size = get_file_size_from_registry(tile_year, tile_lon, tile_lat)
+                        file_sizes[scales_key] = size
+                        total_bytes += size
+
+                    if not landmask_final.exists():
+                        size = get_landmask_size_from_registry(tile_lon, tile_lat)
+                        file_sizes[landmask_key] = size
+                        total_bytes += size
+
+                # Format total size for display
+                def format_bytes(b):
+                    for unit in ['B', 'KB', 'MB', 'GB']:
+                        if b < 1024.0:
+                            return f"{b:.1f}{unit}"
+                        b /= 1024.0
+                    return f"{b:.1f}TB"
+
+                # Track cumulative bytes downloaded
+                bytes_downloaded = 0
+                total_size_str = format_bytes(total_bytes)
+
+                # Create a progress callback factory that updates overall byte progress
+                def create_download_callback(file_key):
+                    """Create a callback for download progress updates with overall byte tracking."""
+                    def callback(current, total, status):
+                        nonlocal bytes_downloaded
+                        # Update total bytes progress
+                        file_bytes_so_far = current
+                        progress.update(
+                            task,
+                            completed=bytes_downloaded + file_bytes_so_far,
+                            total=total_bytes,
+                            status=status
                         )
-                        
-                        # Copy landmask to output directory
-                        landmask_output_filename = f"landmask_{tile_lat:.2f}_{tile_lon:.2f}.tif"
-                        landmask_output_path = output / landmask_output_filename
-                        
-                        import shutil
-                        shutil.copy2(landmask_cache_path, landmask_output_path)
-                        files.append(str(landmask_output_path))
-                        
-                        landmask_info = {
-                            "landmask_filename": landmask_output_filename,
-                            "landmask_cache_path": landmask_cache_path,
-                            "landmask_size_bytes": landmask_output_path.stat().st_size,
-                        }
-                        
-                    except Exception as e:
-                        print(f"Warning: Could not download landmask for tile ({tile_lat:.2f}, {tile_lon:.2f}): {e}")
-                        landmask_info = {
-                            "landmask_filename": None,
-                            "landmask_error": str(e)
-                        }
+                    return callback
 
-                    # Create comprehensive metadata for this tile
-                    tile_metadata = {
-                        "lat": tile_lat,
-                        "lon": tile_lon,
-                        "filename": filename,
-                        "shape": list(embedding_array.shape),
-                        "bands": bands_list if bands_list else list(range(128)),
-                        "crs": str(crs) if crs else None,
-                        "transform": list(transform) if transform else None,
-                        "year": year,
-                        "dataset_version": dataset_version,
-                        "created_at": datetime.datetime.now().isoformat(),
-                        "download_bbox": list(bbox_coords),
-                        "tile_bounds": [tile_lon - 0.05, tile_lat - 0.05, tile_lon + 0.05, tile_lat + 0.05],
-                        "landmask": landmask_info,
-                        "file_size_bytes": filepath.stat().st_size,
-                        "compression": "none",
-                        "data_type": str(embedding_array.dtype)
-                    }
+                def mark_file_complete(file_key):
+                    """Mark a file as complete and update bytes_downloaded."""
+                    nonlocal bytes_downloaded
+                    if file_key in file_sizes:
+                        bytes_downloaded += file_sizes[file_key]
 
-                    # Save comprehensive JSON metadata file
-                    json_filename = f"embedding_{tile_lat:.2f}_{tile_lon:.2f}.json"
-                    json_filepath = output / json_filename
-                    with open(json_filepath, "w") as f:
-                        json.dump(tile_metadata, f, indent=2)
-                    files.append(str(json_filepath))
+                # Reset progress bar for download
+                progress.update(task, completed=0, total=total_bytes, status=f"Downloading {total_size_str}...")
 
+                # Process each tile
+                for idx, (tile_year, tile_lon, tile_lat) in enumerate(tiles_to_fetch):
+                    # Set up final paths with new structure
+                    embedding_final = output / "embeddings" / str(tile_year) / f"grid_{tile_lon:.2f}_{tile_lat:.2f}.npy"
+                    scales_final = output / "embeddings" / str(tile_year) / f"grid_{tile_lon:.2f}_{tile_lat:.2f}_scales.npy"
+                    landmask_final = output / "landmasks" / f"landmask_{tile_lon:.2f}_{tile_lat:.2f}.tif"
+
+                    # Create cache keys for tracking
+                    embedding_key = f"embedding_{tile_year}_{tile_lon}_{tile_lat}"
+                    scales_key = f"scales_{tile_year}_{tile_lon}_{tile_lat}"
+                    landmask_key = f"landmask_{tile_lon}_{tile_lat}"
+
+                    # Download embedding file
+                    if embedding_final.exists():
+                        skipped_files += 1
+                    else:
+                        embedding_final.parent.mkdir(parents=True, exist_ok=True)
+                        try:
+                            temp_path, needs_cleanup = gt.registry.fetch(
+                                year=tile_year,
+                                lon=tile_lon,
+                                lat=tile_lat,
+                                is_scales=False,
+                                progressbar=False,
+                                progress_callback=create_download_callback(embedding_key),
+                                refresh=True
+                            )
+                            shutil.move(temp_path, embedding_final)
+                            mark_file_complete(embedding_key)
+                            files.append(str(embedding_final))
+                            downloaded_files += 1
+                        except Exception as e:
+                            rprint(f"[yellow]Warning: Failed to download embedding for ({tile_lon}, {tile_lat}, {tile_year}): {e}[/yellow]")
+                            continue
+
+                    # Download scales file
+                    if scales_final.exists():
+                        skipped_files += 1
+                    else:
+                        try:
+                            temp_path, needs_cleanup = gt.registry.fetch(
+                                year=tile_year,
+                                lon=tile_lon,
+                                lat=tile_lat,
+                                is_scales=True,
+                                progressbar=False,
+                                progress_callback=create_download_callback(scales_key),
+                                refresh=True
+                            )
+                            shutil.move(temp_path, scales_final)
+                            mark_file_complete(scales_key)
+                            files.append(str(scales_final))
+                            downloaded_files += 1
+                        except Exception as e:
+                            rprint(f"[yellow]Warning: Failed to download scales for ({tile_lon}, {tile_lat}, {tile_year}): {e}[/yellow]")
+
+                    # Download landmask file
+                    if landmask_final.exists():
+                        skipped_files += 1
+                    else:
+                        landmask_final.parent.mkdir(parents=True, exist_ok=True)
+                        try:
+                            temp_path, needs_cleanup = gt.registry.fetch_landmask(
+                                lon=tile_lon,
+                                lat=tile_lat,
+                                progressbar=False,
+                                progress_callback=create_download_callback(landmask_key),
+                                refresh=True
+                            )
+                            shutil.move(temp_path, landmask_final)
+                            mark_file_complete(landmask_key)
+                            files.append(str(landmask_final))
+                            downloaded_files += 1
+                        except Exception as e:
+                            rprint(f"[yellow]Warning: Failed to download landmask for ({tile_lon}, {tile_lat}): {e}[/yellow]")
+
+                # Final progress update
+                progress.update(task, completed=total_bytes, status="Complete")
+
+                downloaded_size_str = format_bytes(bytes_downloaded) if bytes_downloaded > 0 else "0B"
                 rprint(
-                    f"\n[green]✅ SUCCESS: Exported {len(tiles_to_fetch)} numpy arrays[/green]"
+                    f"\n[green]✅ SUCCESS: Downloaded {len(tiles_to_fetch)} tiles ({downloaded_files} files, {downloaded_size_str})[/green]"
                 )
-                rprint("   Landmask TIFF files downloaded for each tile")
-                rprint("   Comprehensive JSON metadata files created for each tile")
-                rprint(
-                    f"   Arrays contain {'selected bands' if bands_list else 'all 128 bands'}"
-                )
+                if skipped_files > 0:
+                    rprint(f"   Skipped {skipped_files} existing files (resume capability)")
+                rprint("   Format: Quantized embeddings with separate scales files")
+                rprint("   Structure: embeddings/{year}/grid_{lon}_{lat}.npy and _scales.npy")
+                rprint("             landmasks/landmask_{lon}_{lat}.tif")
+                if bands_list:
+                    rprint(f"   [yellow]Note: Band selection not supported in NPY format (use TIFF format instead)[/yellow]")
 
         if verbose or list_files:
             rprint("\n[blue]📁 Created files:[/blue]")
@@ -1016,36 +1203,43 @@ def visualize(
         float, typer.Option("--percentile-high", help="Upper percentile for percentile balance method")
     ] = 98.0,
 ):
-    """Create PCA visualization from multiband GeoTIFF files.
-    
+    """Create PCA visualization from GeoTIFF or NPY format embeddings.
+
     This command combines all embedding data across tiles, applies a single PCA
     transformation to the combined dataset, then creates a unified RGB mosaic.
     This ensures consistent principal components across the entire region,
     eliminating tiling artifacts.
-    
+
+    Supports two input formats:
+    - GeoTIFF format: Directory containing *.tif/*.tiff files
+    - NPY format: Directory with embeddings/{year}/*.npy and landmasks/*.tif structure
+
     The first 3 principal components are mapped to RGB channels for visualization.
     Additional components can be computed for research/analysis purposes.
-    
+
     Examples:
-        # Create PCA visualization (3 components optimal for RGB)
+        # Create PCA visualization from GeoTIFF tiles
         geotessera visualize tiles/ pca_mosaic.tif
-        
+
+        # Create PCA visualization from NPY format tiles
+        geotessera visualize npy_tiles/ pca_mosaic.tif
+
         # Use histogram equalization for maximum contrast
         geotessera visualize tiles/ pca_balanced.tif --balance histogram
-        
+
         # Use adaptive scaling based on variance
         geotessera visualize tiles/ pca_adaptive.tif --balance adaptive
-        
+
         # Custom percentile range for outlier-robust scaling
         geotessera visualize tiles/ pca_custom.tif --percentile-low 5 --percentile-high 95
-        
+
         # Use custom projection
         geotessera visualize tiles/ pca_mosaic.tif --crs EPSG:4326
-        
+
         # PCA for research - compute more components for analysis
         # (still only uses first 3 for RGB, but saves variance info)
         geotessera visualize tiles/ pca_research.tif --n-components 10
-        
+
         # Then create web visualization
         geotessera webmap pca_mosaic.tif --serve
     """
@@ -1073,18 +1267,19 @@ def visualize(
             rprint(f"[red]Error: Invalid percentile range [{percentile_low}, {percentile_high}]. Must be 0 <= low < high <= 100[/red]")
             raise typer.Exit(1)
 
-    # Find GeoTIFF files
-    if input_path.is_file():
-        geotiff_paths = [str(input_path)]
-    else:
-        geotiff_paths = list(map(str, input_path.glob("*.tif")))
-        geotiff_paths.extend(map(str, input_path.glob("*.tiff")))
+    # Discover tiles (handles both GeoTIFF and NPY formats automatically)
+    from geotessera.tiles import discover_tiles
 
-    if not geotiff_paths:
-        rprint(f"[red]No GeoTIFF files found in {input_path}[/red]")
+    tiles = discover_tiles(input_path)
+
+    if not tiles:
+        rprint(f"[red]No tiles found in {input_path}[/red]")
+        rprint("[yellow]Expected either:[/yellow]")
+        rprint("  - GeoTIFF files: *.tif/*.tiff in the directory")
+        rprint("  - NPY format: embeddings/{year}/*.npy and landmasks/*.tif structure")
         raise typer.Exit(1)
 
-    rprint(f"[blue]Found {len(geotiff_paths)} GeoTIFF files[/blue]")
+    rprint(f"[blue]Found {len(tiles)} tiles ({tiles[0]._format} format)[/blue]")
 
     # Create output directory if needed
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1106,10 +1301,13 @@ def visualize(
             # Create a progress callback that maps to our 5-step progress
             def visualization_progress_callback(current: float, total: float, status: str = None):
                 progress.update(task, completed=current, total=total, status=status or "Processing...")
-            
+
+            # Convert tiles to dict format for create_pca_mosaic
+            tiles_data = [tile.to_dict() for tile in tiles]
+
             # PCA MODE: Use clean visualization function
             create_pca_mosaic(
-                geotiff_paths=geotiff_paths,
+                tiles_data=tiles_data,
                 output_path=output_file,
                 n_components=n_components,
                 target_crs=target_crs,
@@ -1494,6 +1692,569 @@ def serve(
     except Exception as e:
         rprint(f"[red]Error starting web server: {e}[/red]")
         raise typer.Exit(1)
+
+
+def _get_globe_html_template() -> str:
+    """Return the globe.html template as a string."""
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeoTessera Globe Visualization</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+        #globeViz {
+            width: 100vw;
+            height: 100vh;
+        }
+        .controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            z-index: 100;
+            max-width: 300px;
+        }
+        .controls h3 {
+            margin: 0 0 10px 0;
+            font-size: 16px;
+        }
+        .controls label {
+            display: block;
+            margin: 8px 0;
+            font-size: 12px;
+        }
+        .controls input[type="range"] {
+            width: 100%;
+        }
+        .controls select {
+            width: 100%;
+            padding: 4px;
+        }
+        .controls button {
+            width: 100%;
+            margin-top: 10px;
+            padding: 8px 12px;
+            cursor: pointer;
+            background: #4CAF50;
+            border: none;
+            color: white;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .controls button:hover {
+            background: #45a049;
+        }
+        .controls button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        .info {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 12px;
+            z-index: 100;
+        }
+        .hover-tooltip {
+            position: absolute;
+            background: linear-gradient(135deg, rgba(0, 0, 0, 0.95), rgba(20, 20, 40, 0.95));
+            color: white;
+            padding: 10px 14px;
+            border-radius: 8px;
+            pointer-events: none;
+            font-size: 12px;
+            z-index: 1000;
+            display: none;
+            border: 1px solid rgba(100, 150, 255, 0.5);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            min-width: 180px;
+            backdrop-filter: blur(10px);
+        }
+        .hover-tooltip.visible {
+            display: block;
+        }
+        .hover-tooltip .tile-name {
+            font-weight: bold;
+            font-size: 13px;
+            color: #4FC3F7;
+            margin-bottom: 6px;
+            font-family: 'Courier New', monospace;
+        }
+        .hover-tooltip .coverage-info {
+            margin: 3px 0 0 0;
+            line-height: 1.5;
+        }
+        .hover-tooltip .year-badge {
+            display: inline-block;
+            background: rgba(79, 195, 247, 0.2);
+            padding: 2px 6px;
+            border-radius: 4px;
+            margin: 2px;
+            font-size: 11px;
+            border: 1px solid rgba(79, 195, 247, 0.4);
+        }
+        .hover-tooltip .no-data {
+            color: #FF9800;
+            font-style: italic;
+        }
+        .hover-tooltip .water {
+            color: #03A9F4;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div id="globeViz"></div>
+    <div class="hover-tooltip" id="hoverTooltip"></div>
+
+    <div class="controls">
+        <h3>GeoTessera Coverage</h3>
+        <div style="font-size: 11px; opacity: 0.8; margin-bottom: 10px;">
+            Hover over tiles to see coverage details
+        </div>
+        <label>
+            Overlay Opacity:
+            <input type="range" id="opacity" min="0" max="1" step="0.05" value="0.8">
+            <span id="opacityValue">0.8</span>
+        </label>
+        <label>
+            <input type="checkbox" id="showBorders" checked>
+            Show country borders
+        </label>
+    </div>
+
+    <div class="info">
+        <div><strong>Coverage Tiles:</strong> <span id="tileCount">0</span></div>
+        <div><span id="status">Initializing...</span></div>
+        <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.3); font-size: 11px;">
+            <strong>Legend:</strong><br/>
+            <span style="color: #00c800;">■</span> Full coverage<br/>
+            <span style="color: #00b4ff;">■</span> Multi-year<br/>
+            <span style="color: #ffc800;">■</span> Latest year only<br/>
+            <span style="color: #c86400;">■</span> Older year<br/>
+            <span style="color: #666;">■</span> No tiles yet<br/>
+            <span style="opacity: 0.5;">■</span> Ocean
+        </div>
+    </div>
+
+    <script src="//unpkg.com/three@0.159.0/build/three.min.js"></script>
+    <script src="//unpkg.com/topojson-client@3"></script>
+    <script src="//unpkg.com/globe.gl"></script>
+    <script>
+        // GeoTessera tile configuration
+        const TILE_SIZE = 0.1; // 0.1 degree tiles
+        const TILE_OFFSET = 0.05; // centered at 0.05-degree offsets
+
+        // Configuration
+        let currentOpacity = 0.8;
+        let overlayMaterial = null;
+        let overlayMesh = null;
+        let coverageData = null; // Coverage data for tooltips
+        let countriesData = null; // GeoJSON with country boundaries
+        let tileCountryCache = new Map(); // Cache tile -> country lookups
+        let mouse = { x: 0, y: 0 };
+        let raycaster = null;
+
+        // Load coverage data from JSON file (used for tooltips)
+        async function loadCoverageData(url = 'coverage.json') {
+            try {
+                const response = await fetch(url);
+                if (!response.ok) {
+                    console.warn(`Coverage data not found at ${url}`);
+                    return null;
+                }
+                const data = await response.json();
+                console.log(`Loaded coverage data: ${data.metadata.total_tiles} tiles`);
+                return data;
+            } catch (e) {
+                console.warn(`Failed to load coverage data: ${e.message}`);
+                return null;
+            }
+        }
+
+        // Load countries GeoJSON
+        async function loadCountriesData() {
+            try {
+                // Use Natural Earth data from CDN
+                const response = await fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json');
+                if (!response.ok) {
+                    console.warn('Could not load country boundaries');
+                    return null;
+                }
+                const data = await response.json();
+                // Convert TopoJSON to GeoJSON
+                const countries = topojson.feature(data, data.objects.countries);
+                console.log(`Loaded ${countries.features.length} countries`);
+                return countries;
+            } catch (e) {
+                console.warn(`Failed to load countries: ${e.message}`);
+                return null;
+            }
+        }
+
+        // Find which country a point (lon, lat) is in
+        function findCountry(lon, lat) {
+            if (!countriesData) return null;
+
+            const key = `${lon.toFixed(2)},${lat.toFixed(2)}`;
+
+            // Check cache first
+            if (tileCountryCache.has(key)) {
+                return tileCountryCache.get(key);
+            }
+
+            // Point-in-polygon test
+            const point = [lon, lat];
+
+            for (const feature of countriesData.features) {
+                if (feature.geometry.type === 'Polygon') {
+                    if (pointInPolygon(point, feature.geometry.coordinates[0])) {
+                        const countryName = feature.properties.name;
+                        tileCountryCache.set(key, countryName);
+                        return countryName;
+                    }
+                } else if (feature.geometry.type === 'MultiPolygon') {
+                    for (const polygon of feature.geometry.coordinates) {
+                        if (pointInPolygon(point, polygon[0])) {
+                            const countryName = feature.properties.name;
+                            tileCountryCache.set(key, countryName);
+                            return countryName;
+                        }
+                    }
+                }
+            }
+
+            // No country found (ocean or disputed territory)
+            tileCountryCache.set(key, null);
+            return null;
+        }
+
+        // Simple point-in-polygon algorithm (ray casting)
+        function pointInPolygon(point, polygon) {
+            const [x, y] = point;
+            let inside = false;
+
+            for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+                const [xi, yi] = polygon[i];
+                const [xj, yj] = polygon[j];
+
+                const intersect = ((yi > y) !== (yj > y))
+                    && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+
+                if (intersect) inside = !inside;
+            }
+
+            return inside;
+        }
+
+        // Get tile info for tooltip
+        function getTileInfo(lon, lat) {
+            const key = `${lon.toFixed(2)},${lat.toFixed(2)}`;
+            const tileName = `${lon.toFixed(2)}, ${lat.toFixed(2)}`;
+
+            if (!coverageData) {
+                return { tileName, message: 'Coverage data not loaded' };
+            }
+
+            const years = coverageData.tiles[key];
+
+            // Check if it has coverage data first
+            if (years) {
+                return {
+                    tileName,
+                    type: 'coverage',
+                    years: years.sort((a, b) => a - b),
+                    yearCount: years.length,
+                    totalYears: coverageData.years.length
+                };
+            }
+
+            // Check if it's land with no coverage
+            // Use explicit no_coverage field if available, otherwise check landmasks
+            let isLandNoCoverage = false;
+            if (coverageData.no_coverage) {
+                isLandNoCoverage = coverageData.no_coverage.includes(key);
+            } else if (coverageData.landmasks) {
+                // Fallback for old format: check if in landmask but not in tiles
+                isLandNoCoverage = coverageData.landmasks.includes(key);
+            }
+
+            if (isLandNoCoverage) {
+                return { tileName, type: 'no-coverage', message: 'No tiles generated yet' };
+            }
+
+            // Otherwise it's ocean (not in tiles, not in landmask/no_coverage)
+            return { tileName, type: 'ocean', message: 'Ocean (outside landmask)' };
+        }
+
+        // Show tooltip with tile coverage info
+        function showTooltip(lon, lat, x, y) {
+            const tooltip = document.getElementById('hoverTooltip');
+            const info = getTileInfo(lon, lat);
+            const country = findCountry(lon, lat);
+
+            let html = `<div class="tile-name">${info.tileName}</div>`;
+            html += `<div class="coverage-info">`;
+
+            if (country) {
+                html += `<strong>${country}</strong><br/>`;
+            }
+
+            if (info.type === 'ocean') {
+                html += `<span class="water">${info.message}</span>`;
+            } else if (info.type === 'no-coverage') {
+                html += `<span class="no-data">${info.message}</span>`;
+            } else if (info.type === 'coverage') {
+                html += `<strong>Coverage:</strong> ${info.yearCount} of ${info.totalYears} years<br/>`;
+                html += `<strong>Years:</strong> `;
+                info.years.forEach(year => {
+                    html += `<span class="year-badge">${year}</span>`;
+                });
+            } else {
+                html += info.message;
+            }
+
+            html += `</div>`;
+
+            tooltip.innerHTML = html;
+            tooltip.style.left = (x + 15) + 'px';
+            tooltip.style.top = (y + 15) + 'px';
+            tooltip.classList.add('visible');
+        }
+
+        function hideTooltip() {
+            const tooltip = document.getElementById('hoverTooltip');
+            tooltip.classList.remove('visible');
+        }
+
+        // Convert screen coordinates to lat/lon on sphere
+        function screenToLatLon(screenX, screenY) {
+            if (!raycaster) return null;
+
+            const THREE = window.THREE;
+            if (!THREE) return null;
+
+            // Convert screen coordinates to normalized device coordinates (-1 to +1)
+            const rect = document.getElementById('globeViz').getBoundingClientRect();
+            mouse.x = ((screenX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((screenY - rect.top) / rect.height) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, globe.camera());
+
+            // Check intersection with overlay sphere
+            if (!overlayMesh) return null;
+
+            const intersects = raycaster.intersectObject(overlayMesh);
+            if (intersects.length === 0) return null;
+
+            const point = intersects[0].point;
+
+            // Convert 3D point to lat/lon
+            const radius = Math.sqrt(point.x * point.x + point.y * point.y + point.z * point.z);
+            const lat = Math.asin(point.y / radius) * 180 / Math.PI;
+            const lon = Math.atan2(point.x, point.z) * 180 / Math.PI;
+
+            // Snap to tile center
+            const tileLon = Math.floor(lon * 10) / 10 + TILE_OFFSET;
+            const tileLat = Math.floor(lat * 10) / 10 + TILE_OFFSET;
+
+            return { lon: tileLon, lat: tileLat };
+        }
+
+        // Initialize globe
+        const globe = Globe()
+            (document.getElementById('globeViz'))
+            .globeImageUrl('//unpkg.com/three-globe/example/img/earth-blue-marble.jpg')
+            .bumpImageUrl('//unpkg.com/three-globe/example/img/earth-topology.png')
+            .backgroundImageUrl('//unpkg.com/three-globe/example/img/night-sky.png')
+            .polygonsData([])  // Will be populated when countries load
+            .polygonCapColor(() => 'rgba(0, 0, 0, 0)')  // Transparent fill
+            .polygonSideColor(() => 'rgba(0, 0, 0, 0)')  // Transparent sides
+            .polygonStrokeColor(() => 'rgba(255, 255, 255, 0.8)')  // White borders - darker/more opaque
+            .polygonAltitude(0.01);  // Above the tile overlay for visibility
+
+        // Set initial point of view
+        globe.pointOfView({ lat: 20, lng: 0, altitude: 2.5 });
+
+        // Initialize raycaster for mouse picking
+        setTimeout(() => {
+            const THREE = window.THREE;
+            if (THREE) {
+                raycaster = new THREE.Raycaster();
+            }
+        }, 100);
+
+        // Mouse move handler for tooltip
+        let lastHoveredTile = null;
+        document.getElementById('globeViz').addEventListener('mousemove', (event) => {
+            const tile = screenToLatLon(event.clientX, event.clientY);
+
+            if (tile) {
+                const tileKey = `${tile.lon.toFixed(2)},${tile.lat.toFixed(2)}`;
+                if (lastHoveredTile !== tileKey) {
+                    lastHoveredTile = tileKey;
+                    showTooltip(tile.lon, tile.lat, event.clientX, event.clientY);
+                } else {
+                    // Update tooltip position
+                    const tooltip = document.getElementById('hoverTooltip');
+                    tooltip.style.left = (event.clientX + 15) + 'px';
+                    tooltip.style.top = (event.clientY + 15) + 'px';
+                }
+            } else {
+                lastHoveredTile = null;
+                hideTooltip();
+            }
+        });
+
+        document.getElementById('globeViz').addEventListener('mouseleave', () => {
+            lastHoveredTile = null;
+            hideTooltip();
+        });
+
+        function updateTilesLayer() {
+            document.getElementById('status').textContent = 'Loading coverage texture...';
+
+            // Wait for globe to be ready
+            setTimeout(() => {
+                // Load pre-generated texture instead of generating client-side
+                const textureUrl = 'coverage_texture.png';
+
+                // Create image element to load texture
+                const img = new Image();
+                img.onload = () => {
+                    // Access THREE from window (bundled with globe.gl)
+                    const THREE = window.THREE;
+
+                    if (!THREE) {
+                        console.error('THREE.js not available');
+                        document.getElementById('status').textContent = 'Error: THREE.js not loaded';
+                        return;
+                    }
+
+                    const texture = new THREE.Texture(img);
+                    texture.needsUpdate = true;
+
+                    // Find or create overlay mesh
+                    if (!overlayMesh) {
+                        // Create a slightly larger sphere for the overlay (close to globe surface)
+                        const geometry = new THREE.SphereGeometry(
+                            100.5, // Just above globe (100) to avoid z-fighting but not stick out
+                            64,
+                            64
+                        );
+
+                        overlayMaterial = new THREE.MeshBasicMaterial({
+                            map: texture,
+                            transparent: true,
+                            opacity: currentOpacity,
+                            side: THREE.FrontSide,
+                            depthTest: true,
+                            depthWrite: false
+                        });
+
+                        overlayMesh = new THREE.Mesh(geometry, overlayMaterial);
+                        overlayMesh.name = 'tilesOverlay';
+                        overlayMesh.renderOrder = 1; // Render after globe
+
+                        // Rotate to align with globe.gl coordinate system (270 degrees)
+                        overlayMesh.rotation.y = 4.71; // 3π/2
+
+                        // Add to globe scene
+                        globe.scene().add(overlayMesh);
+                        console.log('Overlay mesh added to scene');
+                    } else {
+                        // Update existing material
+                        overlayMaterial.map = texture;
+                        overlayMaterial.opacity = currentOpacity;
+                        overlayMaterial.needsUpdate = true;
+                        console.log('Overlay texture updated');
+                    }
+
+                    document.getElementById('status').textContent = 'Ready';
+                };
+                img.src = textureUrl;
+            }, 50);
+        }
+
+        // Initialize and load coverage data
+        async function initialize() {
+            // First, load and show country boundaries (fast)
+            document.getElementById('status').textContent = 'Loading country boundaries...';
+            countriesData = await loadCountriesData();
+
+            if (countriesData) {
+                // Add country polygons to globe immediately
+                globe.polygonsData(countriesData.features);
+                console.log('Country boundaries added to globe');
+                document.getElementById('status').textContent = 'Globe ready - Loading coverage data...';
+            }
+
+            // Then load coverage data (faster now - just for tooltips)
+            coverageData = await loadCoverageData('coverage.json');
+
+            if (coverageData) {
+                document.getElementById('status').textContent = 'Loading coverage texture...';
+                // Update tile count from metadata
+                document.getElementById('tileCount').textContent = coverageData.metadata.total_tiles.toLocaleString();
+            } else {
+                document.getElementById('status').textContent = 'Coverage data not available';
+            }
+
+            // Check THREE availability
+            console.log('Checking THREE.js availability...');
+            console.log('window.THREE:', window.THREE);
+            console.log('Globe scene:', globe.scene());
+            console.log('Scene children:', globe.scene().children);
+
+            // Finally, load and render pre-generated texture (fast!)
+            updateTilesLayer();
+        }
+
+        // Start initialization
+        setTimeout(() => {
+            initialize();
+        }, 500);
+
+        // Control handlers
+        document.getElementById('opacity').addEventListener('input', (e) => {
+            currentOpacity = parseFloat(e.target.value);
+            document.getElementById('opacityValue').textContent = currentOpacity.toFixed(2);
+
+            if (overlayMaterial) {
+                overlayMaterial.opacity = currentOpacity;
+                overlayMaterial.needsUpdate = true;
+            }
+        });
+
+        document.getElementById('showBorders').addEventListener('change', (e) => {
+            if (e.target.checked && countriesData) {
+                globe.polygonsData(countriesData.features);
+            } else {
+                globe.polygonsData([]);
+            }
+        });
+
+        // Disable auto-rotate, let user control the view
+        globe.controls().autoRotate = false;
+        globe.controls().enableZoom = true;
+    </script>
+</body>
+</html>
+"""
 
 
 @app.command()

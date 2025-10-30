@@ -20,8 +20,6 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "pooch",
-    "tqdm>=4.67.1",
     "numpy",
     "geopandas",
     "pandas",
@@ -34,6 +32,7 @@ dependencies = [
     "scikit-learn>=1.7.1",
     "scikit-image>=0.25.2",
     "pyarrow>=17.0.0",
+    "rtree>=1.0.0",
 ]
 
 [project.urls]
