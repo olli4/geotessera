@@ -650,7 +650,7 @@ def coverage(
 
 @app.command()
 def download(
-    output: Annotated[Path, typer.Option("--output", "-o", help="Output directory")],
+    output: Annotated[Optional[Path], typer.Option("--output", "-o", help="Output directory (required for actual downloads, optional for --dry-run)")] = None,
     bbox: Annotated[
         Optional[str],
         typer.Option("--bbox", help="Bounding box: 'min_lon,min_lat,max_lon,max_lat'"),
@@ -701,6 +701,9 @@ def download(
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Verbose output")
     ] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Calculate total download size without downloading")
+    ] = False,
 ):
     """Download embeddings as numpy arrays or GeoTIFF files.
 
@@ -721,7 +724,17 @@ def download(
     Note: Band selection (--bands) is only supported for TIFF format. The NPY format
     downloads the full quantized embeddings as they exist in the registry.
     """
-    
+
+    # Validate output parameter
+    if not dry_run and output is None:
+        rprint("[red]Error: --output/-o is required for actual downloads[/red]")
+        rprint("[dim]Use --dry-run to calculate download size without specifying output directory[/dim]")
+        raise typer.Exit(1)
+
+    # For dry-run, use a dummy path if not provided (won't be used for actual downloads)
+    if output is None:
+        output = Path(".")
+
     # Initialize GeoTessera
     gt = GeoTessera(
         dataset_version=dataset_version,
@@ -849,7 +862,9 @@ def download(
     info_table = Table(show_header=False, box=None)
     info_table.add_row("Format:", format.upper())
     info_table.add_row("Year:", str(year))
-    info_table.add_row("Output directory:", str(output))
+    # Only show output directory when not doing dry-run
+    if not dry_run:
+        info_table.add_row("Output directory:", str(output))
     if format == "tiff":
         info_table.add_row("Compression:", compress)
     info_table.add_row("Dataset version:", dataset_version)
@@ -862,8 +877,57 @@ def download(
         )
     )
 
+    # Helper function to format bytes
+    def format_bytes(b):
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if b < 1024.0:
+                return f"{b:.1f} {unit}"
+            b /= 1024.0
+        return f"{b:.1f} TB"
+
     try:
-        
+        # Load tiles for the region first (before Progress context)
+        tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox_coords, year=year)
+
+        if not tiles_to_fetch:
+            rprint(
+                "[yellow]⚠️  No tiles found in the specified region.[/yellow]"
+            )
+            rprint(
+                "Try expanding your bounding box or checking data availability."
+            )
+            return
+
+        # Handle dry-run mode: calculate and display size information (no progress bar)
+        if dry_run:
+            try:
+                total_bytes, total_files, _ = gt.registry.calculate_download_requirements(
+                    tiles_to_fetch, output, format, check_existing=False
+                )
+            except ValueError as e:
+                rprint(f"[red]Error: {e}[/red]")
+                raise typer.Exit(1)
+
+            # Display results
+            result_table = Table(show_header=False, box=None, padding=(0, 2))
+            result_table.add_row("Files to download:", f"[cyan]{total_files:,}[/cyan]")
+            result_table.add_row("Total download size:", f"[cyan]{format_bytes(total_bytes)}[/cyan]")
+            result_table.add_row("Tiles in region:", f"[cyan]{len(tiles_to_fetch):,}[/cyan]")
+            result_table.add_row("Year:", f"[cyan]{year}[/cyan]")
+            result_table.add_row("Format:", f"[cyan]{format.upper()}[/cyan]")
+
+            rprint(Panel(
+                result_table,
+                title="[bold]Dry Run Results[/bold]",
+                border_style="green",
+            ))
+
+            if format == "tiff":
+                rprint("[dim]Note: TIFF sizes are estimates (4x quantized size)[/dim]")
+
+            rprint("\n[dim]Run without --dry-run to download these files[/dim]")
+            return
+
         # Export tiles with progress tracking
         with Progress(
             TextColumn("[progress.description]{task.description}"),
@@ -877,17 +941,6 @@ def download(
             task = progress.add_task(
                 "📥 Downloading tiles...", total=100, status="Starting..."
             )
-
-            tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox_coords, year=year)
-            
-            if not tiles_to_fetch:
-                rprint(
-                    "[yellow]⚠️  No tiles found in the specified region.[/yellow]"
-                )
-                rprint(
-                    "Try expanding your bounding box or checking data availability."
-                )
-                return
 
             if format == "tiff":
                 # Export as GeoTIFF files
@@ -918,83 +971,17 @@ def download(
                 files = []
                 downloaded_files = 0
                 skipped_files = 0
-                total_files = len(tiles_to_fetch) * 3  # embedding + scales + landmask per tile
 
-                # Calculate total download size from registry
+                # Calculate total download size from registry using Registry method
                 progress.update(task, completed=0, total=100, status="Calculating download size...")
 
-                # Verify registry has file_size column
-                if 'file_size' not in gt.registry._registry_gdf.columns:
-                    raise ValueError(
-                        "Registry is missing 'file_size' column. "
-                        "Please update your registry to a version that includes file size metadata."
+                try:
+                    total_bytes, _, file_sizes = gt.registry.calculate_download_requirements(
+                        tiles_to_fetch, output, format
                     )
-
-                if gt.registry._landmasks_df is None or 'file_size' not in gt.registry._landmasks_df.columns:
-                    raise ValueError(
-                        "Landmasks registry is missing or lacks 'file_size' column. "
-                        "Please update your registry to a version that includes file size metadata."
-                    )
-
-                total_bytes = 0
-                file_sizes = {}  # Cache file sizes: path -> bytes
-
-                def get_file_size_from_registry(year, lon, lat):
-                    """Get file size from registry by querying year, lon, lat coordinates."""
-                    matches = gt.registry._registry_gdf[
-                        (gt.registry._registry_gdf['year'] == year) &
-                        (gt.registry._registry_gdf['lon'] == lon) &
-                        (gt.registry._registry_gdf['lat'] == lat)
-                    ]
-                    if len(matches) == 0:
-                        raise ValueError(f"Tile not found in registry: year={year}, lon={lon}, lat={lat}")
-                    return int(matches.iloc[0]['file_size'])
-
-                def get_landmask_size_from_registry(lon, lat):
-                    """Get landmask file size from landmasks registry by querying lon, lat coordinates."""
-                    matches = gt.registry._landmasks_df[
-                        (gt.registry._landmasks_df['lon'] == lon) &
-                        (gt.registry._landmasks_df['lat'] == lat)
-                    ]
-                    if len(matches) == 0:
-                        raise ValueError(f"Landmask not found in registry: lon={lon}, lat={lat}")
-                    return int(matches.iloc[0]['file_size'])
-
-                for tile_year, tile_lon, tile_lat in tiles_to_fetch:
-                    embedding_final = output / "embeddings" / str(tile_year) / f"grid_{tile_lon:.2f}_{tile_lat:.2f}.npy"
-                    scales_final = output / "embeddings" / str(tile_year) / f"grid_{tile_lon:.2f}_{tile_lat:.2f}_scales.npy"
-                    landmask_final = output / "landmasks" / f"landmask_{tile_lon:.2f}_{tile_lat:.2f}.tif"
-
-                    # Create cache keys for tracking file sizes
-                    embedding_key = f"embedding_{tile_year}_{tile_lon}_{tile_lat}"
-                    scales_key = f"scales_{tile_year}_{tile_lon}_{tile_lat}"
-                    landmask_key = f"landmask_{tile_lon}_{tile_lat}"
-
-                    # Only count files that need downloading
-                    if not embedding_final.exists():
-                        # Query registry for embedding size (embedding + scales share same hash/size record)
-                        size = get_file_size_from_registry(tile_year, tile_lon, tile_lat)
-                        file_sizes[embedding_key] = size
-                        total_bytes += size
-
-                    if not scales_final.exists():
-                        # Query registry for scales size (separate file but tracked together)
-                        size = get_file_size_from_registry(tile_year, tile_lon, tile_lat)
-                        file_sizes[scales_key] = size
-                        total_bytes += size
-
-                    if not landmask_final.exists():
-                        size = get_landmask_size_from_registry(tile_lon, tile_lat)
-                        file_sizes[landmask_key] = size
-                        total_bytes += size
-
-                # Format total size for display
-                def format_bytes(b):
-                    for unit in ['B', 'KB', 'MB', 'GB']:
-                        if b < 1024.0:
-                            return f"{b:.1f}{unit}"
-                        b /= 1024.0
-                    return f"{b:.1f}TB"
+                except ValueError as e:
+                    rprint(f"[red]Error: {e}[/red]")
+                    raise typer.Exit(1)
 
                 # Track cumulative bytes downloaded
                 bytes_downloaded = 0

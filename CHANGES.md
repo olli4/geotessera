@@ -23,6 +23,13 @@ the growing embeddings metadata for TESSERA.
 
 - **Enhanced `info` command**: Shows tiles per year and total landmask counts using fast pandas operations
 - **Enhanced `coverage` command**: Generate a 3D globegl globe with coverage textures for HTML viewing.
+- **New `--dry-run` option for `download` command**: Calculate total download size without downloading
+  - Shows file count, total size, number of tiles, year, and format
+  - Accounts for existing files (resume capability) - only counts files that would be downloaded
+  - For NPY format: calculates exact sizes from registry for embeddings, scales, and landmasks
+  - For TIFF format: provides size estimates (4x quantized size due to float32 conversion)
+  - Useful for planning downloads and estimating bandwidth/storage requirements
+  - Usage: `geotessera download --bbox '...' --dry-run`
 
 ### Registry CLI Changes
 
@@ -82,6 +89,14 @@ the growing embeddings metadata for TESSERA.
 - **`fetch_embedding(..., refresh=False)`**: New parameter to force re-download
   - When `refresh=True`, re-downloads even if local tiles exist in `embeddings_dir`
   - Useful for updating tiles or verifying data integrity
+
+- **New Registry size query methods**: Public API for querying file sizes from registry
+  - `registry.get_tile_file_size(year, lon, lat)` - Get size of an embedding tile in bytes
+  - `registry.get_landmask_file_size(lon, lat)` - Get size of a landmask tile in bytes
+  - `registry.calculate_download_requirements(tiles, output_dir, format_type)` - Calculate total download size for a list of tiles
+  - These methods replace direct registry DataFrame access and provide proper error handling
+  - Used internally by CLI `--dry-run` option and available for programmatic use
+  - Example: `size = gt.registry.get_tile_file_size(2024, 0.15, 52.05)`
 
 ### Migration Notes
 

@@ -899,3 +899,147 @@ class Registry:
             Tuple of (git_hash, repo_url) - both None for Parquet registries
         """
         return None, None
+
+    def get_tile_file_size(self, year: int, lon: float, lat: float) -> int:
+        """Get the file size of an embedding tile from the registry.
+
+        Args:
+            year: Year of the tile
+            lon: Longitude of the tile center
+            lat: Latitude of the tile center
+
+        Returns:
+            File size in bytes
+
+        Raises:
+            ValueError: If tile not found in registry or file_size column missing
+        """
+        if 'file_size' not in self._registry_gdf.columns:
+            raise ValueError(
+                "Registry is missing 'file_size' column. "
+                "Please update your registry to include file size metadata."
+            )
+
+        matches = self._registry_gdf[
+            (self._registry_gdf['year'] == year) &
+            (self._registry_gdf['lon'] == lon) &
+            (self._registry_gdf['lat'] == lat)
+        ]
+
+        if len(matches) == 0:
+            raise ValueError(
+                f"Tile not found in registry: year={year}, lon={lon:.2f}, lat={lat:.2f}"
+            )
+
+        return int(matches.iloc[0]['file_size'])
+
+    def get_landmask_file_size(self, lon: float, lat: float) -> int:
+        """Get the file size of a landmask tile from the registry.
+
+        Args:
+            lon: Longitude of the tile center
+            lat: Latitude of the tile center
+
+        Returns:
+            File size in bytes
+
+        Raises:
+            ValueError: If landmask not found in registry or file_size column missing
+        """
+        if self._landmasks_df is None:
+            raise ValueError(
+                "Landmasks registry is not loaded. "
+                "Please ensure landmasks.parquet is available."
+            )
+
+        if 'file_size' not in self._landmasks_df.columns:
+            raise ValueError(
+                "Landmasks registry is missing 'file_size' column. "
+                "Please update your landmasks registry to include file size metadata."
+            )
+
+        matches = self._landmasks_df[
+            (self._landmasks_df['lon'] == lon) &
+            (self._landmasks_df['lat'] == lat)
+        ]
+
+        if len(matches) == 0:
+            raise ValueError(
+                f"Landmask not found in registry: lon={lon:.2f}, lat={lat:.2f}"
+            )
+
+        return int(matches.iloc[0]['file_size'])
+
+    def calculate_download_requirements(
+        self,
+        tiles: List[Tuple[int, float, float]],
+        output_dir: Path,
+        format_type: str,
+        check_existing: bool = True
+    ) -> Tuple[int, int, Dict[str, int]]:
+        """Calculate download requirements for a set of tiles.
+
+        Args:
+            tiles: List of (year, lon, lat) tuples
+            output_dir: Output directory where files would be downloaded
+            format_type: Either 'npy' or 'tiff'
+            check_existing: If True, skip files that already exist (for resume).
+                           If False, calculate as if downloading all files (for dry-run estimates).
+
+        Returns:
+            Tuple of (total_bytes, total_files, file_sizes_dict)
+            - total_bytes: Total download size in bytes
+            - total_files: Number of files to download
+            - file_sizes_dict: Dictionary mapping file keys to sizes (for NPY format tracking)
+
+        Raises:
+            ValueError: If registry is missing required columns or tiles not found
+        """
+        total_bytes = 0
+        total_files = 0
+        file_sizes = {}  # For NPY format: cache file sizes by key
+
+        if format_type == "npy":
+            # For NPY format: embedding + scales + landmask per tile
+            for tile_year, tile_lon, tile_lat in tiles:
+                embedding_final = output_dir / "embeddings" / str(tile_year) / f"grid_{tile_lon:.2f}_{tile_lat:.2f}.npy"
+                scales_final = output_dir / "embeddings" / str(tile_year) / f"grid_{tile_lon:.2f}_{tile_lat:.2f}_scales.npy"
+                landmask_final = output_dir / "landmasks" / f"landmask_{tile_lon:.2f}_{tile_lat:.2f}.tif"
+
+                # Create cache keys for tracking file sizes
+                embedding_key = f"embedding_{tile_year}_{tile_lon}_{tile_lat}"
+                scales_key = f"scales_{tile_year}_{tile_lon}_{tile_lat}"
+                landmask_key = f"landmask_{tile_lon}_{tile_lat}"
+
+                # Only count files that need downloading
+                if not check_existing or not embedding_final.exists():
+                    size = self.get_tile_file_size(tile_year, tile_lon, tile_lat)
+                    file_sizes[embedding_key] = size
+                    total_bytes += size
+                    total_files += 1
+
+                if not check_existing or not scales_final.exists():
+                    # Scales files are typically much smaller, approximate as 10% of embedding size
+                    size = self.get_tile_file_size(tile_year, tile_lon, tile_lat) // 10
+                    file_sizes[scales_key] = size
+                    total_bytes += size
+                    total_files += 1
+
+                if not check_existing or not landmask_final.exists():
+                    size = self.get_landmask_file_size(tile_lon, tile_lat)
+                    file_sizes[landmask_key] = size
+                    total_bytes += size
+                    total_files += 1
+        else:
+            # For TIFF format: one GeoTIFF per tile
+            # TIFF files will be larger than NPY due to dequantization (int8 -> float32)
+            # and additional metadata. Estimate as 4x the size of quantized embedding.
+            for tile_year, tile_lon, tile_lat in tiles:
+                embedding_size = self.get_tile_file_size(tile_year, tile_lon, tile_lat)
+                landmask_size = self.get_landmask_file_size(tile_lon, tile_lat)
+                # Estimate TIFF size: 4x embedding (float32 vs int8) + landmask overhead
+                tiff_size = (embedding_size * 4) + landmask_size
+                total_bytes += tiff_size
+                total_files += 1
+
+        return total_bytes, total_files, file_sizes
