@@ -933,6 +933,39 @@ class Registry:
 
         return int(matches.iloc[0]['file_size'])
 
+    def get_scales_file_size(self, year: int, lon: float, lat: float) -> int:
+        """Get the file size of a scales file from the registry.
+
+        Args:
+            year: Year of the tile
+            lon: Longitude of the tile center
+            lat: Latitude of the tile center
+
+        Returns:
+            File size in bytes
+
+        Raises:
+            ValueError: If tile not found in registry or scales_size column missing
+        """
+        if 'scales_size' not in self._registry_gdf.columns:
+            raise ValueError(
+                "Registry is missing 'scales_size' column. "
+                "Please update your registry to include scales file size metadata."
+            )
+
+        matches = self._registry_gdf[
+            (self._registry_gdf['year'] == year) &
+            (self._registry_gdf['lon'] == lon) &
+            (self._registry_gdf['lat'] == lat)
+        ]
+
+        if len(matches) == 0:
+            raise ValueError(
+                f"Tile not found in registry: year={year}, lon={lon:.2f}, lat={lat:.2f}"
+            )
+
+        return int(matches.iloc[0]['scales_size'])
+
     def get_landmask_file_size(self, lon: float, lat: float) -> int:
         """Get the file size of a landmask tile from the registry.
 
@@ -1019,8 +1052,8 @@ class Registry:
                     total_files += 1
 
                 if not check_existing or not scales_final.exists():
-                    # Scales files are typically much smaller, approximate as 10% of embedding size
-                    size = self.get_tile_file_size(tile_year, tile_lon, tile_lat) // 10
+                    # Get actual scales file size from registry
+                    size = self.get_scales_file_size(tile_year, tile_lon, tile_lat)
                     file_sizes[scales_key] = size
                     total_bytes += size
                     total_files += 1

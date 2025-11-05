@@ -561,7 +561,8 @@ def create_parquet_database_from_filesystem(base_dir, output_path, console):
             'hash': tile_info.embedding_hash,  # From SHA256 file, no recalculation!
             'scales_hash': tile_info.scales_hash,  # Scales file hash
             'mtime': tile_info.embedding_mtime,
-            'file_size': tile_info.embedding_size
+            'file_size': tile_info.embedding_size,
+            'scales_size': tile_info.scales_size  # Scales file size
         }
     
     # Progress tracking
