@@ -59,12 +59,26 @@ class GeoTessera:
     """Library for downloading Tessera tiles and exporting GeoTIFFs.
 
     Core functionality:
-    - Download tiles within a bounding box to numpy arrays
+    - Download tiles to local embeddings_dir
+    - Sample embeddings at point locations from local tiles
     - Export individual tiles as GeoTIFF files with correct metadata
     - Manage registry and data access
 
+    Typical workflows:
+
+    Simple (auto-download mode):
+        1. Initialize with embeddings_dir (defaults to current directory)
+        2. Call sample_embeddings_at_points() - tiles are downloaded automatically
+
+    Manual/offline mode:
+        1. Initialize with embeddings_dir
+        2. Use download_tiles_for_points() to download required tiles
+        3. Use sample_embeddings_at_points(auto_download=False) for offline operation
+        4. Use check_tiles_present() to verify which tiles are available
+
     Attributes:
         registry: geotessera.registry.Registry instance for data discovery and access
+        embeddings_dir: Directory where tiles are stored locally
     """
 
     def __init__(
@@ -82,14 +96,37 @@ class GeoTessera:
             dataset_version: Tessera dataset version (e.g., 'v1', 'v2')
             cache_dir: Directory for caching registry files only (not embedding data)
             embeddings_dir: Directory containing pre-downloaded embedding tiles.
-                If provided, will use local tiles instead of downloading.
-                Expected structure: embeddings/{year}/grid_{lon}_{lat}.npy and _scales.npy,
-                landmasks/landmask_{lon}_{lat}.tif
+                Defaults to current working directory if not specified.
+
+                To populate embeddings_dir, use one of these approaches:
+
+                1. Download specific tiles using the CLI:
+                   $ geotessera download --lat 52.05 --lon 0.15 --year 2024 --output ./embeddings
+
+                2. Download tiles for a region using the CLI:
+                   $ geotessera download --region region.geojson --year 2024 --output ./embeddings
+
+                Expected directory structure:
+                    embeddings_dir/
+                    ├── 2024/
+                    │   ├── grid_0.15_52.05.npy
+                    │   ├── grid_0.15_52.05_scales.npy
+                    │   └── ...
+                    └── landmasks/
+                        ├── landmask_0.15_52.05.tif
+                        └── ...
             registry_url: URL to download Parquet registry from (default: remote)
             registry_path: Local path to existing Parquet registry file
             registry_dir: Directory containing registry.parquet and landmasks.parquet files
         """
         self.dataset_version = dataset_version
+
+        # Set embeddings_dir to current working directory if not specified
+        if embeddings_dir is None:
+            self.embeddings_dir = Path.cwd()
+        else:
+            self.embeddings_dir = Path(embeddings_dir)
+
         self.registry = Registry(
             version=dataset_version,
             cache_dir=cache_dir,
@@ -396,18 +433,18 @@ class GeoTessera:
         points: Union[List[Tuple[float, float]], Dict, "gpd.GeoDataFrame"],
         year: int = 2024,
         include_metadata: bool = False,
-        embeddings_dir: Optional[Union[str, Path]] = None,
-        refresh: bool = False,
+        auto_download: bool = True,
         progress_callback: Optional[callable] = None,
     ) -> Union[np.ndarray, Tuple[np.ndarray, List[Dict]]]:
-        """Sample embedding values at specified point locations.
+        """Sample embedding values at specified point locations from local tiles.
 
         This method efficiently extracts embedding values at arbitrary lon/lat
         coordinates by:
         1. Grouping points by which tile they fall into
-        2. Loading tiles from embeddings_dir if available, otherwise downloading
-        3. Extracting all point values from that tile
-        4. Returning results in original point order
+        2. Optionally downloading missing tiles if auto_download=True
+        3. Loading tiles from self.embeddings_dir
+        4. Extracting all point values from each tile
+        5. Returning results in original point order
 
         Args:
             points: Point coordinates as:
@@ -416,10 +453,9 @@ class GeoTessera:
                 - GeoPandas GeoDataFrame with Point geometries
             year: Year of embeddings to sample
             include_metadata: If True, also return metadata (tile info, pixel coords)
-            embeddings_dir: Optional directory containing pre-downloaded tiles.
-                If provided, overrides instance embeddings_dir for this call.
-                Expected structure: embeddings/{year}/grid_{lon}_{lat}.npy and _scales.npy
-            refresh: If True, force re-download even if local tiles exist
+            auto_download: If True (default), automatically download missing tiles.
+                If False, operate in offline mode and raise error for missing tiles.
+                Set to False for guaranteed offline operation with no network requests.
             progress_callback: Optional callback(current, total, status)
 
         Returns:
@@ -432,16 +468,26 @@ class GeoTessera:
                 - pixel_row, pixel_col: Pixel coordinates within tile
                 - crs: Coordinate reference system of tile
 
+        Raises:
+            FileNotFoundError: If auto_download=False and required tiles are missing
+
         Examples:
-            >>> gt = GeoTessera()
+            >>> # Auto-download mode (default): downloads tiles as needed
+            >>> gt = GeoTessera(embeddings_dir="./embeddings")
             >>> points = [(0.15, 52.05), (0.25, 52.15)]
             >>> embeddings = gt.sample_embeddings_at_points(points, year=2024)
             >>> embeddings.shape
             (2, 128)
 
-            >>> # With embeddings_dir override
+            >>> # Offline mode: no downloads, fails if tiles missing
             >>> embeddings = gt.sample_embeddings_at_points(
-            ...     points, year=2024, embeddings_dir="./my_tiles"
+            ...     points, year=2024, auto_download=False
+            ... )
+
+            >>> # Manual download workflow (equivalent to auto_download=True)
+            >>> gt.download_tiles_for_points(points, year=2024)
+            >>> embeddings = gt.sample_embeddings_at_points(
+            ...     points, year=2024, auto_download=False
             ... )
 
             >>> # With metadata
@@ -472,31 +518,64 @@ class GeoTessera:
         # Group points by which tile they belong to
         points_by_tile = self._group_points_by_tile(parsed_points, year)
 
-        # Initialize result arrays
-        result_embeddings = np.full((n_points, 128), np.nan, dtype=np.float32)
-        result_metadata = [None] * n_points if include_metadata else None
-
-        # Use Tile abstraction for local tiles, registry fetch for remote
-        use_local_tiles = embeddings_dir is not None
-        tile_map = {}
-
-        if use_local_tiles:
-            # Discover local tiles using Tile abstraction (supports NPY and GeoTIFF)
+        # Check which tiles are present and download if needed
+        if auto_download:
             from geotessera.tiles import discover_tiles
 
-            tiles = discover_tiles(Path(embeddings_dir))
-            # Build map keyed by (lon, lat) for this year
-            tile_map = {
+            # Check which tiles are missing
+            tiles = discover_tiles(self.embeddings_dir)
+            tile_map_check = {
                 (t.lon, t.lat): t
                 for t in tiles
                 if t.year == year
             }
 
-            if progress_callback:
-                progress_callback(
-                    0, len(points_by_tile),
-                    f"Found {len(tile_map)} local tiles for year {year}"
-                )
+            missing_tiles = []
+            for tile_lon, tile_lat in points_by_tile.keys():
+                tile = tile_map_check.get((tile_lon, tile_lat))
+                if tile is None or not tile.is_available():
+                    missing_tiles.append((tile_lon, tile_lat))
+
+            # Download missing tiles
+            if missing_tiles:
+                if progress_callback:
+                    progress_callback(
+                        0, len(points_by_tile),
+                        f"Downloading {len(missing_tiles)} missing tiles..."
+                    )
+
+                for idx, (tile_lon, tile_lat) in enumerate(missing_tiles):
+                    grid_name = f"grid_{tile_lon:.2f}_{tile_lat:.2f}"
+                    if progress_callback:
+                        progress_callback(
+                            idx, len(missing_tiles),
+                            f"Downloading {grid_name} ({idx + 1}/{len(missing_tiles)})"
+                        )
+
+                    success = self.download_tile(tile_lon, tile_lat, year)
+                    if not success:
+                        print(f"Warning: Failed to download {grid_name}")
+
+        # Initialize result arrays
+        result_embeddings = np.full((n_points, 128), np.nan, dtype=np.float32)
+        result_metadata = [None] * n_points if include_metadata else None
+
+        # Discover local tiles using Tile abstraction (supports NPY and GeoTIFF)
+        from geotessera.tiles import discover_tiles
+
+        tiles = discover_tiles(self.embeddings_dir)
+        # Build map keyed by (lon, lat) for this year
+        tile_map = {
+            (t.lon, t.lat): t
+            for t in tiles
+            if t.year == year
+        }
+
+        if progress_callback:
+            progress_callback(
+                0, len(points_by_tile),
+                f"Found {len(tile_map)} local tiles for year {year}"
+            )
 
         # Process each tile
         total_tiles = len(points_by_tile)
@@ -508,23 +587,25 @@ class GeoTessera:
                 )
 
             try:
-                if use_local_tiles:
-                    # Use Tile abstraction for local files
-                    tile = tile_map.get((tile_lon, tile_lat))
-                    if tile is None:
-                        raise FileNotFoundError(
-                            f"Tile ({tile_lon:.2f}, {tile_lat:.2f}) not found in {embeddings_dir}"
-                        )
-
-                    # Load embedding and metadata from Tile
-                    embedding = tile.load_embedding()
-                    crs = tile.crs
-                    transform = tile.transform
-                else:
-                    # Fetch from remote registry
-                    embedding, crs, transform = self.fetch_embedding(
-                        tile_lon, tile_lat, year, refresh=refresh
+                # Use Tile abstraction for local files
+                tile = tile_map.get((tile_lon, tile_lat))
+                if tile is None:
+                    error_msg = (
+                        f"Tile ({tile_lon:.2f}, {tile_lat:.2f}) not found in {self.embeddings_dir}. "
                     )
+                    if auto_download:
+                        error_msg += "Download may have failed. Check network connectivity."
+                    else:
+                        error_msg += (
+                            "Set auto_download=True to download automatically, or use "
+                            "download_tiles_for_points() to download tiles manually."
+                        )
+                    raise FileNotFoundError(error_msg)
+
+                # Load embedding and metadata from Tile
+                embedding = tile.load_embedding()
+                crs = tile.crs
+                transform = tile.transform
 
                 # Create coordinate transformer from WGS84 to tile's CRS
                 transformer = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
@@ -739,6 +820,184 @@ class GeoTessera:
                 Path(embedding_file).unlink(missing_ok=True)
             if cleanup_scales:
                 Path(scales_file).unlink(missing_ok=True)
+
+    def download_tile(
+        self,
+        lon: float,
+        lat: float,
+        year: int,
+        progress_callback: Optional[callable] = None,
+    ) -> bool:
+        """Download a single tile and save it to embeddings_dir.
+
+        Args:
+            lon: Tile center longitude
+            lat: Tile center latitude
+            year: Year of embeddings
+            progress_callback: Optional callback for download progress
+
+        Returns:
+            True if download succeeded, False otherwise
+
+        Examples:
+            >>> gt = GeoTessera(embeddings_dir="./embeddings")
+            >>> gt.download_tile(lon=0.15, lat=52.05, year=2024)
+            True
+        """
+        # Create year subdirectory
+        year_dir = self.embeddings_dir / str(year)
+        year_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create landmasks subdirectory
+        landmasks_dir = self.embeddings_dir / "landmasks"
+        landmasks_dir.mkdir(parents=True, exist_ok=True)
+
+        # Define output paths
+        grid_name = f"grid_{lon:.2f}_{lat:.2f}"
+        embedding_path = year_dir / f"{grid_name}.npy"
+        scales_path = year_dir / f"{grid_name}_scales.npy"
+        landmask_path = landmasks_dir / f"landmask_{lon:.2f}_{lat:.2f}.tif"
+
+        try:
+            # Download embedding file
+            embedding_file, cleanup_embedding = self.registry.fetch(
+                year=year, lon=lon, lat=lat, is_scales=False,
+                progressbar=False, progress_callback=progress_callback, refresh=True
+            )
+
+            # Download scales file
+            scales_file, cleanup_scales = self.registry.fetch(
+                year=year, lon=lon, lat=lat, is_scales=True,
+                progressbar=False, progress_callback=progress_callback, refresh=True
+            )
+
+            # Download landmask file
+            landmask_file, cleanup_landmask = self.registry.fetch_landmask(
+                lon=lon, lat=lat, progressbar=False, refresh=True
+            )
+
+            # Copy files to embeddings_dir if they were downloaded to temp
+            import shutil
+            if cleanup_embedding:
+                shutil.copy2(embedding_file, embedding_path)
+                Path(embedding_file).unlink(missing_ok=True)
+            if cleanup_scales:
+                shutil.copy2(scales_file, scales_path)
+                Path(scales_file).unlink(missing_ok=True)
+            if cleanup_landmask:
+                shutil.copy2(landmask_file, landmask_path)
+                Path(landmask_file).unlink(missing_ok=True)
+
+            return True
+
+        except Exception as e:
+            print(f"Failed to download tile ({lat:.2f}, {lon:.2f}): {e}")
+            return False
+
+    def download_tiles_for_points(
+        self,
+        points: Union[List[Tuple[float, float]], Dict, "gpd.GeoDataFrame"],
+        year: int = 2024,
+        progress_callback: Optional[callable] = None,
+    ) -> Dict[str, bool]:
+        """Download all tiles needed for the specified points to embeddings_dir.
+
+        Args:
+            points: Point coordinates as:
+                - List of (lon, lat) tuples
+                - GeoJSON FeatureCollection dict
+                - GeoPandas GeoDataFrame with Point geometries
+            year: Year of embeddings to download
+            progress_callback: Optional callback(current, total, status)
+
+        Returns:
+            Dictionary mapping grid names to download success status
+
+        Examples:
+            >>> gt = GeoTessera(embeddings_dir="./embeddings")
+            >>> points = [(0.15, 52.05), (0.25, 52.15)]
+            >>> results = gt.download_tiles_for_points(points, year=2024)
+            >>> results
+            {'grid_0.15_52.05': True, 'grid_0.25_52.15': True}
+        """
+        # Parse points to standardized format
+        parsed_points = self._parse_points_input(points)
+
+        # Group points by tile
+        points_by_tile = self._group_points_by_tile(parsed_points, year)
+
+        # Download each tile
+        results = {}
+        total_tiles = len(points_by_tile)
+
+        for idx, (tile_lon, tile_lat) in enumerate(points_by_tile.keys()):
+            grid_name = f"grid_{tile_lon:.2f}_{tile_lat:.2f}"
+
+            if progress_callback:
+                progress_callback(
+                    idx, total_tiles,
+                    f"Downloading tile {idx + 1}/{total_tiles}: {grid_name}"
+                )
+
+            success = self.download_tile(tile_lon, tile_lat, year)
+            results[grid_name] = success
+
+            if progress_callback:
+                progress_callback(
+                    idx + 1, total_tiles,
+                    f"Completed {idx + 1}/{total_tiles}: {grid_name}"
+                )
+
+        return results
+
+    def check_tiles_present(
+        self,
+        points: Union[List[Tuple[float, float]], Dict, "gpd.GeoDataFrame"],
+        year: int = 2024,
+    ) -> Dict[str, bool]:
+        """Check which tiles needed for the points are present in embeddings_dir.
+
+        Args:
+            points: Point coordinates as:
+                - List of (lon, lat) tuples
+                - GeoJSON FeatureCollection dict
+                - GeoPandas GeoDataFrame with Point geometries
+            year: Year of embeddings to check
+
+        Returns:
+            Dictionary mapping grid names to presence status
+
+        Examples:
+            >>> gt = GeoTessera(embeddings_dir="./embeddings")
+            >>> points = [(0.15, 52.05), (0.25, 52.15)]
+            >>> status = gt.check_tiles_present(points, year=2024)
+            >>> status
+            {'grid_0.15_52.05': True, 'grid_0.25_52.15': False}
+        """
+        from geotessera.tiles import discover_tiles
+
+        # Parse points to standardized format
+        parsed_points = self._parse_points_input(points)
+
+        # Group points by tile
+        points_by_tile = self._group_points_by_tile(parsed_points, year)
+
+        # Discover local tiles
+        tiles = discover_tiles(self.embeddings_dir)
+        tile_map = {
+            (t.lon, t.lat): t
+            for t in tiles
+            if t.year == year
+        }
+
+        # Check each required tile
+        results = {}
+        for tile_lon, tile_lat in points_by_tile.keys():
+            grid_name = f"grid_{tile_lon:.2f}_{tile_lat:.2f}"
+            tile = tile_map.get((tile_lon, tile_lat))
+            results[grid_name] = tile is not None and tile.is_available()
+
+        return results
 
     def _reproject_geotiff_file(self, args):
         """Helper function to reproject a single GeoTIFF file.
