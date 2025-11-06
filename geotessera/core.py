@@ -256,7 +256,6 @@ class GeoTessera:
         except ImportError:
             raise ImportError("PIL/Pillow required for texture generation: pip install Pillow")
 
-        import numpy as np
 
         # Constants matching JavaScript
         TILE_SIZE = 0.1

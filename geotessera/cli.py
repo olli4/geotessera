@@ -10,7 +10,6 @@ import threading
 import time
 import http.server
 import socketserver
-import json
 import tempfile
 import urllib.request
 import urllib.parse
@@ -18,7 +17,6 @@ from pathlib import Path
 from typing import Optional, Callable
 from typing_extensions import Annotated
 
-import numpy as np
 import typer
 from rich.console import Console
 from geotessera import __version__
@@ -32,7 +30,6 @@ from .country import get_country_bbox
 from .visualization import (
     calculate_bbox_from_file,
     create_pca_mosaic,
-    analyze_geotiff_coverage,
 )
 from .web import (
     geotiff_to_web_tiles,
@@ -963,7 +960,6 @@ def download(
             else:  # format == 'npy'
                 # Export as quantized numpy arrays with scales
                 import shutil
-                from .registry import tile_to_embedding_paths, tile_to_landmask_filename
 
                 # Create output directory structure
                 output.mkdir(parents=True, exist_ok=True)
@@ -1100,7 +1096,7 @@ def download(
                 rprint("   Structure: embeddings/{year}/grid_{lon}_{lat}.npy and _scales.npy")
                 rprint("             landmasks/landmask_{lon}_{lat}.tif")
                 if bands_list:
-                    rprint(f"   [yellow]Note: Band selection not supported in NPY format (use TIFF format instead)[/yellow]")
+                    rprint("   [yellow]Note: Band selection not supported in NPY format (use TIFF format instead)[/yellow]")
 
         if verbose or list_files:
             rprint("\n[blue]📁 Created files:[/blue]")

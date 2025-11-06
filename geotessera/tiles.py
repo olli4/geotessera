@@ -1,7 +1,7 @@
 """Tile abstraction for format-agnostic embedding access."""
 
 from pathlib import Path
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict
 import numpy as np
 import re
 

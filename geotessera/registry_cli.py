@@ -882,7 +882,7 @@ def generate_embeddings_checksums(base_dir, force=False):
     This optimization makes subsequent runs much faster by only updating
     checksums when files have actually changed.
     """
-    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
+    from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
 
     print("Generating SHA256 checksums for embeddings...")
     if force:
@@ -1958,7 +1958,7 @@ def export_manifests_command(args):
         if missing:
             console.print(f"[red]Error: Missing required columns in registry.parquet: {missing}[/red]")
             console.print(f"[yellow]Available columns: {df.columns.tolist()}[/yellow]")
-            console.print(f"[yellow]Hint: Regenerate registry.parquet with latest geotessera-registry scan[/yellow]")
+            console.print("[yellow]Hint: Regenerate registry.parquet with latest geotessera-registry scan[/yellow]")
             return 1
 
         # Group by year and block

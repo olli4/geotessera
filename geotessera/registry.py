@@ -9,15 +9,13 @@ data into 5x5 degree blocks for efficient data access.
 
 from pathlib import Path
 from typing import Optional, Union, List, Tuple, Dict, Iterator, Callable
-from dataclasses import dataclass
 import os
 import math
 import re
 import numpy as np
-import logging
 import hashlib
 from urllib.request import urlopen, Request
-from urllib.error import URLError, HTTPError
+from urllib.error import HTTPError
 import time
 
 try:
@@ -285,9 +283,7 @@ def download_file_to_temp(url: str, expected_hash: Optional[str] = None, progres
         ValueError: If hash verification fails
     """
     import tempfile
-    import time
     from email.utils import formatdate, parsedate_to_datetime
-    from datetime import datetime, timezone
 
     # Handle If-Modified-Since for cached files
     headers = {'User-Agent': 'geotessera'}
@@ -413,7 +409,7 @@ def download_file_to_temp(url: str, expected_hash: Optional[str] = None, progres
 
         return str(final_path)
 
-    except Exception as e:
+    except Exception:
         temp_file.close()
         if temp_path.exists():
             temp_path.unlink()
