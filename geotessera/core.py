@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Union, List, Tuple, Optional, Dict, Generator, Iterable
 import json
 import numpy as np
+import geopandas as gpd
 
 from .registry import Registry
 
@@ -1097,11 +1098,11 @@ class GeoTessera:
                 with rasterio.open(landmask_path) as src:
                     if src.crs is None:
                         raise RuntimeError(
-                            f"Landmask tile {landmask_filename} has no CRS information"
+                            f"Landmask tile {landmask_path} has no CRS information"
                         )
                     if src.transform is None:
                         raise RuntimeError(
-                            f"Landmask tile {landmask_filename} has no transform information"
+                            f"Landmask tile {landmask_path} has no transform information"
                         )
                     return src.crs, src.transform
 

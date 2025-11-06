@@ -22,7 +22,6 @@ def analyze_geotiff_coverage(geotiff_paths: List[str]) -> Dict:
         Dictionary with coverage statistics and metadata
     """
     try:
-        import rasterio
         from rasterio.warp import transform_bounds
         from geotessera.tiles import Tile
     except ImportError:

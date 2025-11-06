@@ -521,23 +521,54 @@ class Registry:
 
             if registry_cache_path.exists():
                 print(f"Using cached registry: {registry_cache_path}")
-                # Check for updates using If-Modified-Since
+
+                # Validate cached file format before accepting it
+                is_valid_cache = False
                 try:
-                    print("Checking for registry updates...")
-                    result_path = download_file_to_temp(
-                        self._registry_url,
-                        cache_path=registry_cache_path
-                    )
-                    registry_path = Path(result_path)
-                    if result_path == str(registry_cache_path):
-                        print("✓ Registry is up to date")
+                    # Quick check: try to read metadata without loading full file
+                    test_gdf = gpd.read_parquet(registry_cache_path)
+                    if 'geometry' in test_gdf.columns and test_gdf.geometry is not None:
+                        is_valid_cache = True
                     else:
-                        print("✓ Registry updated")
+                        print("⚠ Cached registry is in old format (missing geometry column)")
+                        print("  Forcing download of updated GeoParquet format...")
+                except Exception:
+                    print("⚠ Cached registry is corrupted or in old format")
+                    print("  Forcing download of updated registry...")
+
+                # Check for updates using If-Modified-Since (or force download if invalid)
+                try:
+                    if not is_valid_cache:
+                        # Delete invalid cache to force fresh download
+                        registry_cache_path.unlink(missing_ok=True)
+                        print("Downloading updated registry...")
+                        result_path = download_file_to_temp(
+                            self._registry_url,
+                            cache_path=registry_cache_path
+                        )
+                        registry_path = Path(result_path)
+                        print("✓ Registry downloaded successfully")
+                    else:
+                        # Valid cache - check for updates normally
+                        print("Checking for registry updates...")
+                        result_path = download_file_to_temp(
+                            self._registry_url,
+                            cache_path=registry_cache_path
+                        )
+                        registry_path = Path(result_path)
+                        if result_path == str(registry_cache_path):
+                            print("✓ Registry is up to date")
+                        else:
+                            print("✓ Registry updated")
                 except Exception as e:
-                    # If update check fails, use cached version
-                    print(f"Warning: Could not check for updates: {e}")
-                    print("Using existing cached registry")
-                    registry_path = registry_cache_path
+                    # If update check fails, use cached version (only if valid)
+                    if is_valid_cache:
+                        print(f"Warning: Could not check for updates: {e}")
+                        print("Using existing cached registry")
+                        registry_path = registry_cache_path
+                    else:
+                        # Invalid cache and download failed - raise error
+                        raise RuntimeError(f"Failed to download registry and no valid cache available: {e}") from e
             else:
                 # Download the registry to cache for the first time
                 print(f"Downloading registry from {self._registry_url}")

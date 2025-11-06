@@ -66,7 +66,7 @@ class CountryLookup:
                 # Don't call parent init, we'll handle progress ourselves
                 self.outer_progress_callback = progress_callback
 
-            def __call__(self, url, output_file, pooch):
+            def __call__(self, url, output_file):
                 """Download with progress reporting."""
                 import requests
                 from pathlib import Path
@@ -151,22 +151,17 @@ class CountryLookup:
                 return str(output_file)
 
         # Download the archive
+        url = "https://github.com/nvkelso/natural-earth-vector/archive/refs/tags/v5.1.2.zip"
+        archive_path = self._cache_dir / "natural-earth-v5.1.2.zip"
+
         if self._progress_callback:
             downloader = CountryDataDownloader(self._progress_callback)
-            archive_path = pooch.retrieve(
-                url="https://github.com/nvkelso/natural-earth-vector/archive/refs/tags/v5.1.2.zip",
-                known_hash=None,
-                path=self._cache_dir,
-                fname="natural-earth-v5.1.2.zip",
-                downloader=downloader,
-            )
+            downloader(url, str(archive_path))
         else:
-            archive_path = pooch.retrieve(
-                url="https://github.com/nvkelso/natural-earth-vector/archive/refs/tags/v5.1.2.zip",
-                known_hash=None,
-                path=self._cache_dir,
-                fname="natural-earth-v5.1.2.zip",
-            )
+            # Simple download without progress reporting
+            from urllib.request import urlretrieve
+            archive_path.parent.mkdir(parents=True, exist_ok=True)
+            urlretrieve(url, str(archive_path))
 
         # Extract the specific GeoJSON file we need
         if self._progress_callback:

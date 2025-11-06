@@ -813,9 +813,6 @@ def download(
                     country, progress_callback=country_progress_callback
                 )
                 progress.update(country_task, completed=100, status="Complete")
-                rprint(
-                    f"[green]Using country '{country}':[/green] {format_bbox(bbox_coords)}"
-                )
             except ValueError as e:
                 rprint(f"[red]Error: {e}[/red]")
                 rprint(
@@ -825,6 +822,11 @@ def download(
             except Exception as e:
                 rprint(f"[red]Error fetching country data: {e}[/red]")
                 raise typer.Exit(1)
+
+        # Print country info after progress bar completes
+        rprint(
+            f"[green]Using country '{country}':[/green] {format_bbox(bbox_coords)}"
+        )
     else:
         rprint(
             "[red]Error: Must specify either --bbox, --region-file, or --country[/red]"
