@@ -8,6 +8,7 @@ The library focusses on:
 from pathlib import Path
 from typing import Union, List, Tuple, Optional, Dict, Generator, Iterable
 import json
+import logging
 import numpy as np
 import geopandas as gpd
 
@@ -122,6 +123,9 @@ class GeoTessera:
         """
         self.dataset_version = dataset_version
 
+        # Initialize logger
+        self.logger = logging.getLogger(__name__)
+
         # Set embeddings_dir to current working directory if not specified
         if embeddings_dir is None:
             self.embeddings_dir = Path.cwd()
@@ -135,6 +139,7 @@ class GeoTessera:
             registry_url=registry_url,
             registry_path=registry_path,
             registry_dir=registry_dir,
+            logger=self.logger,
         )
 
     @property
@@ -179,7 +184,7 @@ class GeoTessera:
                 'metadata': {...}
             }
         """
-        print("Loading all registry data for global coverage analysis...")
+        self.logger.info("Loading all registry data for global coverage analysis...")
 
         # Load all available embedding blocks
         bbox = (-180, -90, 180, 90)  # Global coverage
@@ -189,7 +194,7 @@ class GeoTessera:
         tiles_by_location = {}
 
         for year in available_years:
-            print(f"Loading embeddings for {year}...")
+            self.logger.info(f"Loading embeddings for {year}...")
             tiles = self.registry.load_blocks_for_region(bbox, year)
 
             for tile in tiles:
@@ -205,7 +210,7 @@ class GeoTessera:
                 tiles_by_location[key].append(year)
 
         # Get landmask information
-        print("Loading landmask data...")
+        self.logger.info("Loading landmask data...")
         available_landmasks = self.registry.available_landmasks
         landmask_keys = [f"{lon:.2f},{lat:.2f}" for lon, lat in available_landmasks]
         landmask_set = set(landmask_keys)
@@ -235,7 +240,7 @@ class GeoTessera:
             import json
             with open(output_file, 'w') as f:
                 json.dump(coverage_map, f, indent=2)
-            print(f"Coverage map written to {output_file}")
+            self.logger.info(f"Coverage map written to {output_file}")
 
         return coverage_map
 
@@ -266,7 +271,7 @@ class GeoTessera:
         width = int(360 / TILE_SIZE)  # 3600
         height = int(180 / TILE_SIZE)  # 1800
 
-        print(f"Generating coverage texture ({width}x{height} pixels)...")
+        self.logger.info(f"Generating coverage texture ({width}x{height} pixels)...")
 
         # Create RGBA image
         img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
@@ -318,7 +323,7 @@ class GeoTessera:
             output_file = "coverage_texture.png"
 
         img.save(output_file, "PNG")
-        print(f"Generated texture with {tile_count} tiles, saved to {output_file}")
+        self.logger.info(f"Generated texture with {tile_count} tiles, saved to {output_file}")
 
         return output_file
 
@@ -415,8 +420,8 @@ class GeoTessera:
                     )
 
             except Exception as e:
-                print(
-                    f"Warning: Failed to download tile ({tile_lat:.2f}, {tile_lon:.2f}): {e}"
+                self.logger.warning(
+                    f"Failed to download tile ({tile_lat:.2f}, {tile_lon:.2f}): {e}"
                 )
                 if progress_callback:
                     progress_callback(
@@ -554,7 +559,7 @@ class GeoTessera:
 
                     success = self.download_tile(tile_lon, tile_lat, year)
                     if not success:
-                        print(f"Warning: Failed to download {grid_name}")
+                        self.logger.warning(f"Failed to download {grid_name}")
 
         # Initialize result arrays
         result_embeddings = np.full((n_points, 128), np.nan, dtype=np.float32)
@@ -649,7 +654,7 @@ class GeoTessera:
 
             except Exception as e:
                 # If tile fetch/load fails, leave those points as NaN
-                print(f"Warning: Failed to process tile ({tile_lat:.2f}, {tile_lon:.2f}): {e}")
+                self.logger.warning(f"Failed to process tile ({tile_lat:.2f}, {tile_lon:.2f}): {e}")
                 if include_metadata:
                     for original_idx in point_indices:
                         result_metadata[original_idx] = {
@@ -759,8 +764,8 @@ class GeoTessera:
         missing_tiles = set(points_by_tile.keys()) - set(filtered_points_by_tile.keys())
         if missing_tiles:
             n_missing = sum(len(points_by_tile[tile]) for tile in missing_tiles)
-            print(
-                f"Warning: {n_missing} points fall in tiles without coverage "
+            self.logger.warning(
+                f"{n_missing} points fall in tiles without coverage "
                 f"(will be returned as NaN)"
             )
 
@@ -891,7 +896,7 @@ class GeoTessera:
             return True
 
         except Exception as e:
-            print(f"Failed to download tile ({lat:.2f}, {lon:.2f}): {e}")
+            self.logger.error(f"Failed to download tile ({lat:.2f}, {lon:.2f}): {e}")
             return False
 
     def download_tiles_for_points(
@@ -1261,7 +1266,7 @@ class GeoTessera:
             total_tiles = len(tiles_to_fetch)
 
         if not tiles:
-            print("No tiles found in bounding box")
+            self.logger.warning("No tiles found in bounding box")
             return []
 
         if progress_callback:
@@ -1346,7 +1351,7 @@ class GeoTessera:
                 100, 100, f"Completed! Exported {len(created_files)} GeoTIFF files"
             )
 
-        print(f"Exported {len(created_files)} GeoTIFF files to {output_dir}")
+        self.logger.info(f"Exported {len(created_files)} GeoTIFF files to {output_dir}")
         return created_files
 
     def merge_geotiffs_to_mosaic(

@@ -11,6 +11,7 @@ import os
 import hashlib
 import argparse
 import subprocess
+import logging
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from collections import defaultdict
 import multiprocessing
@@ -23,6 +24,7 @@ from typing import Callable, Any, List, Optional
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.logging import RichHandler
 from rich.progress import (
     Progress,
     SpinnerColumn,
@@ -30,6 +32,9 @@ from rich.progress import (
     BarColumn,
     TaskProgressColumn,
 )
+
+# Module-level logger
+logger = logging.getLogger(__name__)
 
 from .registry import (
     block_from_world,
@@ -295,7 +300,7 @@ def process_file(args):
             file_hash = calculate_sha256(file_path)
         return rel_path, file_hash
     except Exception as e:
-        print(f"Error processing {file_path}: {e}")
+        logger.error(f"Error processing {file_path}: {e}")
         return None, None
 
 
@@ -774,10 +779,10 @@ def list_command(args):
     """List existing registry files in the specified directory."""
     base_dir = os.path.abspath(args.base_dir)
     if not os.path.exists(base_dir):
-        print(f"Error: Directory {base_dir} does not exist")
+        logger.error(f"Directory {base_dir} does not exist")
         return
 
-    print(f"Scanning for registry files in: {base_dir}")
+    logger.info(f"Scanning for registry files in: {base_dir}")
 
     # Find all embeddings_*.txt and landmasks_*.txt files
     registry_files = []
@@ -797,23 +802,23 @@ def list_command(args):
                 registry_files.append((file, -1))
 
     if not registry_files:
-        print("No registry files found")
+        logger.warning("No registry files found")
         return
 
     # Sort by filename
     registry_files.sort()
 
-    print(f"\nFound {len(registry_files)} registry files:")
+    logger.info(f"\nFound {len(registry_files)} registry files:")
     for filename, count in registry_files:
         if count >= 0:
-            print(f"  - {filename}: {count:,} entries")
+            logger.info(f"  - {filename}: {count:,} entries")
         else:
-            print(f"  - {filename}: (error reading file)")
+            logger.warning(f"  - {filename}: (error reading file)")
 
     # Check for master registry
     master_registry = os.path.join(base_dir, "registry.txt")
     if os.path.exists(master_registry):
-        print("\nMaster registry found: registry.txt")
+        logger.info("\nMaster registry found: registry.txt")
 
 
 def process_grid_checksum(args):
@@ -884,15 +889,15 @@ def generate_embeddings_checksums(base_dir, force=False):
     """
     from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
 
-    print("Generating SHA256 checksums for embeddings...")
+    logger.info("Generating SHA256 checksums for embeddings...")
     if force:
-        print("Force mode enabled - regenerating all checksums")
+        logger.info("Force mode enabled - regenerating all checksums")
     else:
-        print("Using smart update: only recalculating for modified files")
+        logger.info("Using smart update: only recalculating for modified files")
 
     # Get number of CPU cores
     num_cores = multiprocessing.cpu_count()
-    print(f"Using {num_cores} CPU cores for parallel processing")
+    logger.info(f"Using {num_cores} CPU cores for parallel processing")
 
     # Process each year directory
     year_dirs = []
@@ -903,7 +908,7 @@ def generate_embeddings_checksums(base_dir, force=False):
                 year_dirs.append(item)
 
     if not year_dirs:
-        print("No year directories found")
+        logger.warning("No year directories found")
         return 1
 
     total_grids = 0
@@ -918,7 +923,7 @@ def generate_embeddings_checksums(base_dir, force=False):
     ) as progress:
         for year in sorted(year_dirs):
             year_dir = os.path.join(base_dir, year)
-            print(f"\nProcessing year: {year}")
+            logger.info(f"\nProcessing year: {year}")
 
             # Find all grid directories
             grid_dirs = []
@@ -957,17 +962,17 @@ def generate_embeddings_checksums(base_dir, force=False):
                     progress.update(task, advance=1)
             
             if skipped_grids > 0:
-                print(f"  Skipped {skipped_grids} directories with existing SHA256 files")
+                logger.info(f"  Skipped {skipped_grids} directories with existing SHA256 files")
 
     # Report any errors
     if errors:
-        print("\nErrors encountered:")
+        logger.error("\nErrors encountered:")
         for error in errors[:10]:  # Show first 10 errors
-            print(f"  - {error}")
+            logger.error(f"  - {error}")
         if len(errors) > 10:
-            print(f"  ... and {len(errors) - 10} more errors")
+            logger.error(f"  ... and {len(errors) - 10} more errors")
 
-    print(f"\nProcessed {processed_grids}/{total_grids} grid directories")
+    logger.info(f"\nProcessed {processed_grids}/{total_grids} grid directories")
     return 0 if processed_grids > 0 else 1
 
 
@@ -1007,15 +1012,15 @@ def generate_tiff_checksums(base_dir, force=False):
     """
     from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
 
-    print("Generating SHA256 checksums for TIFF files...")
+    logger.info("Generating SHA256 checksums for TIFF files...")
     if force:
-        print("Force mode enabled - regenerating all checksums")
+        logger.info("Force mode enabled - regenerating all checksums")
     else:
-        print("Using smart update: only recalculating if files have been modified")
+        logger.info("Using smart update: only recalculating if files have been modified")
 
     # Get number of CPU cores
     num_cores = multiprocessing.cpu_count()
-    print(f"Using {num_cores} CPU cores for parallel processing")
+    logger.info(f"Using {num_cores} CPU cores for parallel processing")
 
     # Find all .tiff files
     tiff_files = []
@@ -1024,7 +1029,7 @@ def generate_tiff_checksums(base_dir, force=False):
             tiff_files.append(file)
 
     if not tiff_files:
-        print("No TIFF files found")
+        logger.warning("No TIFF files found")
         return 1
 
     # Check if SHA256SUM already exists and force is not enabled
@@ -1038,18 +1043,18 @@ def generate_tiff_checksums(base_dir, force=False):
             tiff_path = os.path.join(base_dir, tiff_file)
             if os.path.getmtime(tiff_path) > sha256sum_mtime:
                 needs_update = True
-                print(f"Found updated file: {tiff_file}")
+                logger.debug(f"Found updated file: {tiff_file}")
                 break
 
         if not needs_update:
-            print("SHA256SUM file is up to date (all TIFF files are older). Skipping.")
-            print("Use --force to regenerate anyway.")
+            logger.info("SHA256SUM file is up to date (all TIFF files are older). Skipping.")
+            logger.info("Use --force to regenerate anyway.")
             return 0
 
     # Sort files for consistent ordering
     tiff_files.sort()
     total_files = len(tiff_files)
-    print(f"Found {total_files} TIFF files")
+    logger.info(f"Found {total_files} TIFF files")
 
     # Process in chunks to avoid command line length limits
     chunk_size = 1000  # Process 1000 files at a time
@@ -1099,9 +1104,9 @@ def generate_tiff_checksums(base_dir, force=False):
             temp_files = [temp_file for _, temp_file in results]
 
         if errors:
-            print("\nErrors encountered during processing:")
+            logger.error("\nErrors encountered during processing:")
             for error in errors:
-                print(f"  - {error}")
+                logger.error(f"  - {error}")
             # Clean up any temporary files
             for temp_file in temp_files:
                 if os.path.exists(temp_file):
@@ -1109,7 +1114,7 @@ def generate_tiff_checksums(base_dir, force=False):
             return 1
 
         # Concatenate all temporary files into final SHA256SUM
-        print("Concatenating results...")
+        logger.info("Concatenating results...")
         with open(sha256sum_file, "w") as outfile:
             for temp_file in temp_files:
                 if os.path.exists(temp_file):
@@ -1121,12 +1126,12 @@ def generate_tiff_checksums(base_dir, force=False):
             if os.path.exists(temp_file):
                 os.remove(temp_file)
 
-        print(f"Successfully generated checksums for {total_files} files")
-        print(f"Checksums written to: {sha256sum_file}")
+        logger.info(f"Successfully generated checksums for {total_files} files")
+        logger.info(f"Checksums written to: {sha256sum_file}")
         return 0
 
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        logger.error(f"Unexpected error: {e}")
         # Clean up any temporary files
         for _, _, _, _, temp_file in chunks:
             if os.path.exists(temp_file):
@@ -1531,7 +1536,7 @@ def hash_command(args):
     """Generate SHA256 checksums for embeddings and TIFF files."""
     base_dir = os.path.abspath(args.base_dir)
     if not os.path.exists(base_dir):
-        print(f"Error: Directory {base_dir} does not exist")
+        logger.error(f"Directory {base_dir} does not exist")
         return 1
 
     force = getattr(args, 'force', False)
@@ -1544,20 +1549,20 @@ def hash_command(args):
 
     # Process embeddings if directory exists
     if os.path.exists(repr_dir):
-        print(f"Processing embeddings directory: {repr_dir}")
+        logger.info(f"Processing embeddings directory: {repr_dir}")
         if generate_embeddings_checksums(repr_dir, force=force) == 0:
             processed_any = True
 
     # Process TIFF files if directory exists
     if os.path.exists(tiles_dir):
-        print(f"Processing TIFF directory: {tiles_dir}")
+        logger.info(f"Processing TIFF directory: {tiles_dir}")
         if generate_tiff_checksums(tiles_dir, force=force) == 0:
             processed_any = True
 
     if not processed_any:
-        print("No data directories found. Expected:")
-        print(f"  - {repr_dir}")
-        print(f"  - {tiles_dir}")
+        logger.error("No data directories found. Expected:")
+        logger.error(f"  - {repr_dir}")
+        logger.error(f"  - {tiles_dir}")
         return 1
 
     return 0
@@ -2123,6 +2128,13 @@ def export_manifests_command(args):
 
 def main():
     """Main entry point for the geotessera-registry CLI tool."""
+    # Configure logging with rich handler
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=[RichHandler(rich_tracebacks=True, show_time=False, show_path=False)]
+    )
+
     parser = argparse.ArgumentParser(
         description="GeoTessera Registry Management Tool - Generate and maintain Pooch registry files",
         formatter_class=argparse.RawDescriptionHelpFormatter,

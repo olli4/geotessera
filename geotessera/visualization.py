@@ -6,10 +6,14 @@ and mosaic creation. Web/tile generation functions are in the web submodule.
 
 from pathlib import Path
 from typing import Union, List, Tuple, Optional, Dict, Callable
+import logging
 
 import numpy as np
 import geopandas as gpd
 import pandas as pd
+
+# Module-level logger
+logger = logging.getLogger(__name__)
 
 
 def analyze_geotiff_coverage(geotiff_paths: List[str]) -> Dict:
@@ -108,7 +112,7 @@ def analyze_geotiff_coverage(geotiff_paths: List[str]) -> Dict:
             )
 
         except Exception as e:
-            print(f"Warning: Failed to read {path}: {e}")
+            logger.warning(f"Failed to read {path}: {e}")
             continue
 
     # Convert sets to lists for JSON serialization
@@ -190,7 +194,7 @@ def visualize_global_coverage(
     world = None
     if show_countries:
         if not progress_callback:
-            print("Loading world map data...")
+            logger.info("Loading world map data...")
         world = gpd.read_file(geodatasets.get_path("naturalearth.land"))
         
         # Clip world data to region if needed before plotting
@@ -269,7 +273,7 @@ def visualize_global_coverage(
                 title += " (Region View)"
 
     if not progress_callback:
-        print(f"Found {len(tiles)} tiles to visualize")
+        logger.info(f"Found {len(tiles)} tiles to visualize")
 
     # Calculate figure dimensions
     if progress_callback:
@@ -369,7 +373,7 @@ def visualize_global_coverage(
     if region_file and progress_callback:
         progress_callback(77, 100, "Adding region overlay...")
     elif region_file:
-        print("Adding region overlay...")
+        logger.info("Adding region overlay...")
     
     if region_file:
         try:
@@ -381,7 +385,7 @@ def visualize_global_coverage(
             if progress_callback:
                 progress_callback(77, 100, f"Warning: Could not load region file: {e}")
             else:
-                print(f"Warning: Could not load region file: {e}")
+                logger.warning(f"Could not load region file: {e}")
 
     # Add grid
     ax.grid(True, alpha=0.3, linestyle="--")
@@ -455,7 +459,7 @@ def visualize_global_coverage(
     if progress_callback:
         progress_callback(100, 100, "Done!")
     else:
-        print(f"Coverage map saved to: {output_path}")
+        logger.info(f"Coverage map saved to: {output_path}")
     return output_path
 
 
@@ -695,7 +699,7 @@ def create_pca_mosaic(
     
     # Combine all pixels from all tiles
     combined_pixels = np.vstack(all_pixels)
-    print(f"Combined data shape: {combined_pixels.shape}")
+    logger.info(f"Combined data shape: {combined_pixels.shape}")
     
     # Standardize the combined data
     scaler = StandardScaler()
@@ -707,7 +711,7 @@ def create_pca_mosaic(
     
     explained_variance = pca.explained_variance_ratio_
     total_variance = explained_variance.sum()
-    print(f"PCA explained variance: {explained_variance[:3]} (total: {total_variance:.3f})")
+    logger.info(f"PCA explained variance: {explained_variance[:3]} (total: {total_variance:.3f})")
     
     # Step 3: Split PCA results back into tiles and create temporary GeoTIFFs
     if progress_callback:
@@ -729,7 +733,7 @@ def create_pca_mosaic(
             p_low = np.percentile(component_data, percentile_range[0])
             p_high = np.percentile(component_data, percentile_range[1])
             component_scales.append((p_low, p_high))
-            print(f"PC{j+1} percentile scaling: [{p_low:.2f}, {p_high:.2f}]")
+            logger.info(f"PC{j+1} percentile scaling: [{p_low:.2f}, {p_high:.2f}]")
     
     elif balance_method == "histogram":
         # Apply histogram equalization to the combined PCA data first
@@ -756,7 +760,7 @@ def create_pca_mosaic(
             new_min = combined_pca[:, j].min()
             new_max = combined_pca[:, j].max()
             component_scales.append((new_min, new_max))
-            print(f"PC{j+1} histogram equalized: [{new_min:.2f}, {new_max:.2f}]")
+            logger.info(f"PC{j+1} histogram equalized: [{new_min:.2f}, {new_max:.2f}]")
     
     elif balance_method == "adaptive":
         # Adaptive scaling based on variance
@@ -768,7 +772,7 @@ def create_pca_mosaic(
             p_low = mean - 2.5 * std
             p_high = mean + 2.5 * std
             component_scales.append((p_low, p_high))
-            print(f"PC{j+1} adaptive scaling (μ±2.5σ): [{p_low:.2f}, {p_high:.2f}]")
+            logger.info(f"PC{j+1} adaptive scaling (μ±2.5σ): [{p_low:.2f}, {p_high:.2f}]")
     
     else:
         raise ValueError(f"Unknown balance_method: {balance_method}")

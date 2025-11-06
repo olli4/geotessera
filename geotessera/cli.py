@@ -3,7 +3,7 @@
 Focused on downloading tiles and creating visualizations from the generated GeoTIFFs.
 """
 
-# Will configure pooch logging after imports
+# Will configure logging after imports
 
 import webbrowser
 import threading
@@ -13,12 +13,14 @@ import socketserver
 import tempfile
 import urllib.request
 import urllib.parse
+import logging
 from pathlib import Path
 from typing import Optional, Callable
 from typing_extensions import Annotated
 
 import typer
 from rich.console import Console
+from rich.logging import RichHandler
 from geotessera import __version__
 from rich.progress import Progress, TaskID, BarColumn, TextColumn, TimeRemainingColumn
 from rich.panel import Panel
@@ -2251,6 +2253,17 @@ def version():
 
 def main():
     """Main CLI entry point."""
+    # Configure logging with rich handler
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=[RichHandler(rich_tracebacks=True, show_time=False, show_path=False)]
+    )
+
+    # Optionally reduce logging level for specific noisy libraries
+    # logging.getLogger("urllib3").setLevel(logging.WARNING)
+    # logging.getLogger("matplotlib").setLevel(logging.WARNING)
+
     app()
 
 

@@ -12,6 +12,7 @@ from typing import Optional, Union, List, Tuple, Dict, Iterator, Callable
 import os
 import math
 import re
+import logging
 import numpy as np
 import hashlib
 from urllib.request import urlopen, Request
@@ -447,7 +448,8 @@ class Registry:
         registry_path: Optional[Union[str, Path]] = None,
         registry_dir: Optional[Union[str, Path]] = None,
         landmasks_registry_url: Optional[str] = None,
-        landmasks_registry_path: Optional[Union[str, Path]] = None
+        landmasks_registry_path: Optional[Union[str, Path]] = None,
+        logger: Optional[logging.Logger] = None,
     ):
         """Initialize Registry manager with optimized Parquet registries.
 
@@ -462,8 +464,10 @@ class Registry:
             registry_dir: Directory containing registry.parquet and landmasks.parquet files (alternative to individual paths)
             landmasks_registry_url: URL to download landmasks Parquet registry from (default: remote)
             landmasks_registry_path: Local path to existing landmasks Parquet registry file
+            logger: Optional logger instance. If not provided, creates a new one
         """
         self.version = version
+        self.logger = logger or logging.getLogger(__name__)
 
         # Set up cache directory for Parquet registries only
         if cache_dir:
@@ -513,14 +517,14 @@ class Registry:
 
         if self._registry_path and self._registry_path.exists():
             # Load from local file (no updates check for explicit paths)
-            print(f"Loading registry from local file: {self._registry_path}")
+            self.logger.info(f"Loading registry from local file: {self._registry_path}")
             registry_path = self._registry_path
         else:
             # Use cached version with If-Modified-Since to check for updates
             registry_cache_path = self._registry_cache_dir / "registry.parquet"
 
             if registry_cache_path.exists():
-                print(f"Using cached registry: {registry_cache_path}")
+                self.logger.info(f"Using cached registry: {registry_cache_path}")
 
                 # Validate cached file format before accepting it
                 is_valid_cache = False
@@ -530,48 +534,48 @@ class Registry:
                     if 'geometry' in test_gdf.columns and test_gdf.geometry is not None:
                         is_valid_cache = True
                     else:
-                        print("⚠ Cached registry is in old format (missing geometry column)")
-                        print("  Forcing download of updated GeoParquet format...")
+                        self.logger.warning("Cached registry is in old format (missing geometry column)")
+                        self.logger.info("Forcing download of updated GeoParquet format...")
                 except Exception:
-                    print("⚠ Cached registry is corrupted or in old format")
-                    print("  Forcing download of updated registry...")
+                    self.logger.warning("Cached registry is corrupted or in old format")
+                    self.logger.info("Forcing download of updated registry...")
 
                 # Check for updates using If-Modified-Since (or force download if invalid)
                 try:
                     if not is_valid_cache:
                         # Delete invalid cache to force fresh download
                         registry_cache_path.unlink(missing_ok=True)
-                        print("Downloading updated registry...")
+                        self.logger.info("Downloading updated registry...")
                         result_path = download_file_to_temp(
                             self._registry_url,
                             cache_path=registry_cache_path
                         )
                         registry_path = Path(result_path)
-                        print("✓ Registry downloaded successfully")
+                        self.logger.info("Registry downloaded successfully")
                     else:
                         # Valid cache - check for updates normally
-                        print("Checking for registry updates...")
+                        self.logger.info("Checking for registry updates...")
                         result_path = download_file_to_temp(
                             self._registry_url,
                             cache_path=registry_cache_path
                         )
                         registry_path = Path(result_path)
                         if result_path == str(registry_cache_path):
-                            print("✓ Registry is up to date")
+                            self.logger.info("Registry is up to date")
                         else:
-                            print("✓ Registry updated")
+                            self.logger.info("Registry updated")
                 except Exception as e:
                     # If update check fails, use cached version (only if valid)
                     if is_valid_cache:
-                        print(f"Warning: Could not check for updates: {e}")
-                        print("Using existing cached registry")
+                        self.logger.warning(f"Could not check for updates: {e}")
+                        self.logger.info("Using existing cached registry")
                         registry_path = registry_cache_path
                     else:
                         # Invalid cache and download failed - raise error
                         raise RuntimeError(f"Failed to download registry and no valid cache available: {e}") from e
             else:
                 # Download the registry to cache for the first time
-                print(f"Downloading registry from {self._registry_url}")
+                self.logger.info(f"Downloading registry from {self._registry_url}")
                 try:
                     # Download registry with caching
                     result_path = download_file_to_temp(
@@ -579,7 +583,7 @@ class Registry:
                         cache_path=registry_cache_path
                     )
                     registry_path = Path(result_path)
-                    print("✓ Registry downloaded successfully")
+                    self.logger.info("Registry downloaded successfully")
                 except Exception as e:
                     raise RuntimeError(f"Failed to download registry: {e}") from e
 
@@ -596,7 +600,7 @@ class Registry:
                 "Please regenerate the registry using the latest geotessera-registry scan command."
             )
 
-        print(f"✓ Loaded GeoParquet with {len(self._registry_gdf):,} tiles")
+        self.logger.info(f"Loaded GeoParquet with {len(self._registry_gdf):,} tiles")
 
         # Validate registry structure
         required_columns = {'lat', 'lon', 'year', 'hash', 'file_size'}
@@ -608,17 +612,17 @@ class Registry:
         """Load landmasks Parquet registry from local path or download from remote with If-Modified-Since refresh."""
         if self._landmasks_registry_path and self._landmasks_registry_path.exists():
             # Load from local file (no updates check for explicit paths)
-            print(f"Loading landmasks registry from local file: {self._landmasks_registry_path}")
+            self.logger.info(f"Loading landmasks registry from local file: {self._landmasks_registry_path}")
             self._landmasks_df = pd.read_parquet(self._landmasks_registry_path)
         else:
             # Use cached version with If-Modified-Since to check for updates
             landmasks_cache_path = self._registry_cache_dir / "landmasks.parquet"
 
             if landmasks_cache_path.exists():
-                print(f"Using cached landmasks registry: {landmasks_cache_path}")
+                self.logger.info(f"Using cached landmasks registry: {landmasks_cache_path}")
                 # Check for updates using If-Modified-Since
                 try:
-                    print("Checking for landmasks registry updates...")
+                    self.logger.info("Checking for landmasks registry updates...")
                     result_path = download_file_to_temp(
                         self._landmasks_registry_url,
                         cache_path=landmasks_cache_path
@@ -626,13 +630,13 @@ class Registry:
                     landmasks_path = Path(result_path)
                     self._landmasks_df = pd.read_parquet(landmasks_path)
                     if result_path == str(landmasks_cache_path):
-                        print("✓ Landmasks registry is up to date")
+                        self.logger.info("Landmasks registry is up to date")
                     else:
-                        print("✓ Landmasks registry updated")
+                        self.logger.info("Landmasks registry updated")
                 except Exception as e:
                     # Landmasks are optional, if update check fails use cached version
-                    print(f"Warning: Could not check for landmasks updates: {e}")
-                    print("Using existing cached landmasks registry")
+                    self.logger.warning(f"Could not check for landmasks updates: {e}")
+                    self.logger.info("Using existing cached landmasks registry")
                     try:
                         self._landmasks_df = pd.read_parquet(landmasks_cache_path)
                     except Exception:
@@ -640,7 +644,7 @@ class Registry:
                         return
             else:
                 # Download the landmasks registry to cache for the first time
-                print(f"Downloading landmasks registry from {self._landmasks_registry_url}")
+                self.logger.info(f"Downloading landmasks registry from {self._landmasks_registry_url}")
                 try:
                     # Download landmasks registry with caching
                     result_path = download_file_to_temp(
@@ -649,10 +653,10 @@ class Registry:
                     )
                     landmasks_path = Path(result_path)
                     self._landmasks_df = pd.read_parquet(landmasks_path)
-                    print("✓ Landmasks registry downloaded successfully")
+                    self.logger.info("Landmasks registry downloaded successfully")
                 except Exception as e:
                     # Landmasks are optional, so just warn instead of failing
-                    print(f"Warning: Failed to download landmasks registry: {e}")
+                    self.logger.warning(f"Failed to download landmasks registry: {e}")
                     self._landmasks_df = None
                     return
 
@@ -661,7 +665,7 @@ class Registry:
             required_columns = {'lat', 'lon', 'hash', 'file_size'}
             if not required_columns.issubset(self._landmasks_df.columns):
                 missing = required_columns - set(self._landmasks_df.columns)
-                print(f"Warning: Landmasks registry is missing required columns: {missing}")
+                self.logger.warning(f"Landmasks registry is missing required columns: {missing}")
                 self._landmasks_df = None
 
 
@@ -722,7 +726,7 @@ class Registry:
         tiles_list = list(self.iter_tiles_in_region(bounds, year))
 
         if tiles_list:
-            print(f"Found {len(tiles_list)} tiles for region in year {year}")
+            self.logger.info(f"Found {len(tiles_list)} tiles for region in year {year}")
 
         return tiles_list
 
