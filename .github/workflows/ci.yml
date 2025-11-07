@@ -37,3 +37,6 @@ jobs:
 
       - name: Build
         run: uv sync --locked --all-extras --dev
+
+      - name: Test
+        run: uv run cram tests/cli.t
