@@ -8,6 +8,7 @@ updates, and generation of a master registry index.
 """
 
 import os
+import sys
 import hashlib
 import argparse
 import subprocess
@@ -35,6 +36,14 @@ from rich.progress import (
 
 # Module-level logger
 logger = logging.getLogger(__name__)
+
+# Detect dumb terminal for plain output
+def is_dumb_terminal():
+    """Check if terminal is dumb (no formatting support) or output is piped."""
+    if not sys.stdout.isatty():
+        return True
+    term = os.environ.get('TERM', '').lower()
+    return term in ('dumb', 'unknown', '')
 
 from .registry import (
     block_from_world,
@@ -2129,10 +2138,12 @@ def export_manifests_command(args):
 def main():
     """Main entry point for the geotessera-registry CLI tool."""
     # Configure logging with rich handler
+    # Disable rich formatting in dumb terminals
+    use_rich = not is_dumb_terminal()
     logging.basicConfig(
         level=logging.INFO,
         format="%(message)s",
-        handlers=[RichHandler(rich_tracebacks=True, show_time=False, show_path=False)]
+        handlers=[RichHandler(rich_tracebacks=True, show_time=False, show_path=False)] if use_rich else [logging.StreamHandler()]
     )
 
     parser = argparse.ArgumentParser(

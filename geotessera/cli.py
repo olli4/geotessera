@@ -14,6 +14,8 @@ import tempfile
 import urllib.request
 import urllib.parse
 import logging
+import sys
+import os
 from pathlib import Path
 from typing import Optional, Callable
 from typing_extensions import Annotated
@@ -21,6 +23,7 @@ from typing_extensions import Annotated
 import typer
 from rich.console import Console
 from rich.logging import RichHandler
+from rich.box import SIMPLE, ROUNDED
 from geotessera import __version__
 from rich.progress import Progress, TaskID, BarColumn, TextColumn, TimeRemainingColumn
 from rich.panel import Panel
@@ -119,10 +122,130 @@ app = typer.Typer(
     rich_markup_mode="rich",
 )
 
-console = Console()
+# Detect dumb terminal for plain output
+def is_dumb_terminal():
+    """Check if terminal is dumb (no formatting support) or output is piped."""
+    if not sys.stdout.isatty():
+        return True
+    term = os.environ.get('TERM', '').lower()
+    return term in ('dumb', 'unknown', '')
+
+# Configure console for dumb terminals
+_is_dumb = is_dumb_terminal()
+console = Console(
+    force_terminal=not _is_dumb,
+    force_interactive=not _is_dumb,
+    emoji=not _is_dumb,  # Disable emoji in dumb terminals
+    markup=not _is_dumb,  # Disable markup in dumb terminals
+    highlight=not _is_dumb,  # Disable syntax highlighting in dumb terminals
+)
+
+# Helper to conditionally add emoji based on terminal type
+def emoji(text):
+    """Return emoji text for smart terminals, empty string for dumb terminals.
+
+    Args:
+        text: Emoji character(s) to display
+
+    Returns:
+        The emoji text if smart terminal, empty string if dumb terminal
+    """
+    return text if not _is_dumb else ""
 
 
+# Helper to print content with proper formatting for terminal type
+def smart_print(content):
+    """Print content appropriately for terminal capabilities.
 
+    Args:
+        content: Content to print (can be Table, string, etc.)
+    """
+    if _is_dumb:
+        # Dumb terminal: use console.print to avoid rich markup but still render tables
+        console.print(content)
+    else:
+        # Smart terminal: use rprint for full rich formatting
+        rprint(content)
+
+# Helper to create tables with appropriate settings for dumb terminals
+def create_table(show_header=True, header_style=None, box=None, **kwargs):
+    """Create a Rich Table with appropriate settings for terminal capabilities.
+
+    Args:
+        show_header: Whether to show table header (default: True)
+        header_style: Style for header (default: None)
+        box: Box style override. If None, automatically determined based on terminal.
+        **kwargs: Additional arguments passed to Table constructor
+
+    Returns:
+        Configured Rich Table instance
+    """
+    if _is_dumb:
+        # Dumb terminal: no box, no edges, minimal padding, simple output
+        # Remove padding from kwargs if present to avoid conflict
+        kwargs.pop('padding', None)
+        return Table(
+            show_header=show_header,
+            header_style=None,  # No styling in dumb terminals
+            box=None,
+            safe_box=True,
+            show_edge=False,
+            padding=(0, 1),  # Minimal padding: 0 vertical, 1 horizontal space
+            collapse_padding=True,  # Collapse padding for cleaner output
+            **kwargs
+        )
+    else:
+        # Smart terminal: use rounded box if not specified
+        actual_box = box if box is not None else ROUNDED
+        return Table(
+            show_header=show_header,
+            header_style=header_style,
+            box=actual_box,
+            **kwargs
+        )
+
+
+def create_panel(content, title=None, border_style=None):
+    """Return content directly without panel wrapper.
+
+    Args:
+        content: Content to display (table, text, etc.)
+        title: Panel title (ignored)
+        border_style: Panel border style (ignored)
+
+    Returns:
+        Content without panel wrapper (tables display well on their own)
+    """
+    # Don't nest tables in panels - tables look good on their own
+    return content
+
+
+def create_progress(*args, **kwargs):
+    """Create a Rich Progress instance with appropriate settings for terminal capabilities.
+
+    Args:
+        *args: Column definitions for progress bar
+        **kwargs: Additional arguments passed to Progress constructor
+
+    Returns:
+        Configured Rich Progress instance
+    """
+    # If console not specified, use our configured console
+    if 'console' not in kwargs:
+        kwargs['console'] = console
+
+    if _is_dumb:
+        # Dumb terminal: disable progress bar, just show text updates
+        # Filter out BarColumn and TimeRemainingColumn which use box characters
+        filtered_args = []
+        for arg in args:
+            # Skip BarColumn and TimeRemainingColumn in dumb terminals
+            if not isinstance(arg, (BarColumn, TimeRemainingColumn)):
+                filtered_args.append(arg)
+        return Progress(*filtered_args, **kwargs)
+    else:
+        # Smart terminal: use all columns as provided
+        return Progress(*args, **kwargs)
 
 
 def create_progress_callback(progress: Progress, task_id: TaskID) -> Callable:
@@ -199,7 +322,7 @@ def info(
         coverage = {
             "total_files": len(tiles),
             "years": sorted(list(set(str(t.year) for t in tiles))),
-            "crs": list(set(str(t.crs) for t in tiles)),
+            "crs": sorted(list(set(str(t.crs) for t in tiles))),
             "band_counts": {},
             "bounds": {
                 "min_lon": float("inf"),
@@ -234,14 +357,14 @@ def info(
                 })
 
         # Create analysis table
-        analysis_table = Table(show_header=False, box=None)
+        analysis_table = create_table(show_header=False, box=None)
         analysis_table.add_row("Total tiles:", str(coverage["total_files"]))
         analysis_table.add_row("Format:", coverage["format"].upper())
         analysis_table.add_row("Years:", ", ".join(coverage["years"]))
         analysis_table.add_row("CRS:", ", ".join(coverage["crs"]))
 
         rprint(
-            Panel(
+            create_panel(
                 analysis_table,
                 title="[bold]📊 Tile Analysis[/bold]",
                 border_style="blue",
@@ -250,7 +373,7 @@ def info(
 
         bounds = coverage["bounds"]
 
-        bounds_table = Table(show_header=False, box=None)
+        bounds_table = create_table(show_header=False, box=None)
         bounds_table.add_row(
             "Longitude:", f"{bounds['min_lon']:.6f} to {bounds['max_lon']:.6f}"
         )
@@ -259,12 +382,12 @@ def info(
         )
 
         rprint(
-            Panel(
+            create_panel(
                 bounds_table, title="[bold]🗺️ Bounding Box[/bold]", border_style="green"
             )
         )
 
-        bands_table = Table(show_header=True, header_style="bold blue")
+        bands_table = create_table(show_header=True, header_style="bold blue")
         bands_table.add_column("Band Count")
         bands_table.add_column("Files", justify="right")
 
@@ -272,7 +395,7 @@ def info(
             bands_table.add_row(f"{bands_count} bands", str(count))
 
         rprint(
-            Panel(
+            create_panel(
                 bands_table,
                 title="[bold]🎵 Band Information[/bold]",
                 border_style="cyan",
@@ -280,7 +403,7 @@ def info(
         )
 
         if verbose:
-            tiles_table = Table(show_header=True, header_style="bold blue")
+            tiles_table = create_table(show_header=True, header_style="bold blue")
             tiles_table.add_column("Filename")
             tiles_table.add_column("Coordinates")
             tiles_table.add_column("Bands", justify="right")
@@ -293,7 +416,7 @@ def info(
                 )
 
             rprint(
-                Panel(
+                create_panel(
                     tiles_table,
                     title="[bold]📁 First 10 Tiles[/bold]",
                     border_style="yellow",
@@ -311,7 +434,7 @@ def info(
         # Count total landmasks using fast pandas operations
         total_landmasks = gt.registry.get_landmask_count()
 
-        info_table = Table(show_header=False, box=None)
+        info_table = create_table(show_header=False, box=None)
         info_table.add_row("Version:", gt.version)
         info_table.add_row("Available years:", ", ".join(map(str, years)))
 
@@ -323,7 +446,7 @@ def info(
         info_table.add_row("Total landmasks:", f"{total_landmasks:,}")
 
         rprint(
-            Panel(
+            create_panel(
                 info_table,
                 title=f"[bold]🌍 GeoTessera v{__version__} Library Info[/bold]",
                 border_style="blue",
@@ -452,17 +575,16 @@ def coverage(
             raise typer.Exit(1)
     elif country:
         # Create progress bar for country data download
-        with Progress(
+        with create_progress(
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TextColumn("•"),
             TextColumn("[dim]{task.fields[status]}", justify="left"),
             TimeRemainingColumn(),
-            console=console,
         ) as progress:
             country_task = progress.add_task(
-                "🌍 Loading country data...", total=100, status="Checking cache..."
+                f"{emoji('🌍 ')}Loading country data...", total=100, status="Checking cache..."
             )
 
             def country_progress_callback(current: int, total: int, status: str = None):
@@ -514,17 +636,16 @@ def coverage(
 
     # Generate coverage map
     try:
-        with Progress(
+        with create_progress(
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TextColumn("•"),
             TextColumn("[dim]{task.fields[status]}", justify="left"),
             TimeRemainingColumn(),
-            console=console,
         ) as progress:
             task = progress.add_task(
-                "🔄 Generating coverage map...", total=100, status="Starting..."
+                f"{emoji('🔄 ')}Generating coverage map...", total=100, status="Starting..."
             )
 
             if verbose:
@@ -557,7 +678,7 @@ def coverage(
                 region_file=region_file_to_use,
             )
 
-        rprint(f"[green]✅ Coverage map saved to: {output_path}[/green]")
+        rprint(f"[green]{emoji('✅ ')}Coverage map saved to: {output_path}[/green]")
         
         # Show next steps hint
         if region_file:
@@ -607,9 +728,9 @@ def coverage(
             with open(globe_html_path, 'w') as f:
                 f.write(_get_globe_html_template())
 
-            rprint(f"[green]✅ Coverage data exported to: {json_path}[/green]")
-            rprint(f"[green]✅ Coverage texture exported to: {texture_path}[/green]")
-            rprint(f"[green]✅ Globe viewer exported to: {globe_html_path}[/green]")
+            rprint(f"[green]{emoji('✅ ')}Coverage data exported to: {json_path}[/green]")
+            rprint(f"[green]{emoji('✅ ')}Coverage texture exported to: {texture_path}[/green]")
+            rprint(f"[green]{emoji('✅ ')}Globe viewer exported to: {globe_html_path}[/green]")
             rprint(f"[dim]   Open {globe_html_path} in a web browser for interactive visualization[/dim]")
 
         except Exception as e:
@@ -789,17 +910,16 @@ def download(
             raise typer.Exit(1)
     elif country:
         # Create progress bar for country data download
-        with Progress(
+        with create_progress(
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TextColumn("•"),
             TextColumn("[dim]{task.fields[status]}", justify="left"),
             TimeRemainingColumn(),
-            console=console,
         ) as progress:
             country_task = progress.add_task(
-                "🌍 Loading country data...", total=100, status="Checking cache..."
+                f"{emoji('🌍 ')}Loading country data...", total=100, status="Checking cache..."
             )
 
             def country_progress_callback(current: int, total: int, status: str = None):
@@ -860,7 +980,7 @@ def download(
         raise typer.Exit(1)
 
     # Display export info
-    info_table = Table(show_header=False, box=None)
+    info_table = create_table(show_header=False, box=None)
     info_table.add_row("Format:", format.upper())
     info_table.add_row("Year:", str(year))
     # Only show output directory when not doing dry-run
@@ -871,7 +991,7 @@ def download(
     info_table.add_row("Dataset version:", dataset_version)
 
     rprint(
-        Panel(
+        create_panel(
             info_table,
             title=f"[bold]GeoTessera v{__version__} - Region of Interest Download[/bold]",
             border_style="blue",
@@ -910,14 +1030,14 @@ def download(
                 raise typer.Exit(1)
 
             # Display results
-            result_table = Table(show_header=False, box=None, padding=(0, 2))
+            result_table = create_table(show_header=False, box=None, padding=(0, 2))
             result_table.add_row("Files to download:", f"[cyan]{total_files:,}[/cyan]")
             result_table.add_row("Total download size:", f"[cyan]{format_bytes(total_bytes)}[/cyan]")
             result_table.add_row("Tiles in region:", f"[cyan]{len(tiles_to_fetch):,}[/cyan]")
             result_table.add_row("Year:", f"[cyan]{year}[/cyan]")
             result_table.add_row("Format:", f"[cyan]{format.upper()}[/cyan]")
 
-            rprint(Panel(
+            rprint(create_panel(
                 result_table,
                 title="[bold]Dry Run Results[/bold]",
                 border_style="green",
@@ -930,17 +1050,16 @@ def download(
             return
 
         # Export tiles with progress tracking
-        with Progress(
+        with create_progress(
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TextColumn("•"),
             TextColumn("[dim]{task.fields[status]}", justify="left"),
             TimeRemainingColumn(),
-            console=console,
         ) as progress:
             task = progress.add_task(
-                "📥 Downloading tiles...", total=100, status="Starting..."
+                f"{emoji('📥 ')}Downloading tiles...", total=100, status="Starting..."
             )
 
             if format == "tiff":
@@ -954,7 +1073,7 @@ def download(
                 )
 
                 rprint(
-                    f"\n[green]✅ SUCCESS: Exported {len(files)} GeoTIFF files[/green]"
+                    f"\n[green]{emoji('✅ ')}SUCCESS: Exported {len(files)} GeoTIFF files[/green]"
                 )
                 rprint(
                     "   Each file preserves its native UTM projection from landmask tiles"
@@ -1092,7 +1211,7 @@ def download(
 
                 downloaded_size_str = format_bytes(bytes_downloaded) if bytes_downloaded > 0 else "0B"
                 rprint(
-                    f"\n[green]✅ SUCCESS: Downloaded {len(tiles_to_fetch)} tiles ({downloaded_files} files, {downloaded_size_str})[/green]"
+                    f"\n[green]{emoji('✅ ')}SUCCESS: Downloaded {len(tiles_to_fetch)} tiles ({downloaded_files} files, {downloaded_size_str})[/green]"
                 )
                 if skipped_files > 0:
                     rprint(f"   Skipped {skipped_files} existing files (resume capability)")
@@ -1103,8 +1222,8 @@ def download(
                     rprint("   [yellow]Note: Band selection not supported in NPY format (use TIFF format instead)[/yellow]")
 
         if verbose or list_files:
-            rprint("\n[blue]📁 Created files:[/blue]")
-            file_table = Table(show_header=True, header_style="bold blue")
+            rprint(f"\n[blue]{emoji('📁 ')}Created files:[/blue]")
+            file_table = create_table(show_header=True, header_style="bold blue")
             file_table.add_column("#", style="dim", width=3)
             file_table.add_column("Filename")
             file_table.add_column("Size", justify="right")
@@ -1117,7 +1236,7 @@ def download(
             console.print(file_table)
         elif len(files) > 0:
             rprint(
-                "\n[blue]📁 Sample files (use --verbose or --list-files to see all):[/blue]"
+                f"\n[blue]{emoji('📁 ')}Sample files (use --verbose or --list-files to see all):[/blue]"
             )
             for f in files[:3]:
                 file_path = Path(f)
@@ -1127,7 +1246,7 @@ def download(
                 rprint(f"     ... and {len(files) - 3} more files")
 
         # Show spatial information
-        rprint("\n[blue]🗺️  Spatial Information:[/blue]")
+        rprint(f"\n[blue]{emoji('🗺️  ')}Spatial Information:[/blue]")
         if verbose:
             try:
                 import rasterio
@@ -1142,16 +1261,16 @@ def download(
 
         rprint(f"   Output directory: {Path(output).resolve()}")
 
-        tips_table = Table(show_header=False, box=None)
-        tips_table.add_row("• Inspect individual tiles with QGIS, GDAL, or rasterio")
-        tips_table.add_row("• Use 'gdalinfo <filename>' to see projection details")
-        tips_table.add_row("• Process tiles individually or in groups as needed")
+        tips_table = create_table(show_header=False, box=None)
+        tips_table.add_row("Inspect individual tiles with QGIS, GDAL, or rasterio")
+        tips_table.add_row("Use 'gdalinfo <filename>' to see projection details")
+        tips_table.add_row("Process tiles individually or in groups as needed")
         if format == "tiff":
-            tips_table.add_row("• Create PCA visualization:")
+            tips_table.add_row("Create PCA visualization:")
             tips_table.add_row(f"  [cyan]geotessera visualize {output} pca_mosaic.tif[/cyan]")
 
         rprint(
-            Panel(tips_table, title="[bold]💡 Next steps[/bold]", border_style="green")
+            create_panel(tips_table, title="[bold] Next steps[/bold]", border_style="green")
         )
 
     except Exception as e:
@@ -1271,14 +1390,13 @@ def visualize(
     # Create output directory if needed
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    with Progress(
+    with create_progress(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         TextColumn("•"),
         TextColumn("[dim]{task.fields[status]}", justify="left"),
         TimeRemainingColumn(),
-        console=console,
     ) as progress:
         task = progress.add_task(
             f"Creating PCA mosaic ({n_components} components)...", total=5, status="Starting..."
@@ -1399,14 +1517,13 @@ def webmap(
     
     output.mkdir(parents=True, exist_ok=True)
     
-    with Progress(
+    with create_progress(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         TextColumn("•"),
         TextColumn("[dim]{task.fields[status]}", justify="left"),
         TimeRemainingColumn(),
-        console=console,
     ) as progress:
         
         # Step 1: Prepare mosaic for web (reproject if needed)
@@ -1512,7 +1629,7 @@ def webmap(
             raise typer.Exit(1)
     
     # Summary
-    rprint(f"\n[green]✅ Web visualization ready in: {output}[/green]")
+    rprint(f"\n[green]{emoji('✅ ')}Web visualization ready in: {output}[/green]")
     
     # Print status messages from the progress context
     rprint(f"[green]{mosaic_status}[/green]")
@@ -1658,7 +1775,7 @@ def serve(
         # Give server a moment to start
         time.sleep(0.5)
 
-        rprint(f"[green]✅ Web server running at: http://localhost:{port}/[/green]")
+        rprint(f"[green]{emoji('✅ ')}Web server running at: http://localhost:{port}/[/green]")
 
         if open_browser:
             rprint(f"[blue]Opening browser: {browser_url}[/blue]")
@@ -2254,10 +2371,12 @@ def version():
 def main():
     """Main CLI entry point."""
     # Configure logging with rich handler
+    # Disable rich formatting in dumb terminals
+    use_rich = not is_dumb_terminal()
     logging.basicConfig(
         level=logging.INFO,
         format="%(message)s",
-        handlers=[RichHandler(rich_tracebacks=True, show_time=False, show_path=False)]
+        handlers=[RichHandler(rich_tracebacks=True, show_time=False, show_path=False, console=console)] if use_rich else [logging.StreamHandler()]
     )
 
     # Optionally reduce logging level for specific noisy libraries
