@@ -88,12 +88,12 @@ Download a single tile in TIFF format to a temporary directory:
   >   --dataset-version v1 2>&1 | grep -E 'SUCCESS' | sed 's/ *$//'
   SUCCESS: Exported 4 GeoTIFF files
 
-Verify TIFF files were created:
+Verify TIFF files were created in the registry structure:
 
-  $ [ -n "$(ls "$TESTDIR/uk_tiles_tiff"/*.tif 2>/dev/null)" ] && echo "TIFF files created"
+  $ [ -n "$(find "$TESTDIR/uk_tiles_tiff/global_0.1_degree_representation/2024" -name "*.tif*" 2>/dev/null)" ] && echo "TIFF files created"
   TIFF files created
 
-  $ ls "$TESTDIR/uk_tiles_tiff" | wc -l | tr -d ' '
+  $ find "$TESTDIR/uk_tiles_tiff/global_0.1_degree_representation/2024" -name "*.tif*" | wc -l | tr -d ' '
   4
 
 Test: Download Single UK Tile (NPY format)
@@ -111,24 +111,24 @@ Download the same tile in NPY format (quantized arrays with scales):
 
 Verify NPY directory structure was created:
 
-  $ test -d "$TESTDIR/uk_tiles_npy/embeddings/2024" && echo "Embeddings directory created"
+  $ test -d "$TESTDIR/uk_tiles_npy/global_0.1_degree_representation/2024" && echo "Embeddings directory created"
   Embeddings directory created
 
-  $ test -d "$TESTDIR/uk_tiles_npy/landmasks" && echo "Landmasks directory created"
+  $ test -d "$TESTDIR/uk_tiles_npy/global_0.1_degree_tiff_all" && echo "Landmasks directory created"
   Landmasks directory created
 
-Verify NPY files exist:
+Verify NPY files exist in grid subdirectories:
 
-  $ [ -n "$(ls "$TESTDIR/uk_tiles_npy/embeddings/2024"/grid_*.npy 2>/dev/null)" ] && echo "Embedding NPY files created"
+  $ [ -n "$(find "$TESTDIR/uk_tiles_npy/global_0.1_degree_representation/2024" -name "grid_*.npy" ! -name "*_scales.npy" 2>/dev/null)" ] && echo "Embedding NPY files created"
   Embedding NPY files created
 
-  $ ls "$TESTDIR/uk_tiles_npy/embeddings/2024" | wc -l | tr -d ' '
+  $ find "$TESTDIR/uk_tiles_npy/global_0.1_degree_representation/2024" -name "*.npy" | wc -l | tr -d ' '
   8
 
-  $ [ -n "$(ls "$TESTDIR/uk_tiles_npy/embeddings/2024"/grid_*_scales.npy 2>/dev/null)" ] && echo "Scales NPY files created"
+  $ [ -n "$(find "$TESTDIR/uk_tiles_npy/global_0.1_degree_representation/2024" -name "*_scales.npy" 2>/dev/null)" ] && echo "Scales NPY files created"
   Scales NPY files created
 
-  $ [ -n "$(ls "$TESTDIR/uk_tiles_npy/landmasks"/landmask_*.tif 2>/dev/null)" ] && echo "Landmask TIFF files created"
+  $ [ -n "$(find "$TESTDIR/uk_tiles_npy/global_0.1_degree_tiff_all" -name "*.tif*" 2>/dev/null)" ] && echo "Landmask TIFF files created"
   Landmask TIFF files created
 
 Test: Info Command on Downloaded TIFF Tiles
