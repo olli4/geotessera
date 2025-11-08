@@ -12,7 +12,7 @@ import logging
 import numpy as np
 import geopandas as gpd
 
-from .registry import Registry, EMBEDDINGS_DIR_NAME, LANDMASKS_DIR_NAME, tile_to_landmask_filename
+from .registry import Registry, EMBEDDINGS_DIR_NAME, LANDMASKS_DIR_NAME, tile_to_landmask_filename, tile_to_geotiff_path
 
 try:
     import importlib.metadata
@@ -1584,14 +1584,15 @@ class GeoTessera:
 
         # Sequential GeoTIFF writing
         for i, (year, tile_lon, tile_lat, embedding, crs, transform) in enumerate(tiles):
-            # Create filename matching remote grid naming convention (with year)
-            filename = f"grid_{tile_lon:.2f}_{tile_lat:.2f}_{year}.tiff"
-            output_path = output_dir / filename
+            # Use centralized path construction from registry
+            geotiff_rel_path = tile_to_geotiff_path(tile_lon, tile_lat, year)
+            output_path = output_dir / EMBEDDINGS_DIR_NAME / geotiff_rel_path
+            output_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Update progress to show we're starting this file
             if progress_callback:
                 export_progress = int(50 + (i / total_tiles) * 50)
-                progress_callback(export_progress, 100, f"Creating {filename}...")
+                progress_callback(export_progress, 100, f"Creating {output_path.name}...")
 
             # Select bands
             if bands is not None:
@@ -1649,7 +1650,7 @@ class GeoTessera:
                 # Phase 2: Exporting GeoTIFFs (50-100% of total progress)
                 export_progress = int(50 + ((i + 1) / total_tiles) * 50)
                 progress_callback(
-                    export_progress, 100, f"Exported {filename} ({i + 1}/{total_tiles})"
+                    export_progress, 100, f"Exported {output_path.name} ({i + 1}/{total_tiles})"
                 )
 
         if progress_callback:

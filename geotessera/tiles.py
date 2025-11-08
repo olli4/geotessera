@@ -267,12 +267,15 @@ def discover_tiles(directory: Path) -> List[Tile]:
     Returns:
         List of Tile objects with spatial metadata loaded, sorted by (year, lat, lon)
     """
-    # Check for NPY format first
+    # Check for NPY format first by looking for .npy files in embeddings directory
     embeddings_dir = directory / EMBEDDINGS_DIR_NAME
     if embeddings_dir.exists() and embeddings_dir.is_dir():
-        return discover_npy_tiles(directory)
+        # Check if there are any .npy files (not just _scales.npy)
+        npy_files = [f for f in embeddings_dir.rglob("*.npy") if not f.name.endswith("_scales.npy")]
+        if npy_files:
+            return discover_npy_tiles(directory)
 
-    # Default to GeoTIFF discovery
+    # Default to GeoTIFF discovery (will search recursively)
     return discover_geotiff_tiles(directory)
 
 
@@ -325,7 +328,7 @@ def discover_geotiff_tiles(directory: Path) -> List[Tile]:
     tiles = []
 
     for pattern in ["*.tif", "*.tiff"]:
-        for geotiff_file in directory.glob(pattern):
+        for geotiff_file in directory.rglob(pattern):
             try:
                 tile = Tile.from_geotiff(geotiff_file)
                 tiles.append(tile)

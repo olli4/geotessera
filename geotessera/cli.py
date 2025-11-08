@@ -25,7 +25,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.box import ROUNDED
 from geotessera import __version__
-from geotessera.registry import EMBEDDINGS_DIR_NAME, LANDMASKS_DIR_NAME, tile_to_landmask_filename
+from geotessera.registry import EMBEDDINGS_DIR_NAME, LANDMASKS_DIR_NAME, tile_to_landmask_filename, tile_to_embedding_paths
 from rich.progress import Progress, TaskID, BarColumn, TextColumn, TimeRemainingColumn
 from rich.table import Table
 from rich import print as rprint
@@ -315,7 +315,7 @@ def info(
             rprint(f"[red]No tiles found in {input_path}[/red]")
             rprint("[yellow]Supported formats:[/yellow]")
             rprint("  - GeoTIFF: *.tif/*.tiff files")
-            rprint("  - NPY: global_0.1_degree_representation/{year}/*.npy + global_0.1_degree_tiff_all/*.tiff structure")
+            rprint("  - NPY: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/*.npy structure")
             raise typer.Exit(1)
 
         # Build coverage info from tiles
@@ -831,11 +831,12 @@ def download(
     - tiff: Georeferenced GeoTIFF files with proper CRS metadata (default)
     - npy: Quantized numpy arrays with separate scales files and landmask TIFFs
 
-    For GeoTIFF format, each tile preserves the original UTM coordinate system.
+    For GeoTIFF format, tiles are organized in the registry structure:
+    - global_0.1_degree_representation/{year}/grid_{lon:.2f}_{lat:.2f}/grid_{lon:.2f}_{lat:.2f}_{year}.tiff
 
     For numpy format, downloads quantized embeddings in the registry structure:
-    - global_0.1_degree_representation/{year}/grid_{lon:.2f}_{lat:.2f}.npy (quantized embedding data)
-    - global_0.1_degree_representation/{year}/grid_{lon:.2f}_{lat:.2f}_scales.npy (dequantization scales)
+    - global_0.1_degree_representation/{year}/grid_{lon:.2f}_{lat:.2f}/grid_{lon:.2f}_{lat:.2f}.npy
+    - global_0.1_degree_representation/{year}/grid_{lon:.2f}_{lat:.2f}/grid_{lon:.2f}_{lat:.2f}_scales.npy
     - global_0.1_degree_tiff_all/grid_{lon:.2f}_{lat:.2f}.tiff (landmask TIFF)
 
     The NPY format supports resume - if a download is interrupted, running the command
@@ -1133,8 +1134,9 @@ def download(
                 # Process each tile
                 for idx, (tile_year, tile_lon, tile_lat) in enumerate(tiles_to_fetch):
                     # Set up final paths with structure mirroring remote
-                    embedding_final = output / EMBEDDINGS_DIR_NAME / str(tile_year) / f"grid_{tile_lon:.2f}_{tile_lat:.2f}.npy"
-                    scales_final = output / EMBEDDINGS_DIR_NAME / str(tile_year) / f"grid_{tile_lon:.2f}_{tile_lat:.2f}_scales.npy"
+                    embedding_rel, scales_rel = tile_to_embedding_paths(tile_lon, tile_lat, tile_year)
+                    embedding_final = output / EMBEDDINGS_DIR_NAME / embedding_rel
+                    scales_final = output / EMBEDDINGS_DIR_NAME / scales_rel
                     landmask_final = output / LANDMASKS_DIR_NAME / tile_to_landmask_filename(tile_lon, tile_lat)
 
                     # Create cache keys for tracking
@@ -1216,7 +1218,7 @@ def download(
                 if skipped_files > 0:
                     rprint(f"   Skipped {skipped_files} existing files (resume capability)")
                 rprint("   Format: Quantized embeddings with separate scales files")
-                rprint("   Structure: global_0.1_degree_representation/{year}/grid_{lon}_{lat}.npy and _scales.npy")
+                rprint("   Structure: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/grid_{lon}_{lat}.npy")
                 rprint("             global_0.1_degree_tiff_all/grid_{lon}_{lat}.tiff")
                 if bands_list:
                     rprint("   [yellow]Note: Band selection not supported in NPY format (use TIFF format instead)[/yellow]")
@@ -1318,7 +1320,7 @@ def visualize(
 
     Supports two input formats:
     - GeoTIFF format: Directory containing *.tif/*.tiff files
-    - NPY format: Directory with global_0.1_degree_representation/{year}/*.npy and global_0.1_degree_tiff_all/*.tiff structure
+    - NPY format: Directory with global_0.1_degree_representation/{year}/grid_{lon}_{lat}/*.npy structure
 
     The first 3 principal components are mapped to RGB channels for visualization.
     Additional components can be computed for research/analysis purposes.
@@ -1382,7 +1384,7 @@ def visualize(
         rprint(f"[red]No tiles found in {input_path}[/red]")
         rprint("[yellow]Expected either:[/yellow]")
         rprint("  - GeoTIFF files: *.tif/*.tiff in the directory")
-        rprint("  - NPY format: global_0.1_degree_representation/{year}/*.npy and global_0.1_degree_tiff_all/*.tiff structure")
+        rprint("  - NPY format: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/*.npy structure")
         raise typer.Exit(1)
 
     rprint(f"[blue]Found {len(tiles)} tiles ({tiles[0]._format} format)[/blue]")
