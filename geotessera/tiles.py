@@ -385,31 +385,3 @@ def _parse_geotiff_filename(path: Path) -> Tuple[float, float, int]:
     match = re.match(r"grid_(-?\d+\.\d+)_(-?\d+\.\d+)_(\d{4})\.tiff?", path.name)
     if match:
         return float(match.group(1)), float(match.group(2)), int(match.group(3))
-
-    # Try pattern: tessera_2024_lat51.45_lon-0.15.tif
-    match = re.match(r"tessera_(\d{4})_lat(-?\d+\.\d+)_lon(-?\d+\.\d+)\.tiff?", path.name)
-    if match:
-        year = int(match.group(1))
-        lat = float(match.group(2))
-        lon = float(match.group(3))
-        # Round to nearest 0.05 grid
-        from geotessera.registry import tile_from_world
-        lon, lat = tile_from_world(lon, lat)
-        return lon, lat, year
-
-    # Fallback: extract from rasterio metadata
-    import rasterio
-    with rasterio.open(path) as src:
-        # Try to get from bounds (center point)
-        bounds = src.bounds
-        lon = (bounds.left + bounds.right) / 2
-        lat = (bounds.bottom + bounds.top) / 2
-
-        # Round to nearest 0.05 grid
-        from geotessera.registry import tile_from_world
-        lon, lat = tile_from_world(lon, lat)
-
-        # Try to get year from tags or default to 2024
-        year = int(src.tags().get('year', 2024))
-
-        return lon, lat, year
