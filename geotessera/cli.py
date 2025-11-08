@@ -23,11 +23,10 @@ from typing_extensions import Annotated
 import typer
 from rich.console import Console
 from rich.logging import RichHandler
-from rich.box import SIMPLE, ROUNDED
+from rich.box import ROUNDED
 from geotessera import __version__
 from geotessera.registry import EMBEDDINGS_DIR_NAME, LANDMASKS_DIR_NAME, tile_to_landmask_filename
 from rich.progress import Progress, TaskID, BarColumn, TextColumn, TimeRemainingColumn
-from rich.panel import Panel
 from rich.table import Table
 from rich import print as rprint
 
@@ -541,7 +540,7 @@ def coverage(
         geotessera coverage --region-file area.geojson --tile-alpha 0.3 --width 3000
     """
     from .visualization import visualize_global_coverage
-    from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
+    from rich.progress import BarColumn, TextColumn, TimeRemainingColumn
 
     # Process region file or country if provided
     region_bbox = None

@@ -530,7 +530,7 @@ class GeoTessera:
                     error_msg += f"... (and {len(missing_names) - 5} more)"
 
                 error_msg += (
-                    f"\n\nSet auto_download=True to download automatically, or download tiles manually using:\n"
+                    "\n\nSet auto_download=True to download automatically, or download tiles manually using:\n"
                 )
 
                 if bbox:
@@ -612,7 +612,6 @@ class GeoTessera:
             >>> classification_map = predictions.reshape(mosaic.shape[:2])
         """
         try:
-            import rasterio
             from rasterio.merge import merge
             from rasterio.warp import calculate_default_transform, reproject, Resampling
             from rasterio.io import MemoryFile

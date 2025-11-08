@@ -34,6 +34,13 @@ from rich.progress import (
     TaskProgressColumn,
 )
 
+from .registry import (
+    block_from_world,
+    block_to_embeddings_registry_filename,
+    block_to_landmasks_registry_filename,
+    parse_grid_name,
+)
+
 # Module-level logger
 logger = logging.getLogger(__name__)
 
@@ -44,13 +51,6 @@ def is_dumb_terminal():
         return True
     term = os.environ.get('TERM', '').lower()
     return term in ('dumb', 'unknown', '')
-
-from .registry import (
-    block_from_world,
-    block_to_embeddings_registry_filename,
-    block_to_landmasks_registry_filename,
-    parse_grid_name,
-)
 
 
 @dataclass
