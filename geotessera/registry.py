@@ -261,6 +261,10 @@ def tile_to_box(lon: float, lat: float):
 # Base URL for Tessera data downloads
 TESSERA_BASE_URL = "https://dl2.geotessera.org"
 
+# Directory structure constants (mirrors remote structure)
+EMBEDDINGS_DIR_NAME = "global_0.1_degree_representation"  # NPY embeddings and scales
+LANDMASKS_DIR_NAME = "global_0.1_degree_tiff_all"  # Landmask TIFFs
+
 # Note: Default registry URLs are constructed with version in Registry.__init__
 # Format: {TESSERA_BASE_URL}/{version}/registry.parquet
 
@@ -457,8 +461,8 @@ class Registry:
             version: Dataset version identifier
             cache_dir: Optional directory for caching Parquet registries only (not data files)
             embeddings_dir: Optional directory containing pre-downloaded embedding tiles.
-                Expected structure: embeddings/{year}/grid_{lon}_{lat}.npy and _scales.npy,
-                landmasks/landmask_{lon}_{lat}.tif
+                Expected structure: global_0.1_degree_representation/{year}/grid_{lon}_{lat}.npy and _scales.npy,
+                global_0.1_degree_tiff_all/landmask_{lon}_{lat}.tif
             registry_url: URL to download embeddings Parquet registry from (default: remote)
             registry_path: Local path to existing embeddings Parquet registry file
             registry_dir: Directory containing registry.parquet and landmasks.parquet files (alternative to individual paths)
@@ -683,6 +687,11 @@ class Registry:
         - Allows early termination without processing all tiles
         - Leverages GeoPandas built-in R-tree for optimal performance
 
+        Note: Registry stores tiles as Point geometries at their centers, but tiles
+        are 0.1° x 0.1° boxes. The query is expanded by 0.05° (half tile width) in
+        all directions to catch tiles whose boxes intersect the bounds but whose
+        centers fall outside.
+
         Args:
             bounds: Geographic bounds as (min_lon, min_lat, max_lon, max_lat)
             year: Year of embeddings to load
@@ -699,7 +708,15 @@ class Registry:
         """
         min_lon, min_lat, max_lon, max_lat = bounds
 
-        tiles = self._registry_gdf.cx[min_lon:max_lon, min_lat:max_lat]
+        # Expand bounds by half a tile width (0.05°) to catch tiles whose boxes
+        # intersect the query region. Registry stores tiles as Point geometries at
+        # their centers, but tiles are 0.1° x 0.1° boxes, so we need to expand the
+        # query to include tiles whose centers are up to 0.05° outside the bounds.
+        expansion = 0.05
+        tiles = self._registry_gdf.cx[
+            min_lon - expansion:max_lon + expansion,
+            min_lat - expansion:max_lat + expansion
+        ]
 
         tiles = tiles[tiles['year'] == year]
 
@@ -803,7 +820,7 @@ class Registry:
 
         # Check local embeddings_dir first (if set and not refreshing)
         if self._embeddings_dir and not refresh:
-            local_path = self._embeddings_dir / "embeddings" / path
+            local_path = self._embeddings_dir / EMBEDDINGS_DIR_NAME / path
             if local_path.exists():
                 # Use local file, no cleanup needed
                 return str(local_path), False
@@ -822,7 +839,7 @@ class Registry:
                 file_hash = matches.iloc[0]['hash']
 
         # Download the file to a temporary location
-        url = f"{TESSERA_BASE_URL}/{self.version}/global_0.1_degree_representation/{path}"
+        url = f"{TESSERA_BASE_URL}/{self.version}/{EMBEDDINGS_DIR_NAME}/{path}"
         temp_path = download_file_to_temp(url, expected_hash=file_hash, progress_callback=progress_callback)
 
         # Return temp path, caller must cleanup
@@ -859,9 +876,9 @@ class Registry:
                 raise ValueError("Must provide either 'filename' or both (lon, lat)")
             filename = tile_to_landmask_filename(lon, lat)
 
-        # Check local embeddings_dir/landmasks/ first (if set and not refreshing)
+        # Check local embeddings_dir first (if set and not refreshing)
         if self._embeddings_dir and not refresh:
-            local_path = self._embeddings_dir / "landmasks" / filename
+            local_path = self._embeddings_dir / LANDMASKS_DIR_NAME / filename
             if local_path.exists():
                 # Use local file, no cleanup needed
                 return str(local_path), False
@@ -877,7 +894,7 @@ class Registry:
                 file_hash = matches.iloc[0]['hash']
 
         # Download the file to a temporary location
-        url = f"{TESSERA_BASE_URL}/{self.version}/global_0.1_degree_tiff_all/{filename}"
+        url = f"{TESSERA_BASE_URL}/{self.version}/{LANDMASKS_DIR_NAME}/{filename}"
         temp_path = download_file_to_temp(url, expected_hash=file_hash, progress_callback=progress_callback)
 
         # Return temp path, caller must cleanup
@@ -1066,9 +1083,9 @@ class Registry:
         if format_type == "npy":
             # For NPY format: embedding + scales + landmask per tile
             for tile_year, tile_lon, tile_lat in tiles:
-                embedding_final = output_dir / "embeddings" / str(tile_year) / f"grid_{tile_lon:.2f}_{tile_lat:.2f}.npy"
-                scales_final = output_dir / "embeddings" / str(tile_year) / f"grid_{tile_lon:.2f}_{tile_lat:.2f}_scales.npy"
-                landmask_final = output_dir / "landmasks" / f"landmask_{tile_lon:.2f}_{tile_lat:.2f}.tif"
+                embedding_final = output_dir / EMBEDDINGS_DIR_NAME / str(tile_year) / f"grid_{tile_lon:.2f}_{tile_lat:.2f}.npy"
+                scales_final = output_dir / EMBEDDINGS_DIR_NAME / str(tile_year) / f"grid_{tile_lon:.2f}_{tile_lat:.2f}_scales.npy"
+                landmask_final = output_dir / LANDMASKS_DIR_NAME / f"landmask_{tile_lon:.2f}_{tile_lat:.2f}.tif"
 
                 # Create cache keys for tracking file sizes
                 embedding_key = f"embedding_{tile_year}_{tile_lon}_{tile_lat}"

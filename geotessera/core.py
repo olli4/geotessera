@@ -12,7 +12,7 @@ import logging
 import numpy as np
 import geopandas as gpd
 
-from .registry import Registry
+from .registry import Registry, EMBEDDINGS_DIR_NAME, LANDMASKS_DIR_NAME, tile_to_landmask_filename
 
 try:
     import importlib.metadata
@@ -110,12 +110,13 @@ class GeoTessera:
 
                 Expected directory structure:
                     embeddings_dir/
-                    ├── 2024/
-                    │   ├── grid_0.15_52.05.npy
-                    │   ├── grid_0.15_52.05_scales.npy
-                    │   └── ...
-                    └── landmasks/
-                        ├── landmask_0.15_52.05.tif
+                    ├── global_0.1_degree_representation/
+                    │   └── 2024/
+                    │       ├── grid_0.15_52.05.npy
+                    │       ├── grid_0.15_52.05_scales.npy
+                    │       └── ...
+                    └── global_0.1_degree_tiff_all/
+                        ├── grid_0.15_52.05.tiff
                         └── ...
             registry_url: URL to download Parquet registry from (default: remote)
             registry_path: Local path to existing Parquet registry file
@@ -433,6 +434,349 @@ class GeoTessera:
 
         return None
 
+    def _ensure_tiles_available(
+        self,
+        required_coords: set,
+        year: int,
+        auto_download: bool,
+        bbox: Optional[Tuple[float, float, float, float]] = None,
+        progress_callback: Optional[callable] = None,
+        progress_offset: int = 0,
+        progress_total: Optional[int] = None,
+        require_landmask: bool = True,
+    ) -> dict:
+        """Ensure required tiles are available locally, downloading if needed.
+
+        This helper method implements the common pattern of:
+        1. Discovering local tiles and building a map for the specified year
+        2. Checking which tiles from the required set are missing
+        3. Downloading missing tiles if auto_download=True
+        4. Raising an error if auto_download=False and tiles are missing
+
+        Args:
+            required_coords: Set of (lon, lat) tuples for required tiles
+            year: Year of embeddings
+            auto_download: Whether to download missing tiles automatically
+            bbox: Optional bounding box for error messages (min_lon, min_lat, max_lon, max_lat)
+            progress_callback: Optional callback(current, total, status) for progress tracking
+            progress_offset: Offset to add to progress current value
+            progress_total: Total to use in progress callbacks (defaults to len(required_coords))
+            require_landmask: Whether to require landmask file in addition to embedding (default: True)
+
+        Returns:
+            Dictionary mapping (lon, lat) -> Tile object for the requested year
+
+        Raises:
+            FileNotFoundError: If auto_download=False and required tiles are missing
+        """
+        from geotessera.tiles import discover_tiles
+
+        # Discover local tiles and build map for this year
+        local_tiles = discover_tiles(self.embeddings_dir)
+        local_tile_map = {
+            (t.lon, t.lat): t
+            for t in local_tiles
+            if t.year == year
+        }
+
+        # Find missing tiles
+        missing_tiles = []
+        for (tile_lon, tile_lat) in required_coords:
+            tile = local_tile_map.get((tile_lon, tile_lat))
+            if tile is None or not tile.is_available(require_landmask=require_landmask):
+                missing_tiles.append((tile_lon, tile_lat))
+
+        # Handle missing tiles
+        if missing_tiles:
+            if auto_download:
+                self.logger.info(
+                    f"Downloading {len(missing_tiles)} missing tiles to {self.embeddings_dir}"
+                )
+
+                # Download each missing tile
+                for idx, (tile_lon, tile_lat) in enumerate(missing_tiles):
+                    grid_name = f"grid_{tile_lon:.2f}_{tile_lat:.2f}"
+
+                    if progress_callback:
+                        current = progress_offset + idx
+                        total = progress_total or len(required_coords)
+                        progress_callback(
+                            current,
+                            total,
+                            f"Downloading {grid_name} ({idx + 1}/{len(missing_tiles)})"
+                        )
+
+                    success = self.download_tile(tile_lon, tile_lat, year)
+                    if not success:
+                        self.logger.warning(f"Failed to download {grid_name}")
+
+                # Re-discover tiles after downloading
+                local_tiles = discover_tiles(self.embeddings_dir)
+                local_tile_map = {
+                    (t.lon, t.lat): t
+                    for t in local_tiles
+                    if t.year == year
+                }
+            else:
+                # In offline mode, raise error with helpful message
+                missing_names = [f"grid_{lon:.2f}_{lat:.2f}" for lon, lat in missing_tiles]
+
+                # Build helpful error message
+                error_msg = (
+                    f"{len(missing_tiles)} required tiles not found in {self.embeddings_dir}: "
+                    f"{missing_names[:5]}"
+                )
+                if len(missing_names) > 5:
+                    error_msg += f"... (and {len(missing_names) - 5} more)"
+
+                error_msg += (
+                    f"\n\nSet auto_download=True to download automatically, or download tiles manually using:\n"
+                )
+
+                if bbox:
+                    min_lon, min_lat, max_lon, max_lat = bbox
+                    error_msg += (
+                        f"geotessera download --bbox '{min_lon},{min_lat},{max_lon},{max_lat}' "
+                        f"--year {year} --output {self.embeddings_dir}"
+                    )
+                else:
+                    error_msg += (
+                        f"geotessera download --year {year} --output {self.embeddings_dir}"
+                    )
+
+                raise FileNotFoundError(error_msg)
+
+        return local_tile_map
+
+    def fetch_mosaic_for_region(
+        self,
+        bbox: Tuple[float, float, float, float],
+        year: int = 2024,
+        target_crs: str = "EPSG:4326",
+        auto_download: bool = True,
+        progress_callback: Optional[callable] = None,
+    ) -> Tuple[np.ndarray, object, str]:
+        """Fetch and merge all embedding tiles within a bounding box into a single mosaic.
+
+        This method is optimized for dense raster operations like classification, where you
+        need embedding values for every pixel in a region. It:
+        1. Finds all tiles intersecting the bounding box
+        2. Checks embeddings_dir for existing tiles
+        3. Downloads missing tiles if auto_download=True
+        4. Reprojects all tiles to a common CRS
+        5. Merges them into a single seamless mosaic array
+        6. Returns the mosaic with its geospatial transform
+
+        For sparse point sampling (< 1000s of points), use sample_embeddings_at_points() instead.
+
+        Args:
+            bbox: Bounding box as (min_lon, min_lat, max_lon, max_lat) in EPSG:4326
+            year: Year of embeddings to fetch
+            target_crs: Target CRS for the output mosaic (default: "EPSG:4326")
+            auto_download: If True (default), automatically download missing tiles to embeddings_dir.
+                If False, operate in offline mode using only local tiles from embeddings_dir.
+                Set to False for guaranteed offline operation with no network requests.
+            progress_callback: Optional callback(current, total, status) for progress tracking
+
+        Returns:
+            Tuple of (mosaic_array, mosaic_transform, crs):
+            - mosaic_array: numpy array of shape (height, width, 128) with embedding values
+            - mosaic_transform: rasterio Affine transform for the mosaic
+            - crs: Coordinate reference system string (same as target_crs)
+
+        Raises:
+            ValueError: If no tiles found for the specified region/year
+            FileNotFoundError: If auto_download=False and required tiles are missing from embeddings_dir
+            ImportError: If rasterio is not installed
+
+        Examples:
+            >>> from geotessera import GeoTessera
+            >>> gt = GeoTessera(embeddings_dir="./embeddings")
+            >>>
+            >>> # Auto-download mode (default): downloads missing tiles automatically
+            >>> bbox = (0.0, 52.0, 0.2, 52.2)  # (min_lon, min_lat, max_lon, max_lat)
+            >>> mosaic, transform, crs = gt.fetch_mosaic_for_region(bbox, year=2024)
+            >>> print(f"Mosaic shape: {mosaic.shape}")  # e.g., (2000, 2000, 128)
+            >>>
+            >>> # Offline mode: use only pre-downloaded tiles
+            >>> mosaic, transform, crs = gt.fetch_mosaic_for_region(
+            ...     bbox, year=2024, auto_download=False
+            ... )
+            >>>
+            >>> # Use for classification
+            >>> from sklearn.neighbors import KNeighborsClassifier
+            >>> # Train on labeled pixels...
+            >>> # Then classify all pixels in the mosaic
+            >>> pixels = mosaic.reshape(-1, 128)
+            >>> predictions = classifier.predict(pixels)
+            >>> classification_map = predictions.reshape(mosaic.shape[:2])
+        """
+        try:
+            import rasterio
+            from rasterio.merge import merge
+            from rasterio.warp import calculate_default_transform, reproject, Resampling
+            from rasterio.io import MemoryFile
+            from rasterio.transform import array_bounds
+        except ImportError:
+            raise ImportError(
+                "rasterio required for mosaic creation. Install with: pip install rasterio"
+            )
+
+        # Validate bbox
+        min_lon, min_lat, max_lon, max_lat = bbox
+        if not (-180 <= min_lon <= max_lon <= 180):
+            raise ValueError(f"Invalid longitude range: {min_lon} to {max_lon}")
+        if not (-90 <= min_lat <= max_lat <= 90):
+            raise ValueError(f"Invalid latitude range: {min_lat} to {max_lat}")
+
+        # Find tiles in region
+        self.logger.info(f"Finding tiles for region: {bbox}, year: {year}")
+        tiles_needed = self.registry.load_blocks_for_region(bbox, year)
+
+        if not tiles_needed:
+            raise ValueError(
+                f"No embedding tiles found for bbox {bbox} in year {year}. "
+                f"Check data availability with: geotessera info --bbox '{min_lon},{min_lat},{max_lon},{max_lat}'"
+            )
+
+        self.logger.info(f"Found {len(tiles_needed)} tiles needed for mosaic")
+
+        # Extract unique tile coordinates
+        tiles_needed_coords = {(lon, lat) for (y, lon, lat) in tiles_needed}
+
+        # Ensure all required tiles are available (download if needed)
+        local_tile_map = self._ensure_tiles_available(
+            required_coords=tiles_needed_coords,
+            year=year,
+            auto_download=auto_download,
+            bbox=bbox,
+            progress_callback=progress_callback,
+            progress_offset=0,
+            progress_total=len(tiles_needed_coords) + len(tiles_needed_coords) * 2 + 1,
+        )
+
+        # Calculate number of missing tiles for progress tracking
+        # (already downloaded by _ensure_tiles_available if auto_download=True)
+        num_missing = sum(
+            1 for coord in tiles_needed_coords
+            if coord not in local_tile_map or not local_tile_map[coord].is_available()
+        )
+
+        # Track progress for loading + reprojecting + merging
+        total_steps = len(tiles_needed_coords) * 2 + 1  # load+reproject per tile, then merge
+        current_step = num_missing if auto_download else 0
+
+        def update_progress(status: str):
+            nonlocal current_step
+            current_step += 1
+            if progress_callback:
+                progress_callback(current_step, total_steps, status)
+
+        # Load all tiles from embeddings_dir and reproject to target CRS
+        reprojected_memfiles = []
+
+        for (tile_lon, tile_lat) in tiles_needed_coords:
+            # Get Tile object from local storage
+            tile = local_tile_map.get((tile_lon, tile_lat))
+            if tile is None or not tile.is_available():
+                self.logger.warning(f"Tile ({tile_lat:.2f}, {tile_lon:.2f}) not available after download, skipping")
+                continue
+
+            update_progress(f"Loading tile ({tile_lat:.2f}, {tile_lon:.2f})")
+
+            try:
+                # Load embedding from Tile (handles both NPY and GeoTIFF formats)
+                embedding = tile.load_embedding()
+                src_crs = tile.crs
+                src_transform = tile.transform
+
+                # Get source dimensions and bounds
+                src_height, src_width = embedding.shape[:2]
+                src_bounds = array_bounds(src_height, src_width, src_transform)
+
+                # Calculate destination transform and dimensions
+                dst_transform, dst_width, dst_height = calculate_default_transform(
+                    src_crs, target_crs, src_width, src_height, *src_bounds
+                )
+
+                # Ensure dimensions are valid integers
+                if dst_width is None or dst_height is None:
+                    raise ValueError(
+                        f"Failed to calculate dimensions for tile ({tile_lat}, {tile_lon})"
+                    )
+                dst_width = int(dst_width)
+                dst_height = int(dst_height)
+
+                # Create empty array for reprojected data
+                # rasterio expects (channels, height, width) format
+                reprojected_embedding = np.empty(
+                    (embedding.shape[2], dst_height, dst_width), dtype=embedding.dtype
+                )
+
+                # Reproject each channel
+                for band_idx in range(embedding.shape[2]):
+                    reproject(
+                        source=embedding[:, :, band_idx],
+                        destination=reprojected_embedding[band_idx],
+                        src_transform=src_transform,
+                        src_crs=src_crs,
+                        dst_transform=dst_transform,
+                        dst_crs=target_crs,
+                        resampling=Resampling.bilinear,
+                    )
+
+                # Store in memory file for merging
+                memfile = MemoryFile()
+                with memfile.open(
+                    driver="GTiff",
+                    height=dst_height,
+                    width=dst_width,
+                    count=embedding.shape[2],
+                    dtype=embedding.dtype,
+                    crs=target_crs,
+                    transform=dst_transform,
+                ) as dataset:
+                    dataset.write(reprojected_embedding)
+
+                reprojected_memfiles.append(memfile)
+                update_progress(f"Reprojected tile ({tile_lat:.2f}, {tile_lon:.2f})")
+
+            except Exception as e:
+                self.logger.warning(
+                    f"Failed to process tile ({tile_lat:.2f}, {tile_lon:.2f}): {e}"
+                )
+                continue
+
+        if not reprojected_memfiles:
+            raise RuntimeError("No tiles successfully reprojected")
+
+        # Merge all reprojected tiles
+        self.logger.info(f"Merging {len(reprojected_memfiles)} reprojected tiles...")
+        datasets = []
+        try:
+            for memfile in reprojected_memfiles:
+                datasets.append(memfile.open())
+
+            merged_array, mosaic_transform = merge(datasets)
+
+            # Convert from (channels, height, width) to (height, width, channels)
+            mosaic_array = np.transpose(merged_array, (1, 2, 0))
+
+            update_progress("Mosaic merge complete")
+
+        finally:
+            # Clean up
+            for dataset in datasets:
+                dataset.close()
+            for memfile in reprojected_memfiles:
+                memfile.close()
+
+        self.logger.info(
+            f"Mosaic created: shape={mosaic_array.shape}, crs={target_crs}"
+        )
+
+        return mosaic_array, mosaic_transform, target_crs
+
     def sample_embeddings_at_points(
         self,
         points: Union[List[Tuple[float, float]], Dict, "gpd.GeoDataFrame"],
@@ -523,58 +867,21 @@ class GeoTessera:
         # Group points by which tile they belong to
         points_by_tile = self._group_points_by_tile(parsed_points, year)
 
-        # Check which tiles are present and download if needed
-        if auto_download:
-            from geotessera.tiles import discover_tiles
-
-            # Check which tiles are missing
-            tiles = discover_tiles(self.embeddings_dir)
-            tile_map_check = {
-                (t.lon, t.lat): t
-                for t in tiles
-                if t.year == year
-            }
-
-            missing_tiles = []
-            for tile_lon, tile_lat in points_by_tile.keys():
-                tile = tile_map_check.get((tile_lon, tile_lat))
-                if tile is None or not tile.is_available():
-                    missing_tiles.append((tile_lon, tile_lat))
-
-            # Download missing tiles
-            if missing_tiles:
-                if progress_callback:
-                    progress_callback(
-                        0, len(points_by_tile),
-                        f"Downloading {len(missing_tiles)} missing tiles..."
-                    )
-
-                for idx, (tile_lon, tile_lat) in enumerate(missing_tiles):
-                    grid_name = f"grid_{tile_lon:.2f}_{tile_lat:.2f}"
-                    if progress_callback:
-                        progress_callback(
-                            idx, len(missing_tiles),
-                            f"Downloading {grid_name} ({idx + 1}/{len(missing_tiles)})"
-                        )
-
-                    success = self.download_tile(tile_lon, tile_lat, year)
-                    if not success:
-                        self.logger.warning(f"Failed to download {grid_name}")
+        # Ensure all required tiles are available (download if needed)
+        required_tile_coords = set(points_by_tile.keys())
+        tile_map = self._ensure_tiles_available(
+            required_coords=required_tile_coords,
+            year=year,
+            auto_download=auto_download,
+            bbox=None,  # No bbox available for point-based queries
+            progress_callback=progress_callback,
+            progress_offset=0,
+            progress_total=len(points_by_tile),
+        )
 
         # Initialize result arrays
         result_embeddings = np.full((n_points, 128), np.nan, dtype=np.float32)
         result_metadata = [None] * n_points if include_metadata else None
-
-        # Discover local tiles using Tile abstraction (supports NPY and GeoTIFF)
-        from geotessera.tiles import discover_tiles
-
-        tiles = discover_tiles(self.embeddings_dir)
-        # Build map keyed by (lon, lat) for this year
-        tile_map = {
-            (t.lon, t.lat): t
-            for t in tiles
-            if t.year == year
-        }
 
         if progress_callback:
             progress_callback(
@@ -849,19 +1156,19 @@ class GeoTessera:
             >>> gt.download_tile(lon=0.15, lat=52.05, year=2024)
             True
         """
-        # Create year subdirectory
-        year_dir = self.embeddings_dir / str(year)
-        year_dir.mkdir(parents=True, exist_ok=True)
+        # Create directory structure matching remote registry layout
+        grid_name = f"grid_{lon:.2f}_{lat:.2f}"
+        tile_dir = self.embeddings_dir / EMBEDDINGS_DIR_NAME / str(year)
+        tile_dir.mkdir(parents=True, exist_ok=True)
 
         # Create landmasks subdirectory
-        landmasks_dir = self.embeddings_dir / "landmasks"
+        landmasks_dir = self.embeddings_dir / LANDMASKS_DIR_NAME
         landmasks_dir.mkdir(parents=True, exist_ok=True)
 
-        # Define output paths
-        grid_name = f"grid_{lon:.2f}_{lat:.2f}"
-        embedding_path = year_dir / f"{grid_name}.npy"
-        scales_path = year_dir / f"{grid_name}_scales.npy"
-        landmask_path = landmasks_dir / f"landmask_{lon:.2f}_{lat:.2f}.tif"
+        # Define output paths matching remote structure
+        embedding_path = tile_dir / f"{grid_name}.npy"
+        scales_path = tile_dir / f"{grid_name}_scales.npy"
+        landmask_path = landmasks_dir / tile_to_landmask_filename(lon, lat)
 
         try:
             # Download embedding file
@@ -1278,8 +1585,8 @@ class GeoTessera:
 
         # Sequential GeoTIFF writing
         for i, (year, tile_lon, tile_lat, embedding, crs, transform) in enumerate(tiles):
-            # Create filename first for progress reporting
-            filename = f"tessera_{year}_lat{tile_lat:.2f}_lon{tile_lon:.2f}.tif"
+            # Create filename matching remote grid naming convention (with year)
+            filename = f"grid_{tile_lon:.2f}_{tile_lat:.2f}_{year}.tiff"
             output_path = output_dir / filename
 
             # Update progress to show we're starting this file
@@ -1657,7 +1964,7 @@ class GeoTessera:
         for i, (year, tile_lon, tile_lat, pca_image, crs, transform, pca_info) in enumerate(pca_results):
             if progress_callback:
                 export_progress = int(70 + (i / total_tiles) * 30)
-                filename = f"tessera_{year}_lat{tile_lat:.2f}_lon{tile_lon:.2f}_pca.tif"
+                filename = f"grid_{tile_lon:.2f}_{tile_lat:.2f}_{year}_pca.tiff"
                 progress_callback(export_progress, 100, f"Writing {filename}...")
             
             # Always normalize PCA components to 0-255 for visualization
@@ -1682,7 +1989,7 @@ class GeoTessera:
             dtype = 'uint8'
             
             # Create filename and path
-            filename = f"tessera_{year}_lat{tile_lat:.2f}_lon{tile_lon:.2f}_pca.tif"
+            filename = f"grid_{tile_lon:.2f}_{tile_lat:.2f}_{year}_pca.tiff"
             output_path = output_dir / filename
             
             # Get dimensions

@@ -5,6 +5,8 @@ from typing import List, Tuple, Dict
 import numpy as np
 import re
 
+from .registry import EMBEDDINGS_DIR_NAME, LANDMASKS_DIR_NAME, tile_to_landmask_filename
+
 
 class Tile:
     """A single embedding tile that abstracts storage format.
@@ -83,12 +85,19 @@ class Tile:
             # (bands, H, W) -> (H, W, bands)
             return np.transpose(src.read(), (1, 2, 0))
 
-    def is_available(self) -> bool:
-        """Check if all required files exist."""
+    def is_available(self, require_landmask: bool = True) -> bool:
+        """Check if all required files exist.
+
+        Args:
+            require_landmask: If True (default), landmask must exist for NPY format tiles.
+                             For GeoTIFF format, this parameter is ignored.
+        """
         if self._format == 'npy':
-            return (self._embedding_path.exists() and
-                    self._scales_path.exists() and
-                    self._landmask_path.exists())
+            has_embedding = self._embedding_path.exists() and self._scales_path.exists()
+            if require_landmask:
+                return has_embedding and self._landmask_path.exists()
+            else:
+                return has_embedding
         elif self._format == 'geotiff':
             return self._geotiff_path.exists()
         else:
@@ -103,8 +112,8 @@ class Tile:
         """Create from NPY format files.
 
         Args:
-            embedding_path: Path to .npy file (e.g., embeddings/2024/grid_0.15_52.05.npy)
-            base_dir: Base directory containing embeddings/ and landmasks/
+            embedding_path: Path to .npy file (e.g., global_0.1_degree_representation/2024/grid_0.15_52.05.npy)
+            base_dir: Base directory containing embeddings and landmasks subdirectories
 
         Returns:
             Tile instance backed by NPY storage
@@ -117,9 +126,15 @@ class Tile:
         tile._format = 'npy'
         tile._embedding_path = Path(embedding_path)
         tile._scales_path = tile._embedding_path.parent / f"{tile._embedding_path.stem}_scales.npy"
-        tile._landmask_path = Path(base_dir) / "landmasks" / f"landmask_{lon:.2f}_{lat:.2f}.tif"
+        tile._landmask_path = Path(base_dir) / LANDMASKS_DIR_NAME / tile_to_landmask_filename(lon, lat)
 
-        # Load spatial metadata from landmask
+        # Load spatial metadata from landmask (required)
+        if not tile._landmask_path.exists():
+            raise FileNotFoundError(
+                f"Landmask file not found: {tile._landmask_path}\n"
+                f"Landmask files are required for NPY format tiles.\n"
+                f"Expected: {base_dir}/{LANDMASKS_DIR_NAME}/{tile_to_landmask_filename(lon, lat)}"
+            )
         tile._load_spatial_metadata_from_landmask()
 
         return tile
@@ -253,18 +268,19 @@ def discover_tiles(directory: Path) -> List[Tile]:
         List of Tile objects with spatial metadata loaded, sorted by (year, lat, lon)
     """
     # Check for NPY format first
-    embeddings_dir = directory / "embeddings"
+    embeddings_dir = directory / EMBEDDINGS_DIR_NAME
     if embeddings_dir.exists() and embeddings_dir.is_dir():
         return discover_npy_tiles(directory)
-    else:
-        return discover_geotiff_tiles(directory)
+
+    # Default to GeoTIFF discovery
+    return discover_geotiff_tiles(directory)
 
 
 def discover_npy_tiles(base_dir: Path) -> List[Tile]:
     """Discover NPY format tiles.
 
     Args:
-        base_dir: Directory containing embeddings/ and landmasks/ subdirectories
+        base_dir: Directory containing embeddings and landmasks subdirectories
 
     Returns:
         List of Tile objects with spatial metadata loaded
@@ -272,7 +288,11 @@ def discover_npy_tiles(base_dir: Path) -> List[Tile]:
     import logging
 
     tiles = []
-    embeddings_dir = base_dir / "embeddings"
+    embeddings_dir = base_dir / EMBEDDINGS_DIR_NAME
+
+    if not embeddings_dir.exists():
+        logging.warning(f"Embeddings directory not found: {embeddings_dir}")
+        return []
 
     for npy_file in embeddings_dir.rglob("*.npy"):
         # Skip scales files
