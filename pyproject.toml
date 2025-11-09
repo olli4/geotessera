@@ -20,7 +20,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "numpy",
+    "numpy>=2.3.0",
     "geopandas",
     "pandas",
     "matplotlib",
