@@ -1,7 +1,19 @@
-## v0.7.0 (dev)
+## v0.7.0 (2025-11-09)
 
 This release moves to a Parquet-based registry for more efficient handling of
-the growing embeddings metadata for TESSERA.
+the growing embeddings metadata for TESSERA. It no longer maintains a central
+cache, instead preferring the user to specify an embeddings directory within
+which the remote registry tiles are mirrored (as npy files) and additional
+mosaics and GeoTIFFs are generated. This helps make efficient use of disk space
+due to the large size of the embeddings.
+
+There are also new APIs for efficiently sampling embeddings for point data, and
+to generate mosaics for classifiers over ROIs.
+
+Note that there are significant interface changes throughout this release
+compared to 0.6; please read the migration notes below. The library will
+continue to evolve as we add more usecases, so please create issues on
+<https://github.com/ucam-eo/geotessera> with your wishlists!
 
 - **GeoParquet registry support**: Transitioned from text-based manifests to
   Parquet files (`registry.parquet`, `landmasks.parquet') for all tile metadata
