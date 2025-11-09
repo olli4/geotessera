@@ -261,6 +261,8 @@ class Tile:
 def discover_tiles(directory: Path) -> List[Tile]:
     """Auto-detect format and discover all tiles.
 
+    Prefers NPY format when both NPY and GeoTIFF formats are present.
+
     Args:
         directory: Directory containing tiles
 
@@ -268,6 +270,7 @@ def discover_tiles(directory: Path) -> List[Tile]:
         List of Tile objects with spatial metadata loaded, sorted by (year, lat, lon)
     """
     # Check for NPY format first by looking for .npy files in embeddings directory
+    # If both NPY and GeoTIFF exist, prefer NPY (more efficient, includes scales)
     embeddings_dir = directory / EMBEDDINGS_DIR_NAME
     if embeddings_dir.exists() and embeddings_dir.is_dir():
         # Check if there are any .npy files (not just _scales.npy)
@@ -329,6 +332,10 @@ def discover_geotiff_tiles(directory: Path) -> List[Tile]:
 
     for pattern in ["*.tif", "*.tiff"]:
         for geotiff_file in directory.rglob(pattern):
+            # Skip landmask files (they're in a different directory and have different naming)
+            if LANDMASKS_DIR_NAME in geotiff_file.parts:
+                continue
+
             try:
                 tile = Tile.from_geotiff(geotiff_file)
                 tiles.append(tile)
@@ -336,6 +343,30 @@ def discover_geotiff_tiles(directory: Path) -> List[Tile]:
                 logging.warning(f"Failed to load tile {geotiff_file}: {e}")
 
     return sorted(tiles, key=lambda t: (t.year, t.lat, t.lon))
+
+
+def discover_formats(directory: Path) -> Dict[str, List[Tile]]:
+    """Discover tiles in all available formats.
+
+    Args:
+        directory: Directory containing tiles
+
+    Returns:
+        Dictionary mapping format names to lists of tiles: {'npy': [...], 'geotiff': [...]}
+    """
+    formats = {}
+
+    # Check for NPY format
+    npy_tiles = discover_npy_tiles(directory)
+    if npy_tiles:
+        formats['npy'] = npy_tiles
+
+    # Check for GeoTIFF format
+    geotiff_tiles = discover_geotiff_tiles(directory)
+    if geotiff_tiles:
+        formats['geotiff'] = geotiff_tiles
+
+    return formats
 
 
 # ============================================================================
@@ -376,15 +407,21 @@ def _parse_npy_filename(path: Path) -> Tuple[float, float, int]:
 def _parse_geotiff_filename(path: Path) -> Tuple[float, float, int]:
     """Parse lon, lat, year from GeoTIFF filename.
 
-    Tries multiple patterns. If parsing fails, extracts from rasterio metadata.
+    Tries multiple patterns. If parsing fails, raises ValueError.
 
     Args:
         path: Path to GeoTIFF file
 
     Returns:
         Tuple of (lon, lat, year)
+
+    Raises:
+        ValueError: If filename cannot be parsed
     """
     # Try pattern: grid_0.15_52.05_2024.tif
     match = re.match(r"grid_(-?\d+\.\d+)_(-?\d+\.\d+)_(\d{4})\.tiff?", path.name)
     if match:
         return float(match.group(1)), float(match.group(2)), int(match.group(3))
+
+    # If no patterns match, raise an error
+    raise ValueError(f"Cannot parse GeoTIFF filename: {path.name}. Expected format: grid_<lon>_<lat>_<year>.tif")

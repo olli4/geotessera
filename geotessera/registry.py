@@ -66,12 +66,22 @@ def block_from_world(lon: float, lat: float) -> Tuple[int, int]:
     Returns:
         tuple: (block_lon, block_lat) lower-left corner of the containing block
 
+    Raises:
+        ValueError: If coordinates are out of bounds or not finite
+
     Examples:
         >>> block_from_world(3.2, 52.7)
         (0, 50)
         >>> block_from_world(-7.8, -23.4)
         (-10, -25)
     """
+    if not (-180 <= lon <= 180):
+        raise ValueError(f"Longitude {lon} out of bounds [-180, 180]")
+    if not (-90 <= lat <= 90):
+        raise ValueError(f"Latitude {lat} out of bounds [-90, 90]")
+    if not (math.isfinite(lon) and math.isfinite(lat)):
+        raise ValueError("Coordinates must be finite numbers")
+
     block_lon = math.floor(lon / BLOCK_SIZE) * BLOCK_SIZE
     block_lat = math.floor(lat / BLOCK_SIZE) * BLOCK_SIZE
     return int(block_lon), int(block_lat)
@@ -125,7 +135,30 @@ def blocks_in_bounds(
 
     Returns:
         list: List of (block_lon, block_lat) tuples
+
+    Raises:
+        ValueError: If coordinates are out of bounds, not finite, or min > max
     """
+    # Validate longitude bounds
+    if not (-180 <= min_lon <= 180):
+        raise ValueError(f"Minimum longitude {min_lon} out of bounds [-180, 180]")
+    if not (-180 <= max_lon <= 180):
+        raise ValueError(f"Maximum longitude {max_lon} out of bounds [-180, 180]")
+    if min_lon > max_lon:
+        raise ValueError(f"Minimum longitude {min_lon} greater than maximum {max_lon}")
+
+    # Validate latitude bounds
+    if not (-90 <= min_lat <= 90):
+        raise ValueError(f"Minimum latitude {min_lat} out of bounds [-90, 90]")
+    if not (-90 <= max_lat <= 90):
+        raise ValueError(f"Maximum latitude {max_lat} out of bounds [-90, 90]")
+    if min_lat > max_lat:
+        raise ValueError(f"Minimum latitude {min_lat} greater than maximum {max_lat}")
+
+    # Validate all coordinates are finite
+    if not all(math.isfinite(x) for x in [min_lon, max_lon, min_lat, max_lat]):
+        raise ValueError("All coordinates must be finite numbers")
+
     blocks = []
 
     # Get block coordinates for corners
@@ -160,12 +193,22 @@ def tile_from_world(lon: float, lat: float) -> Tuple[float, float]:
     Returns:
         Tuple of (tile_lon, tile_lat) representing the tile center
 
+    Raises:
+        ValueError: If coordinates are out of bounds or not finite
+
     Examples:
         >>> tile_from_world(0.17, 52.23)
         (0.15, 52.25)
         >>> tile_from_world(-0.12, -0.03)
         (-0.15, -0.05)
     """
+    if not (-180 <= lon <= 180):
+        raise ValueError(f"Longitude {lon} out of bounds [-180, 180]")
+    if not (-90 <= lat <= 90):
+        raise ValueError(f"Latitude {lat} out of bounds [-90, 90]")
+    if not (math.isfinite(lon) and math.isfinite(lat)):
+        raise ValueError("Coordinates must be finite numbers")
+
     tile_lon = np.floor(lon * 10) / 10 + 0.05
     tile_lat = np.floor(lat * 10) / 10 + 0.05
     return round(float(tile_lon), 2), round(float(tile_lat), 2)
@@ -284,26 +327,63 @@ LANDMASKS_DIR_NAME = "global_0.1_degree_tiff_all"  # Landmask TIFFs
 # Format: {TESSERA_BASE_URL}/{version}/registry.parquet
 
 
-def download_file_to_temp(url: str, expected_hash: Optional[str] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None, cache_path: Optional[Path] = None) -> str:
-    """Download a file from URL with optional caching and If-Modified-Since support.
+def download_file_to_temp(url: str, expected_hash: Optional[str] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None, cache_path: Optional[Path] = None, max_retries: int = 3, timeout: int = 60) -> str:
+    """Download a file from URL with retry logic, optional caching and If-Modified-Since support.
 
     Args:
         url: URL to download from
         expected_hash: Optional SHA256 hash to verify
         progress_callback: Optional callback(bytes_downloaded, total_bytes, status)
         cache_path: Optional path for caching. If provided, uses If-Modified-Since to avoid redownloading unchanged files.
+        max_retries: Maximum number of retry attempts (default: 3)
+        timeout: Timeout in seconds for each request (default: 60)
 
     Returns:
         Path to downloaded file (temporary if cache_path=None, otherwise cache_path)
         Caller is responsible for cleanup of temporary files (cache_path=None case)
 
     Raises:
-        URLError: If download fails
-        HTTPError: If server returns error (except 304 Not Modified when using cache)
+        URLError: If download fails after all retries
+        HTTPError: If server returns error (except 304 Not Modified when using cache, and transient 5xx errors)
         ValueError: If hash verification fails
     """
     import tempfile
     from email.utils import formatdate, parsedate_to_datetime
+    from urllib.error import URLError
+
+    # Helper function to execute request with retry logic
+    def execute_request_with_retry(request, max_retries, timeout):
+        """Execute HTTP request with exponential backoff retry logic."""
+        last_exception = None
+
+        for attempt in range(max_retries):
+            try:
+                return urlopen(request, timeout=timeout)
+            except HTTPError as e:
+                # Don't retry client errors (4xx) except 429 (rate limit)
+                if 400 <= e.code < 500 and e.code != 429:
+                    raise
+                # Retry on server errors (5xx) and rate limiting (429)
+                last_exception = e
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 1s, 2s, 4s
+                    backoff_time = 2 ** attempt
+                    logging.getLogger(__name__).debug(
+                        f"HTTP {e.code} error, retrying in {backoff_time}s (attempt {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(backoff_time)
+            except URLError as e:
+                # Retry on network errors
+                last_exception = e
+                if attempt < max_retries - 1:
+                    backoff_time = 2 ** attempt
+                    logging.getLogger(__name__).debug(
+                        f"Network error, retrying in {backoff_time}s (attempt {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(backoff_time)
+
+        # All retries exhausted, raise the last exception
+        raise last_exception
 
     # Handle If-Modified-Since for cached files
     headers = {'User-Agent': 'geotessera'}
@@ -318,7 +398,7 @@ def download_file_to_temp(url: str, expected_hash: Optional[str] = None, progres
         request = Request(url, headers=headers)
 
         try:
-            response = urlopen(request)
+            response = execute_request_with_retry(request, max_retries, timeout)
             # 200 OK means file was modified, proceed with download
         except HTTPError as e:
             if e.code == 304:
@@ -332,7 +412,7 @@ def download_file_to_temp(url: str, expected_hash: Optional[str] = None, progres
     else:
         # No cache or cache_path not provided - regular download
         request = Request(url, headers=headers)
-        response = urlopen(request)
+        response = execute_request_with_retry(request, max_retries, timeout)
 
     # Determine output path
     if cache_path:
@@ -413,8 +493,12 @@ def download_file_to_temp(url: str, expected_hash: Optional[str] = None, progres
                 last_modified_dt = parsedate_to_datetime(last_modified_str)
                 last_modified_timestamp = last_modified_dt.timestamp()
                 os.utime(temp_path, (last_modified_timestamp, last_modified_timestamp))
-            except Exception:
-                pass  # If parsing fails, just use current time
+            except (ValueError, TypeError) as e:
+                # Parsing errors - invalid date format
+                logging.getLogger(__name__).debug(f"Could not parse Last-Modified header: {e}")
+            except OSError as e:
+                # Filesystem errors - permissions, disk full, etc.
+                logging.getLogger(__name__).warning(f"Could not set file mtime: {e}")
 
         # If caching, atomically move to cache location
         if cache_path:
@@ -450,12 +534,11 @@ class Registry:
 
     Handles all registry-related operations including:
     - Loading and querying Parquet registry
-    - Direct HTTP downloads to temporary files (no persistent caching of data tiles)
+    - Direct HTTP downloads to embeddings_dir for persistent tile storage
     - Parsing available embeddings and landmasks
 
-    Note: Only the Parquet registry itself is cached (~few MB). Data tiles are
-    downloaded to temporary files and immediately cleaned up after use, resulting
-    in zero persistent storage overhead for embedding data.
+    Note: The Parquet registry itself (~few MB) is cached separately from tile data.
+    Data tiles are downloaded to embeddings_dir and persist for reuse across sessions.
     """
 
     def __init__(
@@ -475,9 +558,10 @@ class Registry:
         Args:
             version: Dataset version identifier
             cache_dir: Optional directory for caching Parquet registries only (not data files)
-            embeddings_dir: Optional directory containing pre-downloaded embedding tiles.
+            embeddings_dir: Directory for storing embedding tiles (defaults to current directory).
                 Expected structure: global_0.1_degree_representation/{year}/grid_{lon}_{lat}.npy and _scales.npy,
                 global_0.1_degree_tiff_all/landmask_{lon}_{lat}.tif
+                Tiles are downloaded here and persist for reuse across sessions.
             registry_url: URL to download embeddings Parquet registry from (default: remote)
             registry_path: Local path to existing embeddings Parquet registry file
             registry_dir: Directory containing registry.parquet and landmasks.parquet files (alternative to individual paths)
@@ -501,8 +585,13 @@ class Registry:
 
         self._registry_cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Set up embeddings directory for pre-downloaded tiles
-        self._embeddings_dir = Path(embeddings_dir) if embeddings_dir else None
+        # Set up embeddings directory for tile storage (defaults to cwd)
+        if embeddings_dir:
+            self._embeddings_dir = Path(embeddings_dir)
+        else:
+            self._embeddings_dir = Path.cwd()
+            # Use debug level since this is only relevant when actually fetching tiles
+            self.logger.debug(f"embeddings_dir not specified, using current directory: {self._embeddings_dir}")
 
         # Handle registry_dir convenience parameter
         if registry_dir:
@@ -555,8 +644,9 @@ class Registry:
                     else:
                         self.logger.warning("Cached registry is in old format (missing geometry column)")
                         self.logger.info("Forcing download of updated GeoParquet format...")
-                except Exception:
-                    self.logger.warning("Cached registry is corrupted or in old format")
+                except (OSError, ValueError, KeyError, ImportError) as e:
+                    # OSError: File issues, ValueError: Invalid parquet, KeyError: Missing columns, ImportError: Missing deps
+                    self.logger.warning(f"Cached registry is corrupted or in old format: {e}")
                     self.logger.info("Forcing download of updated registry...")
 
                 # Check for updates using If-Modified-Since (or force download if invalid)
@@ -658,7 +748,9 @@ class Registry:
                     self.logger.info("Using existing cached landmasks registry")
                     try:
                         self._landmasks_df = pd.read_parquet(landmasks_cache_path)
-                    except Exception:
+                    except (OSError, ValueError, ImportError) as read_error:
+                        # OSError: File not readable, ValueError: Invalid parquet, ImportError: Missing deps
+                        self.logger.warning(f"Could not read cached landmasks: {read_error}")
                         self._landmasks_df = None
                         return
             else:
@@ -807,7 +899,7 @@ class Registry:
         lon: Optional[float] = None,
         lat: Optional[float] = None,
         is_scales: bool = False,
-    ) -> Tuple[str, bool]:
+    ) -> str:
         """Fetch a file using local embeddings_dir or direct HTTP download.
 
         Args:
@@ -822,9 +914,7 @@ class Registry:
             is_scales: If True, fetch scales file instead of embedding file
 
         Returns:
-            Tuple of (file_path, needs_cleanup):
-            - file_path: Path to the file (local or temporary)
-            - needs_cleanup: True if caller must delete file, False if it's from embeddings_dir
+            Path to the file in embeddings_dir
         """
         # Calculate path from coordinates if not provided
         if path is None:
@@ -833,12 +923,13 @@ class Registry:
             embedding_path, scales_path = tile_to_embedding_paths(lon, lat, year)
             path = scales_path if is_scales else embedding_path
 
-        # Check local embeddings_dir first (if set and not refreshing)
-        if self._embeddings_dir and not refresh:
-            local_path = self._embeddings_dir / EMBEDDINGS_DIR_NAME / path
-            if local_path.exists():
-                # Use local file, no cleanup needed
-                return str(local_path), False
+        # Determine local file path
+        local_path = self._embeddings_dir / EMBEDDINGS_DIR_NAME / path
+
+        # Check if file exists locally and not refreshing
+        if local_path.exists() and not refresh:
+            # Use existing local file
+            return str(local_path)
 
         # Query hash from GeoDataFrame for verification if year/lon/lat provided
         # Note: Only verify hash for embedding files, not scales files (registry stores one hash per tile)
@@ -853,12 +944,14 @@ class Registry:
             if len(matches) > 0:
                 file_hash = matches.iloc[0]['hash']
 
-        # Download the file to a temporary location
+        # Download to embeddings_dir
         url = f"{TESSERA_BASE_URL}/{self.version}/{EMBEDDINGS_DIR_NAME}/{path}"
-        temp_path = download_file_to_temp(url, expected_hash=file_hash, progress_callback=progress_callback)
+        downloaded_path = download_file_to_temp(url, expected_hash=file_hash,
+                                               progress_callback=progress_callback,
+                                               cache_path=local_path)
 
-        # Return temp path, caller must cleanup
-        return temp_path, True
+        # Return path to saved file
+        return downloaded_path
 
     def fetch_landmask(
         self,
@@ -868,7 +961,7 @@ class Registry:
         refresh: bool = False,
         lon: Optional[float] = None,
         lat: Optional[float] = None,
-    ) -> Tuple[str, bool]:
+    ) -> str:
         """Fetch a landmask file using local embeddings_dir or direct HTTP download.
 
         Args:
@@ -881,9 +974,7 @@ class Registry:
             lat: Latitude of the tile (required if filename not provided)
 
         Returns:
-            Tuple of (file_path, needs_cleanup):
-            - file_path: Path to the file (local or temporary)
-            - needs_cleanup: True if caller must delete file, False if it's from embeddings_dir
+            Path to the file in embeddings_dir
         """
         # Calculate filename from coordinates if not provided
         if filename is None:
@@ -891,12 +982,13 @@ class Registry:
                 raise ValueError("Must provide either 'filename' or both (lon, lat)")
             filename = tile_to_landmask_filename(lon, lat)
 
-        # Check local embeddings_dir first (if set and not refreshing)
-        if self._embeddings_dir and not refresh:
-            local_path = self._embeddings_dir / LANDMASKS_DIR_NAME / filename
-            if local_path.exists():
-                # Use local file, no cleanup needed
-                return str(local_path), False
+        # Determine local file path
+        local_path = self._embeddings_dir / LANDMASKS_DIR_NAME / filename
+
+        # Check if file exists locally and not refreshing
+        if local_path.exists() and not refresh:
+            # Use existing local file
+            return str(local_path)
 
         # Query hash from landmasks DataFrame for verification if lon/lat provided
         file_hash = None
@@ -908,12 +1000,14 @@ class Registry:
             if len(matches) > 0:
                 file_hash = matches.iloc[0]['hash']
 
-        # Download the file to a temporary location
+        # Download to embeddings_dir
         url = f"{TESSERA_BASE_URL}/{self.version}/{LANDMASKS_DIR_NAME}/{filename}"
-        temp_path = download_file_to_temp(url, expected_hash=file_hash, progress_callback=progress_callback)
+        downloaded_path = download_file_to_temp(url, expected_hash=file_hash,
+                                               progress_callback=progress_callback,
+                                               cache_path=local_path)
 
-        # Return temp path, caller must cleanup
-        return temp_path, True
+        # Return path to saved file
+        return downloaded_path
 
     @property
     def available_embeddings(self) -> List[Tuple[int, float, float]]:

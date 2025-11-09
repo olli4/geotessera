@@ -40,6 +40,22 @@ Verify TIFF files were created:
   $ [ -n "$(find "$TESTDIR/cb_tiles_tiff/global_0.1_degree_representation/2024" -name "*.tif*" 2>/dev/null)" ] && echo "TIFF files created"
   TIFF files created
 
+Verify NPY files were also created (intermediate format retained for efficient reprocessing):
+
+  $ [ -n "$(find "$TESTDIR/cb_tiles_tiff/global_0.1_degree_representation/2024" -name "grid_*.npy" ! -name "*_scales.npy" 2>/dev/null)" ] && echo "NPY embedding files created"
+  NPY embedding files created
+
+  $ [ -n "$(find "$TESTDIR/cb_tiles_tiff/global_0.1_degree_representation/2024" -name "*_scales.npy" 2>/dev/null)" ] && echo "NPY scales files created"
+  NPY scales files created
+
+Verify both formats coexist (count files of each type):
+
+  $ find "$TESTDIR/cb_tiles_tiff/global_0.1_degree_representation/2024" -name "*.tif*" 2>/dev/null | wc -l | tr -d ' '
+  4
+
+  $ find "$TESTDIR/cb_tiles_tiff/global_0.1_degree_representation/2024" -name "grid_*.npy" ! -name "*_scales.npy" 2>/dev/null | wc -l | tr -d ' '
+  4
+
 Test: Visualize - Create PCA Mosaic from TIFF Files
 ----------------------------------------------------
 
@@ -51,9 +67,12 @@ The visualize command should:
 
   $ uv run -m geotessera.cli visualize \
   >   "$TESTDIR/cb_tiles_tiff" \
-  >   "$TESTDIR/cb_pca_mosaic.tif" 2>&1 | grep -E 'Found|Created PCA mosaic' | sed 's/ *$//'
-  Found 4 tiles (geotiff format)
+  >   "$TESTDIR/cb_pca_mosaic.tif" 2>&1 | grep -A 1 -E 'Found|Created PCA mosaic' | sed 's/ *$//'
+  Found 4 tiles (npy format)
+  Combined data shape: (3317086, 128)
+  --
   Created PCA mosaic:
+  * (glob)
 
 Verify PCA mosaic was created:
 
@@ -74,8 +93,9 @@ Test creating a visualization with custom CRS and histogram balancing:
   >   "$TESTDIR/cb_tiles_tiff" \
   >   "$TESTDIR/cb_pca_4326.tif" \
   >   --crs EPSG:4326 \
-  >   --balance histogram 2>&1 | grep -E 'Created PCA mosaic' | sed 's/ *$//'
+  >   --balance histogram 2>&1 | grep -A 1 -E 'Created PCA mosaic' | sed 's/ *$//'
   Created PCA mosaic:
+  * (glob)
 
 Verify custom CRS mosaic was created:
 
@@ -102,9 +122,12 @@ Create visualization from NPY format:
 
   $ uv run -m geotessera.cli visualize \
   >   "$TESTDIR/cb_tiles_npy" \
-  >   "$TESTDIR/cb_pca_from_npy.tif" 2>&1 | grep -E 'Found|Created PCA mosaic' | sed 's/ *$//'
+  >   "$TESTDIR/cb_pca_from_npy.tif" 2>&1 | grep -A 1 -E 'Found|Created PCA mosaic' | sed 's/ *$//'
   Found 4 tiles (npy format)
+  Combined data shape: (3317086, 128)
+  --
   Created PCA mosaic:
+  * (glob)
 
 Verify NPY-based mosaic was created:
 
@@ -124,10 +147,15 @@ This should:
   >   "$TESTDIR/cb_pca_mosaic.tif" \
   >   --output "$TESTDIR/cb_webmap" \
   >   --min-zoom 10 \
-  >   --max-zoom 13 2>&1 | grep -E 'Web visualization ready|Created web' | sed 's/ *$//'
+  >   --max-zoom 13 2>&1 | grep -A 1 -E 'Web visualization ready|Created web' | sed 's/ *$//'
   Web visualization ready in:
+  * (glob)
+  --
   Created web tiles in:
+  * (glob)
+  --
   Created web viewer:
+  * (glob)
 
 Verify web map directory structure was created:
 
@@ -155,8 +183,9 @@ Test webmap with custom initial zoom and center:
   >   --output "$TESTDIR/cb_webmap_custom" \
   >   --min-zoom 10 \
   >   --max-zoom 12 \
-  >   --initial-zoom 11 2>&1 | grep -E 'Web visualization ready' | sed 's/ *$//'
+  >   --initial-zoom 11 2>&1 | grep -A 1 -E 'Web visualization ready' | sed 's/ *$//'
   Web visualization ready in:
+  * (glob)
 
 Verify custom web map was created:
 
@@ -170,7 +199,7 @@ Test that info command works on the created PCA mosaics:
 
   $ uv run -m geotessera.cli info --tiles "$TESTDIR/cb_tiles_tiff" 2>&1 | grep -E 'Total tiles|Format|Years' | sed 's/ *$//'
    Total tiles: 4
-   Format:      GEOTIFF
+   Format:      GEOTIFF, NPY (USING NPY)
    Years:       2024
 
 Test: Error Handling - Invalid Input

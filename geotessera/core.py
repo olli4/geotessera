@@ -1098,35 +1098,27 @@ class GeoTessera:
         """
         from pathlib import Path
 
-        # Fetch the files using coordinates (returns tuple of (path, needs_cleanup))
-        embedding_file, cleanup_embedding = self.registry.fetch(
+        # Fetch the files using coordinates
+        embedding_file = self.registry.fetch(
             year=year, lon=lon, lat=lat, is_scales=False,
             progressbar=False, progress_callback=progress_callback, refresh=refresh
         )
-        scales_file, cleanup_scales = self.registry.fetch(
+        scales_file = self.registry.fetch(
             year=year, lon=lon, lat=lat, is_scales=True,
             progressbar=False, progress_callback=progress_callback, refresh=refresh
         )
 
-        try:
-            # Load quantized data and scales
-            quantized_embedding = np.load(embedding_file)
-            scales = np.load(scales_file)
+        # Load quantized data and scales
+        quantized_embedding = np.load(embedding_file)
+        scales = np.load(scales_file)
 
-            # Dequantize using the public function
-            dequantized = dequantize_embedding(quantized_embedding, scales)
+        # Dequantize using the public function
+        dequantized = dequantize_embedding(quantized_embedding, scales)
 
-            # Get CRS and transform from landmask
-            crs, transform = self._get_utm_projection_from_landmask(lon, lat, refresh)
+        # Get CRS and transform from landmask
+        crs, transform = self._get_utm_projection_from_landmask(lon, lat, refresh)
 
-            return dequantized, crs, transform
-
-        finally:
-            # Only clean up temporary files
-            if cleanup_embedding:
-                Path(embedding_file).unlink(missing_ok=True)
-            if cleanup_scales:
-                Path(scales_file).unlink(missing_ok=True)
+        return dequantized, crs, transform
 
     def download_tile(
         self,
@@ -1151,49 +1143,22 @@ class GeoTessera:
             >>> gt.download_tile(lon=0.15, lat=52.05, year=2024)
             True
         """
-        # Create directory structure matching remote registry layout
-        grid_name = f"grid_{lon:.2f}_{lat:.2f}"
-        tile_dir = self.embeddings_dir / EMBEDDINGS_DIR_NAME / str(year)
-        tile_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create landmasks subdirectory
-        landmasks_dir = self.embeddings_dir / LANDMASKS_DIR_NAME
-        landmasks_dir.mkdir(parents=True, exist_ok=True)
-
-        # Define output paths matching remote structure
-        embedding_path = tile_dir / f"{grid_name}.npy"
-        scales_path = tile_dir / f"{grid_name}_scales.npy"
-        landmask_path = landmasks_dir / tile_to_landmask_filename(lon, lat)
-
         try:
-            # Download embedding file
-            embedding_file, cleanup_embedding = self.registry.fetch(
+            # Download files directly to embeddings_dir (using refresh=True to force download)
+            # fetch() handles creating directory structure and saving to correct locations
+            self.registry.fetch(
                 year=year, lon=lon, lat=lat, is_scales=False,
                 progressbar=False, progress_callback=progress_callback, refresh=True
             )
 
-            # Download scales file
-            scales_file, cleanup_scales = self.registry.fetch(
+            self.registry.fetch(
                 year=year, lon=lon, lat=lat, is_scales=True,
                 progressbar=False, progress_callback=progress_callback, refresh=True
             )
 
-            # Download landmask file
-            landmask_file, cleanup_landmask = self.registry.fetch_landmask(
+            self.registry.fetch_landmask(
                 lon=lon, lat=lat, progressbar=False, refresh=True
             )
-
-            # Copy files to embeddings_dir if they were downloaded to temp
-            import shutil
-            if cleanup_embedding:
-                shutil.copy2(embedding_file, embedding_path)
-                Path(embedding_file).unlink(missing_ok=True)
-            if cleanup_scales:
-                shutil.copy2(scales_file, scales_path)
-                Path(scales_file).unlink(missing_ok=True)
-            if cleanup_landmask:
-                shutil.copy2(landmask_file, landmask_path)
-                Path(landmask_file).unlink(missing_ok=True)
 
             return True
 
@@ -1393,30 +1358,22 @@ class GeoTessera:
             )
 
         try:
-            from pathlib import Path
-
-            # Fetch landmask file using coordinates (returns tuple of (path, needs_cleanup))
-            landmask_path, cleanup_landmask = self.registry.fetch_landmask(
+            # Fetch landmask file using coordinates
+            landmask_path = self.registry.fetch_landmask(
                 lon=lon, lat=lat, progressbar=False, refresh=refresh
             )
 
-            try:
-                # Extract CRS and transform
-                with rasterio.open(landmask_path) as src:
-                    if src.crs is None:
-                        raise RuntimeError(
-                            f"Landmask tile {landmask_path} has no CRS information"
-                        )
-                    if src.transform is None:
-                        raise RuntimeError(
-                            f"Landmask tile {landmask_path} has no transform information"
-                        )
-                    return src.crs, src.transform
-
-            finally:
-                # Only clean up temporary landmask file
-                if cleanup_landmask:
-                    Path(landmask_path).unlink(missing_ok=True)
+            # Extract CRS and transform
+            with rasterio.open(landmask_path) as src:
+                if src.crs is None:
+                    raise RuntimeError(
+                        f"Landmask tile {landmask_path} has no CRS information"
+                    )
+                if src.transform is None:
+                    raise RuntimeError(
+                        f"Landmask tile {landmask_path} has no transform information"
+                    )
+                return src.crs, src.transform
 
         except Exception as e:
             if isinstance(e, (ImportError, RuntimeError)):

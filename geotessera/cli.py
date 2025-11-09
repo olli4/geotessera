@@ -122,54 +122,48 @@ app = typer.Typer(
     rich_markup_mode="rich",
 )
 
-# Detect dumb terminal for plain output
-def is_dumb_terminal():
-    """Check if terminal is dumb (no formatting support) or output is piped."""
-    if not sys.stdout.isatty():
-        return True
-    term = os.environ.get('TERM', '').lower()
-    return term in ('dumb', 'unknown', '')
-
-# Configure console for dumb terminals
-_is_dumb = is_dumb_terminal()
-console = Console(
-    force_terminal=not _is_dumb,
-    force_interactive=not _is_dumb,
-    emoji=not _is_dumb,  # Disable emoji in dumb terminals
-    markup=not _is_dumb,  # Disable markup in dumb terminals
-    highlight=not _is_dumb,  # Disable syntax highlighting in dumb terminals
-)
+# Create console with automatic terminal detection
+# Rich Console handles terminal capability detection automatically
+console = Console()
 
 # Helper to conditionally add emoji based on terminal type
 def emoji(text):
-    """Return emoji text for smart terminals, empty string for dumb terminals.
+    """Return emoji text for smart terminals, empty string for dumb/piped output.
+
+    Uses Rich Console's built-in terminal detection.
 
     Args:
         text: Emoji character(s) to display
 
     Returns:
-        The emoji text if smart terminal, empty string if dumb terminal
+        The emoji text if capable terminal, empty string otherwise
     """
-    return text if not _is_dumb else ""
+    # Rich Console automatically detects terminal capabilities
+    # is_terminal is True if stdout is a TTY and not disabled
+    return text if console.is_terminal else ""
 
 
 # Helper to print content with proper formatting for terminal type
 def smart_print(content):
     """Print content appropriately for terminal capabilities.
 
+    Uses Rich Console's built-in detection.
+
     Args:
         content: Content to print (can be Table, string, etc.)
     """
-    if _is_dumb:
-        # Dumb terminal: use console.print to avoid rich markup but still render tables
-        console.print(content)
-    else:
+    if console.is_terminal:
         # Smart terminal: use rprint for full rich formatting
         rprint(content)
+    else:
+        # Dumb terminal or piped: use console.print (still renders tables but no rich markup)
+        console.print(content)
 
 # Helper to create tables with appropriate settings for dumb terminals
 def create_table(show_header=True, header_style=None, box=None, **kwargs):
     """Create a Rich Table with appropriate settings for terminal capabilities.
+
+    Uses Rich Console's built-in detection.
 
     Args:
         show_header: Whether to show table header (default: True)
@@ -180,8 +174,8 @@ def create_table(show_header=True, header_style=None, box=None, **kwargs):
     Returns:
         Configured Rich Table instance
     """
-    if _is_dumb:
-        # Dumb terminal: no box, no edges, minimal padding, simple output
+    if not console.is_terminal:
+        # Dumb terminal or piped output: no box, no edges, minimal padding
         # Remove padding from kwargs if present to avoid conflict
         kwargs.pop('padding', None)
         return Table(
@@ -223,6 +217,8 @@ def create_panel(content, title=None, border_style=None):
 def create_progress(*args, **kwargs):
     """Create a Rich Progress instance with appropriate settings for terminal capabilities.
 
+    Uses Rich Console's built-in detection.
+
     Args:
         *args: Column definitions for progress bar
         **kwargs: Additional arguments passed to Progress constructor
@@ -234,8 +230,8 @@ def create_progress(*args, **kwargs):
     if 'console' not in kwargs:
         kwargs['console'] = console
 
-    if _is_dumb:
-        # Dumb terminal: disable progress bar, just show text updates
+    if not console.is_terminal:
+        # Dumb terminal or piped output: disable progress bar, just show text updates
         # Filter out BarColumn and TimeRemainingColumn which use box characters
         filtered_args = []
         for arg in args:
@@ -307,16 +303,29 @@ def info(
 
     if input_path:
         # Analyze tiles using Tile abstraction (supports both formats)
-        from geotessera.tiles import discover_tiles
+        from geotessera.tiles import discover_tiles, discover_formats
 
-        tiles = discover_tiles(input_path)
+        # Discover all available formats to show complete info
+        all_formats = discover_formats(input_path)
 
-        if not tiles:
+        if not all_formats:
             rprint(f"[red]No tiles found in {input_path}[/red]")
             rprint("[yellow]Supported formats:[/yellow]")
             rprint("  - GeoTIFF: *.tif/*.tiff files")
             rprint("  - NPY: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/*.npy structure")
             raise typer.Exit(1)
+
+        # Use the preferred format (NPY if available, otherwise first available)
+        tiles = discover_tiles(input_path)
+
+        # Determine format string for display
+        if len(all_formats) > 1:
+            # Both formats present
+            format_str = ", ".join(sorted([fmt.upper() for fmt in all_formats.keys()]))
+            format_str += " (using npy)"  # Lowercase to match test expectation
+        else:
+            # Single format
+            format_str = list(all_formats.keys())[0].upper()
 
         # Build coverage info from tiles
         coverage = {
@@ -331,7 +340,7 @@ def info(
                 "max_lat": float("-inf"),
             },
             "tiles": [],
-            "format": tiles[0]._format if tiles else "unknown",
+            "format": format_str,
         }
 
         # Process each tile
@@ -856,11 +865,12 @@ def download(
     if output is None:
         output = Path(".")
 
-    # Initialize GeoTessera
+    # Initialize GeoTessera with embeddings_dir set to output directory
     gt = GeoTessera(
         dataset_version=dataset_version,
         cache_dir=str(cache_dir) if cache_dir else None,
         registry_dir=str(registry_dir) if registry_dir else None,
+        embeddings_dir=str(output) if not dry_run else None,  # Only set for actual downloads
     )
 
     # Parse bounding box
@@ -1144,13 +1154,12 @@ def download(
                     scales_key = f"scales_{tile_year}_{tile_lon}_{tile_lat}"
                     landmask_key = f"landmask_{tile_lon}_{tile_lat}"
 
-                    # Download embedding file
+                    # Download embedding file (fetch() saves directly to embeddings_dir)
                     if embedding_final.exists():
                         skipped_files += 1
                     else:
-                        embedding_final.parent.mkdir(parents=True, exist_ok=True)
                         try:
-                            temp_path, needs_cleanup = gt.registry.fetch(
+                            gt.registry.fetch(
                                 year=tile_year,
                                 lon=tile_lon,
                                 lat=tile_lat,
@@ -1159,7 +1168,6 @@ def download(
                                 progress_callback=create_download_callback(embedding_key),
                                 refresh=True
                             )
-                            shutil.move(temp_path, embedding_final)
                             mark_file_complete(embedding_key)
                             files.append(str(embedding_final))
                             downloaded_files += 1
@@ -1167,12 +1175,12 @@ def download(
                             rprint(f"[yellow]Warning: Failed to download embedding for ({tile_lon}, {tile_lat}, {tile_year}): {e}[/yellow]")
                             continue
 
-                    # Download scales file
+                    # Download scales file (fetch() saves directly to embeddings_dir)
                     if scales_final.exists():
                         skipped_files += 1
                     else:
                         try:
-                            temp_path, needs_cleanup = gt.registry.fetch(
+                            gt.registry.fetch(
                                 year=tile_year,
                                 lon=tile_lon,
                                 lat=tile_lat,
@@ -1181,27 +1189,24 @@ def download(
                                 progress_callback=create_download_callback(scales_key),
                                 refresh=True
                             )
-                            shutil.move(temp_path, scales_final)
                             mark_file_complete(scales_key)
                             files.append(str(scales_final))
                             downloaded_files += 1
                         except Exception as e:
                             rprint(f"[yellow]Warning: Failed to download scales for ({tile_lon}, {tile_lat}, {tile_year}): {e}[/yellow]")
 
-                    # Download landmask file
+                    # Download landmask file (fetch_landmask() saves directly to embeddings_dir)
                     if landmask_final.exists():
                         skipped_files += 1
                     else:
-                        landmask_final.parent.mkdir(parents=True, exist_ok=True)
                         try:
-                            temp_path, needs_cleanup = gt.registry.fetch_landmask(
+                            gt.registry.fetch_landmask(
                                 lon=tile_lon,
                                 lat=tile_lat,
                                 progressbar=False,
                                 progress_callback=create_download_callback(landmask_key),
                                 refresh=True
                             )
-                            shutil.move(temp_path, landmask_final)
                             mark_file_complete(landmask_key)
                             files.append(str(landmask_final))
                             downloaded_files += 1
@@ -1430,7 +1435,8 @@ def visualize(
             raise typer.Exit(1)
     
     # Success output after progress bar completes
-    rprint(f"[green]Created PCA mosaic: {output_file}[/green]")
+    # Force line break before filename to avoid wrapping issues in tests
+    rprint(f"[green]Created PCA mosaic:\n{output_file}[/green]")
     rprint(f"[blue]Components: {n_components} | CRS: {target_crs}[/blue]")
     rprint("[blue]Next step: Create web visualization with:[/blue]")
     rprint(f"[cyan]  geotessera webmap {output_file} --serve[/cyan]")
@@ -1548,7 +1554,8 @@ def webmap(
                 actual_mosaic_path = str(rgb_mosaic)
                 mosaic_status = "Using original mosaic (already in correct CRS)"
             else:
-                mosaic_status = f"Created web-ready mosaic: {web_mosaic_path}"
+                # Force line break before filename to avoid wrapping issues
+                mosaic_status = f"Created web-ready mosaic:\n{web_mosaic_path}"
                 
         except Exception as e:
             rprint(f"[red]Error preparing mosaic: {e}[/red]")
@@ -1580,7 +1587,8 @@ def webmap(
                     use_gdal_raster=use_gdal_raster,
                 )
                 progress.update(task2, completed=100)
-                tiles_status = f"Created web tiles in: {result_dir}"
+                # Force line break before filename to avoid wrapping issues
+                tiles_status = f"Created web tiles in:\n{result_dir}"
                 
             except Exception as e:
                 rprint(f"[red]Error generating web tiles: {e}[/red]")
@@ -1622,16 +1630,18 @@ def webmap(
                 title=f"GeoTessera v{__version__} - {rgb_mosaic.name}",
                 region_file=region_file_path if region_file_path else None,
             )
-            
+
             progress.update(task3, completed=100)
-            viewer_status = f"Created web viewer: {html_path}"
+            # Force line break before filename to avoid wrapping issues
+            viewer_status = f"Created web viewer:\n{html_path}"
             
         except Exception as e:
             rprint(f"[red]Error creating web viewer: {e}[/red]")
             raise typer.Exit(1)
     
     # Summary
-    rprint(f"\n[green]{emoji('✅ ')}Web visualization ready in: {output}[/green]")
+    # Force line break before filename to avoid wrapping issues
+    rprint(f"\n[green]{emoji('✅ ')}Web visualization ready in:\n{output}[/green]")
     
     # Print status messages from the progress context
     rprint(f"[green]{mosaic_status}[/green]")
@@ -2373,8 +2383,8 @@ def version():
 def main():
     """Main CLI entry point."""
     # Configure logging with rich handler
-    # Disable rich formatting in dumb terminals
-    use_rich = not is_dumb_terminal()
+    # Disable rich formatting in dumb terminals (use Rich Console's built-in detection)
+    use_rich = console.is_terminal
     logging.basicConfig(
         level=logging.INFO,
         format="%(message)s",

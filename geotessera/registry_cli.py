@@ -44,13 +44,8 @@ from .registry import (
 # Module-level logger
 logger = logging.getLogger(__name__)
 
-# Detect dumb terminal for plain output
-def is_dumb_terminal():
-    """Check if terminal is dumb (no formatting support) or output is piped."""
-    if not sys.stdout.isatty():
-        return True
-    term = os.environ.get('TERM', '').lower()
-    return term in ('dumb', 'unknown', '')
+# Create console with automatic terminal detection
+console = Console()
 
 
 @dataclass
@@ -2130,12 +2125,12 @@ def export_manifests_command(args):
 def main():
     """Main entry point for the geotessera-registry CLI tool."""
     # Configure logging with rich handler
-    # Disable rich formatting in dumb terminals
-    use_rich = not is_dumb_terminal()
+    # Disable rich formatting in dumb terminals (use Rich Console's built-in detection)
+    use_rich = console.is_terminal
     logging.basicConfig(
         level=logging.INFO,
         format="%(message)s",
-        handlers=[RichHandler(rich_tracebacks=True, show_time=False, show_path=False)] if use_rich else [logging.StreamHandler()]
+        handlers=[RichHandler(rich_tracebacks=True, show_time=False, show_path=False, console=console)] if use_rich else [logging.StreamHandler()]
     )
 
     parser = argparse.ArgumentParser(
