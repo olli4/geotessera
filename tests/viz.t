@@ -147,13 +147,11 @@ This should:
   >   "$TESTDIR/cb_pca_mosaic.tif" \
   >   --output "$TESTDIR/cb_webmap" \
   >   --min-zoom 10 \
-  >   --max-zoom 13 2>&1 | grep -A 1 -E 'Web visualization ready|Created web' | sed 's/ *$//'
+  >   --max-zoom 13 2>&1 | grep -A 1 -E 'Web visualization ready|Created web' | grep -v '^--$' | sed 's/ *$//'
   Web visualization ready in:
   * (glob)
-  --
   Created web tiles in:
   * (glob)
-  --
   Created web viewer:
   * (glob)
 
@@ -209,8 +207,9 @@ Test that visualize fails gracefully with non-existent input:
 
   $ uv run -m geotessera.cli visualize \
   >   "$TESTDIR/nonexistent" \
-  >   "$TESTDIR/output.tif" 2>&1 | grep -E 'No tiles found|Error'
-  No tiles found in 
+  >   "$TESTDIR/output.tif" 2>&1 | grep -A 1 -E 'No tiles found|Error' | grep -v '^--$'
+  No tiles found in
+  * (glob)
 
 Test that webmap fails gracefully with non-TIFF input:
 

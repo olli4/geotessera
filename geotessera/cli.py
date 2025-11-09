@@ -309,7 +309,8 @@ def info(
         all_formats = discover_formats(input_path)
 
         if not all_formats:
-            rprint(f"[red]No tiles found in {input_path}[/red]")
+            # Force line break before path for deterministic output regardless of terminal width
+            rprint(f"[red]No tiles found in\n{input_path}[/red]")
             rprint("[yellow]Supported formats:[/yellow]")
             rprint("  - GeoTIFF: *.tif/*.tiff files")
             rprint("  - NPY: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/*.npy structure")
@@ -1386,7 +1387,8 @@ def visualize(
     tiles = discover_tiles(input_path)
 
     if not tiles:
-        rprint(f"[red]No tiles found in {input_path}[/red]")
+        # Force line break before path for deterministic output regardless of terminal width
+        rprint(f"[red]No tiles found in\n{input_path}[/red]")
         rprint("[yellow]Expected either:[/yellow]")
         rprint("  - GeoTIFF files: *.tif/*.tiff in the directory")
         rprint("  - NPY format: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/*.npy structure")
