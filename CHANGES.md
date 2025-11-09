@@ -52,6 +52,12 @@ continue to evolve as we add more usecases, so please create issues on
   - Useful for maintaining the tessera-manifests repository
   - Usage: `geotessera-registry export-manifests /path/to/v1 --output-dir ~/src/git/ucam-eo/tessera-manifests`
 
+### Infrastructure Improvements
+
+- **CRAM test suite**: Added comprehensive CLI tests using CRAM (Command-line Regression Acceptance Testing)
+- **Dumb terminal support**: Added `TERM=dumb` support for non-interactive environments and CI pipelines
+- **Logging system**: Migrated from print statements to Python's standard `logging` module for better integration
+
 ### Breaking Changes
 
 - **NPY Download Format**: `geotessera download --format npy` now saves **quantized** embeddings with scales instead of dequantized embeddings
@@ -109,6 +115,26 @@ continue to evolve as we add more usecases, so please create issues on
   - These methods replace direct registry DataFrame access and provide proper error handling
   - Used internally by CLI `--dry-run` option and available for programmatic use
   - Example: `size = gt.registry.get_tile_file_size(2024, 0.15, 52.05)`
+
+- **`embeddings_count(bbox, year)`**: Get count of tiles in a bounding box
+  - Returns total number of embedding tiles within a geographic region
+  - Useful for planning downloads and estimating processing requirements
+  - Example: `count = gt.embeddings_count((min_lon, min_lat, max_lon, max_lat), 2024)`
+
+- **`export_coverage_map(output_file)`**: Export coverage data to JSON
+  - Generates global coverage map showing which tiles have embeddings for which years
+  - Returns dictionary with tile coverage information
+  - Optionally saves to JSON file for use in visualizations
+
+- **`generate_coverage_texture(coverage_data, output_file)`**: Generate coverage texture for globe visualization
+  - Creates 3600x1800 pixel equirectangular projection texture
+  - Each pixel represents a 0.1-degree tile, colored by coverage status
+  - Used with `coverage` command for 3D globe visualizations, but also for your own visualisations
+
+- **`dequantize_embedding(quantized_embedding, scales)`**: Public utility function for dequantization
+  - Converts quantized embeddings to float32 by multiplying with scale factors
+  - Useful when working directly with downloaded quantized NPY files, but use the Tiles class for normal usage.
+  - Example: `embedding = dequantize_embedding(quantized, scales)`
 
 ### Migration Notes
 
