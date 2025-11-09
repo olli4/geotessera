@@ -1008,20 +1008,17 @@ class GeoTessera:
                 )
 
         # Handle GeoDataFrame
-        try:
-            import geopandas as gpd
-            if isinstance(points, gpd.GeoDataFrame):
-                result = []
-                for geom in points.geometry:
-                    if geom.geom_type == 'Point':
-                        result.append((geom.x, geom.y))
-                    else:
-                        raise ValueError(
-                            "GeoDataFrame must contain only Point geometries"
-                        )
-                return result
-        except ImportError:
-            pass
+        import geopandas as gpd
+        if isinstance(points, gpd.GeoDataFrame):
+          result = []
+          for geom in points.geometry:
+            if geom.geom_type == 'Point':
+              result.append((geom.x, geom.y))
+            else:
+              raise ValueError(
+                "GeoDataFrame must contain only Point geometries"
+              )
+          return result
 
         raise ValueError(
             "points must be a list of (lon, lat) tuples, GeoJSON FeatureCollection, "
