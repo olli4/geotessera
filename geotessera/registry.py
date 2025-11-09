@@ -670,9 +670,9 @@ class Registry:
                         )
                         registry_path = Path(result_path)
                         if result_path == str(registry_cache_path):
-                            self.logger.info("Registry is up to date")
+                            self.logger.info("Verified with server - registry is current (no download needed)")
                         else:
-                            self.logger.info("Registry updated")
+                            self.logger.info("Downloaded updated registry from server")
                 except Exception as e:
                     # If update check fails, use cached version (only if valid)
                     if is_valid_cache:
@@ -739,9 +739,9 @@ class Registry:
                     landmasks_path = Path(result_path)
                     self._landmasks_df = pd.read_parquet(landmasks_path)
                     if result_path == str(landmasks_cache_path):
-                        self.logger.info("Landmasks registry is up to date")
+                        self.logger.info("Verified with server - landmasks registry is current (no download needed)")
                     else:
-                        self.logger.info("Landmasks registry updated")
+                        self.logger.info("Downloaded updated landmasks registry from server")
                 except Exception as e:
                     # Landmasks are optional, if update check fails use cached version
                     self.logger.warning(f"Could not check for landmasks updates: {e}")
