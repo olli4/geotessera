@@ -238,7 +238,6 @@ class GeoTessera:
 
         # Write to file if requested
         if output_file:
-            import json
             with open(output_file, 'w') as f:
                 json.dump(coverage_map, f, indent=2)
             self.logger.info(f"Coverage map written to {output_file}")
