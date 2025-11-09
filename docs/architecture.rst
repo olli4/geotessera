@@ -25,19 +25,19 @@ The library follows a layered architecture:
     ├── CLI Commands (geotessera download, visualize, etc.)
     └── Python API (GeoTessera class)
             ↓
-    Core Processing Layer  
+    Core Processing Layer
     ├── GeoTessera class (main interface)
-    ├── Registry (data discovery and metadata)
+    ├── Registry (Parquet-based data discovery)
     └── Visualization (rendering and web maps)
             ↓
     Data Access Layer
-    ├── Pooch (download and caching)
+    ├── Direct HTTP downloads (urllib)
     ├── Rasterio (GeoTIFF I/O)
     └── GeoPandas (geospatial operations)
             ↓
     Storage Layer
-    ├── Remote servers (dl-2.tessera.wiki)
-    └── Local cache (~/.cache/geotessera)
+    ├── Remote servers (https://dl2.geotessera.org)
+    └── Local cache (~/.cache/geotessera/registry.parquet)
 
 Coordinate System and Grid
 --------------------------
@@ -192,182 +192,166 @@ Each tile uses an appropriate UTM zone based on its location::
 Registry System
 ---------------
 
-Block-Based Organization
-~~~~~~~~~~~~~~~~~~~~~~~~
+Parquet-Based Registry
+~~~~~~~~~~~~~~~~~~~~~~
 
-The registry uses a **5×5 degree block system** for efficient data discovery:
+The registry uses a **Parquet file** for efficient data discovery and querying:
 
-**Block Structure**:
+**Registry Structure**:
 
 .. code-block::
 
-    Registry Blocks (5° × 5°)
-    ├── Block (-5°, 50°) to (0°, 55°)     # Western Europe
-    │   ├── embeddings_2024_lon-5_lat50.txt
-    │   └── landmasks_lon-5_lat50.txt
-    ├── Block (0°, 50°) to (5°, 55°)      # Central Europe  
-    │   ├── embeddings_2024_lon0_lat50.txt
-    │   └── landmasks_lon0_lat50.txt
-    └── ...
+    registry.parquet (single file with all metadata)
+    ├── Columns:
+    │   ├── lon, lat         # Tile center coordinates
+    │   ├── year             # Data year (2017-2024)
+    │   ├── sha256           # File integrity checksum
+    │   ├── embedding_path   # Path to .npy file
+    │   ├── scales_path      # Path to _scales.npy file
+    │   └── block_info       # Internal 5×5 degree block identifiers
+    └── Rows: One per tile
 
-**Block Coordinate Calculation**::
+**Querying the Registry**::
 
+    import pandas as pd
+
+    # Load registry
+    registry = pd.read_parquet("registry.parquet")
+
+    # Query tiles in a region
+    bbox = (-0.2, 51.4, 0.1, 51.6)  # (min_lon, min_lat, max_lon, max_lat)
+    tiles = registry[
+        (registry['lon'] >= bbox[0]) & (registry['lon'] <= bbox[2]) &
+        (registry['lat'] >= bbox[1]) & (registry['lat'] <= bbox[3]) &
+        (registry['year'] == 2024)
+    ]
+
+    # Examples of block-based filtering (internal optimization)
     def get_block_coordinates(lon, lat):
         """Get the 5x5 degree block coordinates for a point."""
         # Round down to nearest 5-degree boundary
         block_lon = int(lon // 5) * 5
         block_lat = int(lat // 5) * 5
         return block_lon, block_lat
-    
-    # Examples
-    london_block = get_block_coordinates(0.15, 52.05)    # (0, 50)
-    paris_block = get_block_coordinates(2.35, 48.86)     # (0, 45)  
-    sydney_block = get_block_coordinates(151.21, -33.87) # (150, -35)
-
-Registry File Format
-~~~~~~~~~~~~~~~~~~~~
-
-Each registry file uses the Pooch format::
-
-    # Format: filepath checksum
-    2024/grid_0.15_52.05/grid_0.15_52.05.npy sha256:abc123def456...
-    2024/grid_0.15_52.05/grid_0.15_52.05_scales.npy sha256:def456abc123...
-    landmasks/grid_0.15_52.05.tiff sha256:789abc456def...
 
 **Registry Loading Process**:
 
-1. **Determine required blocks** for the requested bounding box
-2. **Load block registry files** (only the needed ones)
-3. **Parse available tiles** within the requested region
-4. **Cache registry data** for subsequent requests
-
-Lazy Loading Strategy
-~~~~~~~~~~~~~~~~~~~~~
-
-GeoTessera uses lazy loading to minimize memory usage and startup time:
-
-.. code-block:: python
-
-    class Registry:
-        def __init__(self):
-            self._loaded_blocks = set()      # Track loaded blocks
-            self._available_embeddings = []  # Cached tile list
-        
-        def load_blocks_for_region(self, bbox, year):
-            """Load only the blocks needed for this region."""
-            required_blocks = self._get_blocks_in_bbox(bbox)
-            
-            for block_coords in required_blocks:
-                if (year, *block_coords) not in self._loaded_blocks:
-                    self._load_block_registry(year, block_coords)
-                    self._loaded_blocks.add((year, *block_coords))
-        
-        def ensure_all_blocks_loaded(self):
-            """Load all blocks for global operations (coverage maps)."""
-            # Only called when needed for complete coverage
+1. **Download Parquet registry** (if not cached locally, ~few MB)
+2. **Query tiles** for the requested bounding box using pandas
+3. **Filter by year** if specified
+4. **Return matching tiles** as a DataFrame
+5. **Cache registry** in memory for subsequent requests
 
 Registry Sources
 ~~~~~~~~~~~~~~~~
 
 The registry can be loaded from multiple sources:
 
-**1. Auto-cloned Repository** (default)::
+**1. Default Remote** (recommended)::
 
-    ~/.cache/geotessera/tessera-manifests/
-    └── registry/
-        ├── embeddings/
-        └── landmasks/
-
-**2. Environment Variable**::
-
-    export TESSERA_REGISTRY_DIR=/path/to/tessera-manifests
-    geotessera download ...
-
-**3. Explicit Parameter**::
-
+    # Downloads and caches registry.parquet automatically
     from geotessera import GeoTessera
-    gt = GeoTessera(registry_dir="/path/to/tessera-manifests")
+    gt = GeoTessera()
 
-**4. Remote Fallback**:
+    # Cached at: ~/.cache/geotessera/registry.parquet
 
-If no local registry is available, individual registry files are downloaded on-demand.
+**2. Local File**::
+
+    gt = GeoTessera(registry_path="/path/to/registry.parquet")
+
+**3. Local Directory**::
+
+    # Looks for registry.parquet in the directory
+    gt = GeoTessera(registry_dir="/path/to/registry-dir")
+
+**4. Custom URL**::
+
+    gt = GeoTessera(registry_url="https://example.com/registry.parquet")
+
+**5. CLI Option**::
+
+    geotessera download --cache-dir /custom/cache ...
 
 Data Access Layer
 -----------------
 
-Pooch Integration
-~~~~~~~~~~~~~~~~~
+Direct HTTP Downloads
+~~~~~~~~~~~~~~~~~~~~~
 
-GeoTessera uses `Pooch <https://www.fatiando.org/pooch/>`_ for robust data downloading:
+GeoTessera uses direct HTTP downloads with temporary file handling:
 
 **Features**:
 
-- **Automatic caching**: Files cached after first download
-- **Integrity checking**: SHA256 verification
-- **Progress bars**: Visual download feedback  
-- **Retry logic**: Handles network issues
-- **Concurrent downloads**: Parallel fetching when possible
+- **Zero persistent storage**: Tiles downloaded to temp files and cleaned up immediately
+- **Integrity checking**: SHA256 verification for all downloads
+- **Progress callbacks**: Real-time download feedback with speed and size info
+- **Human-readable progress**: Download speeds shown in KB/s, MB/s format
+- **Automatic cleanup**: try/finally blocks ensure no leftover temp files
 
 **Cache Structure**::
 
     ~/.cache/geotessera/
-    ├── tessera-manifests/           # Registry repository
-    ├── pooch/                       # Downloaded embeddings
-    │   ├── 2024/
-    │   │   └── grid_0.15_52.05/
-    │   │       ├── grid_0.15_52.05.npy
-    │   │       └── grid_0.15_52.05_scales.npy
-    │   └── landmasks/
-    │       └── grid_0.15_52.05.tiff
-    └── geodatasets/                 # World map data
+    └── registry.parquet             # Only the registry is cached (~few MB)
+
+    # Note: Embedding and landmask tiles are NOT cached
+    # They are downloaded to temporary files and deleted after use
 
 **Download Process**::
 
-    # Simplified download workflow with CRS preservation
-    def fetch_embedding(lon, lat, year):  # Note: lon, lat order
-        # 1. Ensure registry block is loaded
-        registry.ensure_block_loaded(year, lon, lat)
-        
-        # 2. Get file paths from registry
-        embedding_path, scales_path = get_tile_paths(lon, lat, year)
-        landmask_path = get_landmask_path(lon, lat)
-        
-        # 3. Download files via Pooch (cached)
-        embedding_file = pooch.fetch(embedding_path)
-        scales_file = pooch.fetch(scales_path)
-        landmask_file = pooch.fetch(landmask_path)
-        
-        # 4. Load and dequantize
-        quantized = np.load(embedding_file)
-        scales = np.load(scales_file)
-        embedding = quantized.astype(np.float32) * scales
-        
-        # 5. Extract projection from landmask
-        with rasterio.open(landmask_file) as src:
-            crs = src.crs
-            transform = src.transform
-            
-        return embedding, crs, transform
+    import tempfile
+    from urllib.request import urlopen
+    from geotessera import dequantize_embedding
 
-Caching Strategy
-~~~~~~~~~~~~~~~~
+    def fetch_embedding(lon, lat, year):
+        # 1. Query registry for tile metadata
+        tile_info = registry.query_tile(lon, lat, year)
 
-**Cache Hierarchy**:
+        # 2. Download to temporary files (or use local if exists in embeddings_dir)
+        embedding_file, cleanup_embedding = registry.fetch(
+            year=year, lon=lon, lat=lat, is_scales=False
+        )
+        scales_file, cleanup_scales = registry.fetch(
+            year=year, lon=lon, lat=lat, is_scales=True
+        )
 
-1. **Memory cache**: Recently accessed embeddings kept in RAM
-2. **Disk cache**: Downloaded files persist across sessions
-3. **Registry cache**: Loaded registry data cached in memory
+        try:
+            # 3. Load and dequantize
+            quantized = np.load(embedding_file)
+            scales = np.load(scales_file)
+            embedding = dequantize_embedding(quantized, scales)
 
-**Cache Management**::
+            # 4. Get CRS from landmask (also temporary or local)
+            crs, transform = get_utm_projection_from_landmask(lon, lat)
 
-    # Cache locations (configurable)
-    data_cache = os.environ.get('TESSERA_DATA_DIR', 
-                               platformdirs.user_cache_dir('geotessera'))
-    
-    # Automatic cleanup (if needed)
-    def cleanup_cache(max_size_gb=10):
-        """Remove oldest files if cache exceeds size limit."""
-        # Implementation would check file sizes and modification times
+            return embedding, crs, transform
+
+        finally:
+            # 5. Clean up temporary files (if they were temporary)
+            if cleanup_embedding:
+                Path(embedding_file).unlink(missing_ok=True)
+            if cleanup_scales:
+                Path(scales_file).unlink(missing_ok=True)
+
+Temporary File Management
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Why Temporary Files?**
+
+- Embedding tiles can be large (1-64MB per tile)
+- Users typically process and export, not reuse raw tiles
+- Eliminates need for cache management and cleanup
+- Reduces disk space requirements to just the registry
+
+**Cache Configuration**::
+
+    from geotessera import GeoTessera
+
+    # Control where registry is cached
+    gt = GeoTessera(cache_dir="/custom/cache")
+
+    # Default cache locations:
+    # - Linux/macOS: ~/.cache/geotessera/
+    # - Windows: %LOCALAPPDATA%/geotessera/
 
 GeoTIFF Export Process
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -433,48 +417,52 @@ When processing large regions, GeoTessera uses several strategies:
     def process_large_region(bbox, year, bands=None):
         """Process a large region without loading all tiles into memory."""
         gt = GeoTessera()
-        
-        # Get tile list (metadata only)
-        tiles = gt.registry.load_blocks_for_region(bbox, year)
-        
-        for tile_lon, tile_lat in tiles:  # Note: lon, lat order
-            # Process one tile at a time  
-            embedding, crs, transform = gt.fetch_embedding(tile_lon, tile_lat, year)
-            
-            # Apply band selection early
+
+        # Step 1: Get tile list (metadata only, no data loaded)
+        tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=year)
+
+        # Step 2: Process tiles one at a time using generator
+        for year, tile_lon, tile_lat, embedding, crs, transform in gt.fetch_embeddings(tiles_to_fetch):
+            # Apply band selection early to reduce memory
             if bands:
                 embedding = embedding[:, :, bands]
-                
+
             # Process this tile
             result = process_single_tile(embedding)
-            
+
             # Save or accumulate results
             save_tile_result(result, tile_lat, tile_lon)
-            
+
             # Free memory
             del embedding
 
 Network Optimization
 ~~~~~~~~~~~~~~~~~~~~
 
-**Concurrent Downloads**:
+**Sequential Processing**:
 
-For multiple tiles, downloads can be parallelized::
+The fetch_embeddings() generator processes tiles sequentially, which is optimal for most use cases::
 
-    import concurrent.futures
-    
-    def download_tiles_parallel(tile_coords, year, max_workers=4):
-        """Download multiple tiles in parallel."""
-        gt = GeoTessera()
-        
-        def download_single(coords):
-            lon, lat = coords  # Note: lon, lat order
-            return gt.fetch_embedding(lon, lat, year)
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            embeddings = list(executor.map(download_single, tile_coords))
-        
-        return embeddings
+    # Sequential processing (recommended for most cases)
+    gt = GeoTessera()
+    tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+
+    # Returns generator - tiles are fetched one at a time
+    for year, tile_lon, tile_lat, embedding, crs, transform in gt.fetch_embeddings(tiles_to_fetch):
+        process_tile(embedding)  # Memory efficient
+
+**Point Sampling**:
+
+For sampling at specific locations, use the optimized point sampling method::
+
+    # Efficient point sampling with automatic tile download
+    points = [(0.15, 52.05), (0.25, 52.15), (-0.05, 51.55)]
+    embeddings = gt.sample_embeddings_at_points(points, year=2024)
+
+    # With metadata about which tile each point came from
+    embeddings, metadata = gt.sample_embeddings_at_points(
+        points, year=2024, include_metadata=True
+    )
 
 **Cache Efficiency**:
 

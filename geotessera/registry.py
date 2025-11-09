@@ -1,25 +1,33 @@
 """Registry management for Tessera data files.
 
-This module handles all registry-related operations including loading and managing
-registry files (local or remote), block-based lazy loading of registry data,
-parsing available embeddings and landmasks, and managing pooch instances for data fetching.
+This module handles all registry-related operations including loading and querying
+the Parquet registry, and direct HTTP downloads with local caching.
 
 Also includes utilities for block-based registry management, organizing global grid
 data into 5x5 degree blocks for efficient data access.
 """
 
 from pathlib import Path
-from typing import Optional, Union, List, Tuple
+from typing import Optional, Union, List, Tuple, Dict, Iterator, Callable
 import os
-import subprocess
 import math
 import re
-import pooch
-import numpy as np
 import logging
+import numpy as np
+import hashlib
+from urllib.request import urlopen, Request
+from urllib.error import HTTPError
+import time
 
-# Configure pooch logging after importing pooch
-pooch.get_logger().setLevel(logging.ERROR)
+try:
+    import pandas as pd
+except ImportError:
+    raise ImportError("pandas is required for registry operations")
+
+try:
+    import geopandas as gpd
+except ImportError:
+    raise ImportError("geopandas is required for spatial operations. Install with: pip install geopandas")
 
 # Constants for block-based registry management
 BLOCK_SIZE = 5  # 5x5 degree blocks
@@ -58,12 +66,22 @@ def block_from_world(lon: float, lat: float) -> Tuple[int, int]:
     Returns:
         tuple: (block_lon, block_lat) lower-left corner of the containing block
 
+    Raises:
+        ValueError: If coordinates are out of bounds or not finite
+
     Examples:
         >>> block_from_world(3.2, 52.7)
         (0, 50)
         >>> block_from_world(-7.8, -23.4)
         (-10, -25)
     """
+    if not (-180 <= lon <= 180):
+        raise ValueError(f"Longitude {lon} out of bounds [-180, 180]")
+    if not (-90 <= lat <= 90):
+        raise ValueError(f"Latitude {lat} out of bounds [-90, 90]")
+    if not (math.isfinite(lon) and math.isfinite(lat)):
+        raise ValueError("Coordinates must be finite numbers")
+
     block_lon = math.floor(lon / BLOCK_SIZE) * BLOCK_SIZE
     block_lat = math.floor(lat / BLOCK_SIZE) * BLOCK_SIZE
     return int(block_lon), int(block_lat)
@@ -117,7 +135,30 @@ def blocks_in_bounds(
 
     Returns:
         list: List of (block_lon, block_lat) tuples
+
+    Raises:
+        ValueError: If coordinates are out of bounds, not finite, or min > max
     """
+    # Validate longitude bounds
+    if not (-180 <= min_lon <= 180):
+        raise ValueError(f"Minimum longitude {min_lon} out of bounds [-180, 180]")
+    if not (-180 <= max_lon <= 180):
+        raise ValueError(f"Maximum longitude {max_lon} out of bounds [-180, 180]")
+    if min_lon > max_lon:
+        raise ValueError(f"Minimum longitude {min_lon} greater than maximum {max_lon}")
+
+    # Validate latitude bounds
+    if not (-90 <= min_lat <= 90):
+        raise ValueError(f"Minimum latitude {min_lat} out of bounds [-90, 90]")
+    if not (-90 <= max_lat <= 90):
+        raise ValueError(f"Maximum latitude {max_lat} out of bounds [-90, 90]")
+    if min_lat > max_lat:
+        raise ValueError(f"Minimum latitude {min_lat} greater than maximum {max_lat}")
+
+    # Validate all coordinates are finite
+    if not all(math.isfinite(x) for x in [min_lon, max_lon, min_lat, max_lat]):
+        raise ValueError("All coordinates must be finite numbers")
+
     blocks = []
 
     # Get block coordinates for corners
@@ -152,12 +193,22 @@ def tile_from_world(lon: float, lat: float) -> Tuple[float, float]:
     Returns:
         Tuple of (tile_lon, tile_lat) representing the tile center
 
+    Raises:
+        ValueError: If coordinates are out of bounds or not finite
+
     Examples:
         >>> tile_from_world(0.17, 52.23)
         (0.15, 52.25)
         >>> tile_from_world(-0.12, -0.03)
         (-0.15, -0.05)
     """
+    if not (-180 <= lon <= 180):
+        raise ValueError(f"Longitude {lon} out of bounds [-180, 180]")
+    if not (-90 <= lat <= 90):
+        raise ValueError(f"Latitude {lat} out of bounds [-90, 90]")
+    if not (math.isfinite(lon) and math.isfinite(lat)):
+        raise ValueError("Coordinates must be finite numbers")
+
     tile_lon = np.floor(lon * 10) / 10 + 0.05
     tile_lat = np.floor(lat * 10) / 10 + 0.05
     return round(float(tile_lon), 2), round(float(tile_lat), 2)
@@ -208,6 +259,21 @@ def tile_to_embedding_paths(lon: float, lat: float, year: int) -> Tuple[str, str
     return embedding_path, scales_path
 
 
+def tile_to_geotiff_path(lon: float, lat: float, year: int) -> str:
+    """Generate GeoTIFF file path for a tile.
+
+    Args:
+        lon: Tile center longitude
+        lat: Tile center latitude
+        year: Year of embeddings
+
+    Returns:
+        str: Relative path like "{year}/grid_{lon}_{lat}/grid_{lon}_{lat}_{year}.tiff"
+    """
+    grid_name = tile_to_grid_name(lon, lat)
+    return f"{year}/{grid_name}/{grid_name}_{year}.tiff"
+
+
 def tile_to_landmask_filename(lon: float, lat: float) -> str:
     """Generate landmask filename for a tile.
 
@@ -250,925 +316,920 @@ def tile_to_box(lon: float, lat: float):
     return box(west, south, east, north)
 
 
-# Registry path functions
-def registry_path_for_embeddings(
-    registry_base_dir: str, year: str, lon: float, lat: float
-) -> str:
-    """Get the full path to the embeddings registry file for given coordinates.
-
-    Args:
-        registry_base_dir: Base directory for registry files
-        year: Year string (e.g., "2024")
-        lon: Longitude in decimal degrees
-        lat: Latitude in decimal degrees
-
-    Returns:
-        str: Full path to the embeddings registry file
-    """
-    block_lon, block_lat = block_from_world(lon, lat)
-    registry_filename = block_to_embeddings_registry_filename(
-        year, block_lon, block_lat
-    )
-    return os.path.join(registry_base_dir, "registry", registry_filename)
-
-
-def registry_path_for_landmasks(registry_base_dir: str, lon: float, lat: float) -> str:
-    """Get the full path to the landmasks registry file for given coordinates.
-
-    Args:
-        registry_base_dir: Base directory for registry files
-        lon: Longitude in decimal degrees
-        lat: Latitude in decimal degrees
-
-    Returns:
-        str: Full path to the landmasks registry file
-    """
-    block_lon, block_lat = block_from_world(lon, lat)
-    registry_filename = block_to_landmasks_registry_filename(block_lon, block_lat)
-    return os.path.join(registry_base_dir, "registry", registry_filename)
-
-
 # Base URL for Tessera data downloads
-TESSERA_BASE_URL = "https://dl.geotessera.org"
+TESSERA_BASE_URL = "https://dl2.geotessera.org"
+
+# Directory structure constants (mirrors remote structure)
+EMBEDDINGS_DIR_NAME = "global_0.1_degree_representation"  # NPY embeddings and scales
+LANDMASKS_DIR_NAME = "global_0.1_degree_tiff_all"  # Landmask TIFFs
+
+# Note: Default registry URLs are constructed with version in Registry.__init__
+# Format: {TESSERA_BASE_URL}/{version}/registry.parquet
+
+
+def download_file_to_temp(url: str, expected_hash: Optional[str] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None, cache_path: Optional[Path] = None, max_retries: int = 3, timeout: int = 60) -> str:
+    """Download a file from URL with retry logic, optional caching and If-Modified-Since support.
+
+    Args:
+        url: URL to download from
+        expected_hash: Optional SHA256 hash to verify
+        progress_callback: Optional callback(bytes_downloaded, total_bytes, status)
+        cache_path: Optional path for caching. If provided, uses If-Modified-Since to avoid redownloading unchanged files.
+        max_retries: Maximum number of retry attempts (default: 3)
+        timeout: Timeout in seconds for each request (default: 60)
+
+    Returns:
+        Path to downloaded file (temporary if cache_path=None, otherwise cache_path)
+        Caller is responsible for cleanup of temporary files (cache_path=None case)
+
+    Raises:
+        URLError: If download fails after all retries
+        HTTPError: If server returns error (except 304 Not Modified when using cache, and transient 5xx errors)
+        ValueError: If hash verification fails
+    """
+    import tempfile
+    from email.utils import formatdate, parsedate_to_datetime
+    from urllib.error import URLError
+
+    # Helper function to execute request with retry logic
+    def execute_request_with_retry(request, max_retries, timeout):
+        """Execute HTTP request with exponential backoff retry logic."""
+        last_exception = None
+
+        for attempt in range(max_retries):
+            try:
+                return urlopen(request, timeout=timeout)
+            except HTTPError as e:
+                # Don't retry client errors (4xx) except 429 (rate limit)
+                if 400 <= e.code < 500 and e.code != 429:
+                    raise
+                # Retry on server errors (5xx) and rate limiting (429)
+                last_exception = e
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 1s, 2s, 4s
+                    backoff_time = 2 ** attempt
+                    logging.getLogger(__name__).debug(
+                        f"HTTP {e.code} error, retrying in {backoff_time}s (attempt {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(backoff_time)
+            except URLError as e:
+                # Retry on network errors
+                last_exception = e
+                if attempt < max_retries - 1:
+                    backoff_time = 2 ** attempt
+                    logging.getLogger(__name__).debug(
+                        f"Network error, retrying in {backoff_time}s (attempt {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(backoff_time)
+
+        # All retries exhausted, raise the last exception
+        raise last_exception
+
+    # Handle If-Modified-Since for cached files
+    headers = {'User-Agent': 'geotessera'}
+
+    if cache_path and cache_path.exists():
+        # Get the cached file's modification time
+        cache_mtime = cache_path.stat().st_mtime
+        if_modified_since = formatdate(cache_mtime, usegmt=True)
+        headers['If-Modified-Since'] = if_modified_since
+
+        # Make conditional request
+        request = Request(url, headers=headers)
+
+        try:
+            response = execute_request_with_retry(request, max_retries, timeout)
+            # 200 OK means file was modified, proceed with download
+        except HTTPError as e:
+            if e.code == 304:
+                # 304 Not Modified - use cached version
+                if progress_callback:
+                    progress_callback(0, 0, "Cache is current")
+                return str(cache_path)
+            else:
+                # Other HTTP errors should be raised
+                raise
+    else:
+        # No cache or cache_path not provided - regular download
+        request = Request(url, headers=headers)
+        response = execute_request_with_retry(request, max_retries, timeout)
+
+    # Determine output path
+    if cache_path:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_file = tempfile.NamedTemporaryFile(
+            mode='wb',
+            dir=cache_path.parent,
+            delete=False,
+            prefix=f'.{cache_path.name}_tmp_',
+            suffix=cache_path.suffix
+        )
+    else:
+        temp_file = tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.npy')
+
+    temp_path = Path(temp_file.name)
+
+    try:
+        with response:
+            total_size = int(response.headers.get('Content-Length', 0))
+            downloaded = 0
+            start_time = time.time()
+            last_update_time = start_time
+
+            # Format file size for display
+            def format_bytes(bytes_val):
+                """Format bytes as human-readable string."""
+                for unit in ['B', 'KB', 'MB', 'GB']:
+                    if bytes_val < 1024.0:
+                        return f"{bytes_val:.1f}{unit}"
+                    bytes_val /= 1024.0
+                return f"{bytes_val:.1f}TB"
+
+            if progress_callback:
+                size_str = format_bytes(total_size) if total_size > 0 else "unknown size"
+                progress_callback(0, total_size, f"Starting ({size_str})")
+
+            while True:
+                chunk = response.read(8192)
+                if not chunk:
+                    break
+                temp_file.write(chunk)
+                downloaded += len(chunk)
+
+                if progress_callback and total_size > 0:
+                    current_time = time.time()
+                    # Update progress with speed info every ~100ms or on significant progress
+                    if current_time - last_update_time > 0.1 or downloaded == total_size:
+                        elapsed = current_time - start_time
+                        if elapsed > 0:
+                            speed = downloaded / elapsed
+                            speed_str = format_bytes(speed) + "/s"
+                            downloaded_str = format_bytes(downloaded)
+                            total_str = format_bytes(total_size)
+                            status = f"{downloaded_str}/{total_str} @ {speed_str}"
+                        else:
+                            downloaded_str = format_bytes(downloaded)
+                            total_str = format_bytes(total_size)
+                            status = f"{downloaded_str}/{total_str}"
+
+                        progress_callback(downloaded, total_size, status)
+                        last_update_time = current_time
+
+        temp_file.close()
+
+        # Verify hash if provided
+        if expected_hash:
+            if progress_callback:
+                progress_callback(downloaded, downloaded, "Verifying hash...")
+            actual_hash = calculate_file_hash(temp_path)
+            if actual_hash != expected_hash:
+                temp_path.unlink()
+                raise ValueError(f"Hash mismatch: expected {expected_hash}, got {actual_hash}")
+
+        # Set file mtime from Last-Modified header if available
+        last_modified_str = response.headers.get('Last-Modified')
+        if last_modified_str:
+            try:
+                last_modified_dt = parsedate_to_datetime(last_modified_str)
+                last_modified_timestamp = last_modified_dt.timestamp()
+                os.utime(temp_path, (last_modified_timestamp, last_modified_timestamp))
+            except (ValueError, TypeError) as e:
+                # Parsing errors - invalid date format
+                logging.getLogger(__name__).debug(f"Could not parse Last-Modified header: {e}")
+            except OSError as e:
+                # Filesystem errors - permissions, disk full, etc.
+                logging.getLogger(__name__).warning(f"Could not set file mtime: {e}")
+
+        # If caching, atomically move to cache location
+        if cache_path:
+            temp_path.rename(cache_path)
+            final_path = cache_path
+        else:
+            final_path = temp_path
+
+        if progress_callback:
+            total_str = format_bytes(downloaded)
+            progress_callback(downloaded, downloaded, f"Complete ({total_str})")
+
+        return str(final_path)
+
+    except Exception:
+        temp_file.close()
+        if temp_path.exists():
+            temp_path.unlink()
+        raise
+
+
+def calculate_file_hash(file_path: Path) -> str:
+    """Calculate SHA256 hash of a file."""
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
 
 
 class Registry:
-    """Registry management for Tessera data files.
+    """Registry management for Tessera data files using Parquet.
 
     Handles all registry-related operations including:
-    - Loading and managing registry files (local or remote)
-    - Block-based lazy loading of registry data
+    - Loading and querying Parquet registry
+    - Direct HTTP downloads to embeddings_dir for persistent tile storage
     - Parsing available embeddings and landmasks
-    - Managing pooch instances for data fetching
+
+    Note: The Parquet registry itself (~few MB) is cached separately from tile data.
+    Data tiles are downloaded to embeddings_dir and persist for reuse across sessions.
     """
 
     def __init__(
         self,
         version: str,
-        cache_dir: Optional[Union[str, Path]],
-        registry_dir: Optional[Union[str, Path]],
-        auto_update: bool,
-        manifests_repo_url: str,
+        cache_dir: Optional[Union[str, Path]] = None,
+        embeddings_dir: Optional[Union[str, Path]] = None,
+        registry_url: Optional[str] = None,
+        registry_path: Optional[Union[str, Path]] = None,
+        registry_dir: Optional[Union[str, Path]] = None,
+        landmasks_registry_url: Optional[str] = None,
+        landmasks_registry_path: Optional[Union[str, Path]] = None,
+        logger: Optional[logging.Logger] = None,
     ):
-        """Initialize Registry manager.
+        """Initialize Registry manager with optimized Parquet registries.
 
         Args:
             version: Dataset version identifier
-            cache_dir: Local directory for caching downloaded files
-            registry_dir: Local directory containing registry files
-            auto_update: Whether to auto-update tessera-manifests repository
-            manifests_repo_url: Git repository URL for tessera-manifests
+            cache_dir: Optional directory for caching Parquet registries only (not data files)
+            embeddings_dir: Directory for storing embedding tiles (defaults to current directory).
+                Expected structure: global_0.1_degree_representation/{year}/grid_{lon}_{lat}.npy and _scales.npy,
+                global_0.1_degree_tiff_all/landmask_{lon}_{lat}.tif
+                Tiles are downloaded here and persist for reuse across sessions.
+            registry_url: URL to download embeddings Parquet registry from (default: remote)
+            registry_path: Local path to existing embeddings Parquet registry file
+            registry_dir: Directory containing registry.parquet and landmasks.parquet files (alternative to individual paths)
+            landmasks_registry_url: URL to download landmasks Parquet registry from (default: remote)
+            landmasks_registry_path: Local path to existing landmasks Parquet registry file
+            logger: Optional logger instance. If not provided, creates a new one
         """
         self.version = version
-        self._cache_dir = cache_dir
-        self._auto_update = auto_update
-        self._manifests_repo_url = manifests_repo_url
-        self._registry_dir = self._resolve_registry_dir(registry_dir)
+        self.logger = logger or logging.getLogger(__name__)
 
-        # Pooch instances for fetching data
-        self._pooch = None
-        self._landmask_pooch = None
-
-        # Available data tracking
-        self._available_embeddings = []
-        self._available_landmasks = []
-        self._loaded_blocks = (
-            set()
-        )  # Track which blocks have been loaded for embeddings
-        self._loaded_tile_blocks = (
-            set()
-        )  # Track which blocks have been loaded for landmasks
-
-        # Registry file paths
-        self._registry_base_dir = None
-        self._registry_file = None
-
-        # Initialize pooch instances
-        self._initialize_pooch()
-
-    def _resolve_registry_dir(
-        self, registry_dir: Optional[Union[str, Path]]
-    ) -> Optional[str]:
-        """Resolve the registry directory path from multiple sources.
-
-        This method normalizes the registry directory path to always point to the
-        directory containing the actual registry files (embeddings/, landmasks/).
-
-        Priority order:
-        1. Explicit registry_dir parameter
-        2. TESSERA_REGISTRY_DIR environment variable
-        3. Auto-clone tessera-manifests repository to cache dir
-
-        Args:
-            registry_dir: Directory containing registry files or parent directory
-                         with 'registry' subdirectory
-
-        Returns:
-            Path to directory containing registry files, or None for remote-only mode
-        """
-        resolved_path = None
-
-        # 1. Use explicit parameter if provided
-        if registry_dir is not None:
-            resolved_path = str(registry_dir)
-        # 2. Check environment variable
-        elif os.environ.get("TESSERA_REGISTRY_DIR"):
-            resolved_path = os.environ.get("TESSERA_REGISTRY_DIR")
-        # 3. Auto-clone tessera-manifests repository
+        # Set up cache directory for Parquet registries only
+        if cache_dir:
+            self._registry_cache_dir = Path(cache_dir)
         else:
-            return (
-                self._setup_tessera_manifests()
-            )  # This already returns registry subdir
-
-        # Normalize the path to point to the actual registry directory
-        if resolved_path:
-            registry_path = Path(resolved_path)
-
-            # If the path contains a 'registry' subdirectory, use that
-            if (registry_path / "registry").exists():
-                return str(registry_path / "registry")
-            # Otherwise assume the path already points to the registry directory
+            # Use platform-appropriate cache directory
+            if os.name == 'nt':
+                base = Path(os.environ.get('LOCALAPPDATA', '~')).expanduser()
             else:
-                return str(registry_path)
+                base = Path(os.environ.get('XDG_CACHE_HOME', '~/.cache')).expanduser()
+            self._registry_cache_dir = base / 'geotessera'
 
-        return None
+        self._registry_cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def _setup_tessera_manifests(self) -> str:
-        """Setup tessera-manifests repository in cache directory.
+        # Set up embeddings directory for tile storage (defaults to cwd)
+        if embeddings_dir:
+            self._embeddings_dir = Path(embeddings_dir)
+        else:
+            self._embeddings_dir = Path.cwd()
+            # Use debug level since this is only relevant when actually fetching tiles
+            self.logger.debug(f"embeddings_dir not specified, using current directory: {self._embeddings_dir}")
 
-        Clones or updates the tessera-manifests repository from GitHub.
+        # Handle registry_dir convenience parameter
+        if registry_dir:
+            registry_dir_path = Path(registry_dir)
+            if not registry_path:
+                candidate = registry_dir_path / 'registry.parquet'
+                if candidate.exists():
+                    registry_path = candidate
+            if not landmasks_registry_path:
+                candidate = registry_dir_path / 'landmasks.parquet'
+                if candidate.exists():
+                    landmasks_registry_path = candidate
 
-        Returns:
-            Path to the tessera-manifests directory
-        """
-        cache_path = (
-            self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
-        )
-        manifests_dir = Path(cache_path) / "tessera-manifests"
+        # Embeddings GeoParquet registry (GeoDataFrame with spatial index)
+        self._registry_gdf: Optional[gpd.GeoDataFrame] = None
+        self._registry_url = registry_url or f"{TESSERA_BASE_URL}/{version}/registry.parquet"
+        self._registry_path = Path(registry_path) if registry_path else None
 
-        if manifests_dir.exists():
-            if self._auto_update:
-                # Update existing repository
+        # Landmasks Parquet registry
+        self._landmasks_df: Optional[pd.DataFrame] = None
+        self._landmasks_registry_url = landmasks_registry_url or f"{TESSERA_BASE_URL}/{version}/landmasks.parquet"
+        self._landmasks_registry_path = Path(landmasks_registry_path) if landmasks_registry_path else None
+
+        # Load registries
+        self._load_registry()
+        self._load_landmasks_registry()
+
+    def _load_registry(self):
+        """Load registry as GeoDataFrame (GeoParquet or convert from Parquet) with If-Modified-Since refresh."""
+        registry_path = None
+
+        if self._registry_path and self._registry_path.exists():
+            # Load from local file (no updates check for explicit paths)
+            self.logger.info(f"Loading registry from local file: {self._registry_path}")
+            registry_path = self._registry_path
+        else:
+            # Use cached version with If-Modified-Since to check for updates
+            registry_cache_path = self._registry_cache_dir / "registry.parquet"
+
+            if registry_cache_path.exists():
+                self.logger.info(f"Using cached registry: {registry_cache_path}")
+
+                # Validate cached file format before accepting it
+                is_valid_cache = False
                 try:
-                    print(f"Updating tessera-manifests repository in {manifests_dir}")
-                    subprocess.run(
-                        ["git", "fetch", "origin"],
-                        cwd=manifests_dir,
-                        check=True,
-                        capture_output=True,
-                    )
+                    # Quick check: try to read metadata without loading full file
+                    test_gdf = gpd.read_parquet(registry_cache_path)
+                    if 'geometry' in test_gdf.columns and test_gdf.geometry is not None:
+                        is_valid_cache = True
+                    else:
+                        self.logger.warning("Cached registry is in old format (missing geometry column)")
+                        self.logger.info("Forcing download of updated GeoParquet format...")
+                except (OSError, ValueError, KeyError, ImportError) as e:
+                    # OSError: File issues, ValueError: Invalid parquet, KeyError: Missing columns, ImportError: Missing deps
+                    self.logger.warning(f"Cached registry is corrupted or in old format: {e}")
+                    self.logger.info("Forcing download of updated registry...")
 
-                    subprocess.run(
-                        ["git", "reset", "--hard", "origin/main"],
-                        cwd=manifests_dir,
-                        check=True,
-                        capture_output=True,
-                    )
-
-                    # Get the current git short hash
-                    result = subprocess.run(
-                        ["git", "rev-parse", "--short", "HEAD"],
-                        cwd=manifests_dir,
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                    )
-                    short_hash = result.stdout.strip()
-
-                    print(f"✓ tessera-manifests updated to latest version ({short_hash})")
-                except subprocess.CalledProcessError as e:
-                    print(f"Warning: Failed to update tessera-manifests: {e}")
-        else:
-            # Clone repository
-            try:
-                print(f"Cloning tessera-manifests repository to {manifests_dir}")
-                subprocess.run(
-                    ["git", "clone", self._manifests_repo_url, str(manifests_dir)],
-                    check=True,
-                    capture_output=True,
-                )
-
-                print("✓ tessera-manifests repository cloned successfully")
-            except subprocess.CalledProcessError as e:
-                raise RuntimeError(f"Failed to clone tessera-manifests repository: {e}")
-
-        # Return the registry subdirectory path
-        registry_dir = manifests_dir / "registry"
-        return str(registry_dir)
-
-    def _initialize_pooch(self):
-        """Initialize Pooch data fetchers for embeddings and land masks.
-
-        Sets up two Pooch instances:
-        1. Main fetcher for numpy embedding files (.npy and _scales.npy)
-        2. Land mask fetcher for GeoTIFF files containing binary land/water
-           masks and coordinate reference system metadata
-
-        Registry files are loaded lazily per year to improve performance.
-        """
-        cache_path = (
-            self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
-        )
-
-        # Initialize main pooch for numpy embeddings
-        self._pooch = pooch.create(
-            path=cache_path,
-            base_url=f"{TESSERA_BASE_URL}/{self.version}/global_0.1_degree_representation/",
-            version=self.version,
-            registry=None,
-            env="TESSERA_DATA_DIR",
-        )
-
-        # Registry files will be loaded lazily when needed
-        # This is handled by ensure_block_loaded method
-
-        # Initialize land mask pooch for landmask GeoTIFF files
-        # These TIFFs serve dual purposes:
-        # 1. Binary land/water distinction (pixel values 0=water, 1=land)
-        # 2. Coordinate reference system metadata for proper georeferencing
-        self._landmask_pooch = pooch.create(
-            path=cache_path,
-            base_url=f"{TESSERA_BASE_URL}/{self.version}/global_0.1_degree_tiff_all/",
-            version=self.version,
-            registry=None,
-            env="TESSERA_DATA_DIR",  # CR:avsm FIXME this should be a separate subdir
-        )
-
-        # Load registry index for block-based registries
-        self._load_registry_index()
-
-        # Try to load tiles registry index
-        self._load_tiles_registry_index()
-
-    def _load_tiles_registry_index(self):
-        """Load the registry index for block-based tile registries.
-
-        Downloads and caches the registry index file that lists all
-        available tile block registry files.
-        """
-        try:
-            # The registry file should already be loaded by _load_registry_index
-            # This method exists for compatibility but doesn't need to re-download
-            pass
-
-        except Exception as e:
-            print(f"Warning: Could not load registry: {e}")
-            # Continue without landmask support if registry loading fails
-
-    def _load_registry_index(self):
-        """Load the registry index for block-based registries.
-
-        If registry_dir is provided, loads registry files from local directory.
-        Otherwise downloads and caches the registry index file from remote.
-        """
-        if self._registry_dir:
-            # Use local registry directory (already normalized to point to registry files)
-            registry_path = Path(self._registry_dir)
-            self._registry_base_dir = str(registry_path)
-
-            # Look for master registry file in the local directory
-            master_registry = registry_path / "registry.txt"
-            if master_registry.exists():
-                self._registry_file = str(master_registry)
+                # Check for updates using If-Modified-Since (or force download if invalid)
+                try:
+                    if not is_valid_cache:
+                        # Delete invalid cache to force fresh download
+                        registry_cache_path.unlink(missing_ok=True)
+                        self.logger.info("Downloading updated registry...")
+                        result_path = download_file_to_temp(
+                            self._registry_url,
+                            cache_path=registry_cache_path
+                        )
+                        registry_path = Path(result_path)
+                        self.logger.info("Registry downloaded successfully")
+                    else:
+                        # Valid cache - check for updates normally
+                        self.logger.info("Checking for registry updates...")
+                        result_path = download_file_to_temp(
+                            self._registry_url,
+                            cache_path=registry_cache_path
+                        )
+                        registry_path = Path(result_path)
+                        if result_path == str(registry_cache_path):
+                            self.logger.info("Verified with server - registry is current (no download needed)")
+                        else:
+                            self.logger.info("Downloaded updated registry from server")
+                except Exception as e:
+                    # If update check fails, use cached version (only if valid)
+                    if is_valid_cache:
+                        self.logger.warning(f"Could not check for updates: {e}")
+                        self.logger.info("Using existing cached registry")
+                        registry_path = registry_cache_path
+                    else:
+                        # Invalid cache and download failed - raise error
+                        raise RuntimeError(f"Failed to download registry and no valid cache available: {e}") from e
             else:
-                # No master registry file, we'll scan directories later
-                self._registry_file = None
-        else:
-            # Original behavior: download from remote
-            cache_path = (
-                self._cache_dir if self._cache_dir else pooch.os_cache("geotessera")
-            )
-            self._registry_base_dir = cache_path
+                # Download the registry to cache for the first time
+                self.logger.info(f"Downloading registry from {self._registry_url}")
+                try:
+                    # Download registry with caching
+                    result_path = download_file_to_temp(
+                        self._registry_url,
+                        cache_path=registry_cache_path
+                    )
+                    registry_path = Path(result_path)
+                    self.logger.info("Registry downloaded successfully")
+                except Exception as e:
+                    raise RuntimeError(f"Failed to download registry: {e}") from e
 
-            # Download the master registry containing hashes of registry files
-            self._registry_file = pooch.retrieve(
-                url=f"{TESSERA_BASE_URL}/{self.version}/registry/registry.txt",
-                known_hash=None,
-                fname="registry.txt",
-                path=cache_path,
-                progressbar=True,
-            )
-
-    def _get_registry_hash(self, registry_filename: str) -> Optional[str]:
-        """Get the hash for a specific registry file from the master registry.txt.
-
-        Args:
-            registry_filename: Name of the registry file to look up
-
-        Returns:
-            Hash string if found, None otherwise
-        """
+        # Load as GeoParquet (spatial index already embedded)
         try:
-            if not self._registry_file or not Path(self._registry_file).exists():
-                return None
+            self._registry_gdf = gpd.read_parquet(registry_path)
+        except Exception as e:
+            raise RuntimeError(f"Failed to load registry as GeoParquet: {e}") from e
 
-            with open(self._registry_file, "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        parts = line.split(" ", 1)
-                        if len(parts) == 2 and parts[0] == registry_filename:
-                            return parts[1]
-            return None
-        except Exception:
-            return None
+        # Validate it's a proper GeoParquet file
+        if 'geometry' not in self._registry_gdf.columns or self._registry_gdf.geometry is None:
+            raise ValueError(
+                f"Registry file is not a valid GeoParquet file (missing geometry column): {registry_path}\n"
+                "Please regenerate the registry using the latest geotessera-registry scan command."
+            )
 
-    def ensure_block_loaded(self, year: int, lon: float, lat: float):
-        """Ensure registry data for a specific block is loaded.
+        self.logger.info(f"Loaded GeoParquet with {len(self._registry_gdf):,} tiles")
 
-        Loads only the registry file containing the specific coordinates needed,
-        providing efficient lazy loading of registry data.
+        # Validate registry structure
+        required_columns = {'lat', 'lon', 'year', 'hash', 'file_size'}
+        if not required_columns.issubset(self._registry_gdf.columns):
+            missing = required_columns - set(self._registry_gdf.columns)
+            raise ValueError(f"Registry is missing required columns: {missing}")
 
-        Args:
-            year: Year to load (e.g., 2024)
-            lon: Longitude in decimal degrees
-            lat: Latitude in decimal degrees
-        """
-        block_lon, block_lat = block_from_world(lon, lat)
-        block_key = (year, block_lon, block_lat)
-
-        if block_key in self._loaded_blocks:
-            return
-
-        registry_filename = block_to_embeddings_registry_filename(
-            str(year), block_lon, block_lat
-        )
-
-        if self._registry_dir:
-            # Load from local directory
-            embeddings_dir = Path(self._registry_base_dir) / "embeddings"
-            registry_file = embeddings_dir / registry_filename
-
-            if not registry_file.exists():
-                # Registry file doesn't exist - this block has no data coverage
-                # This is normal for ocean areas or regions without satellite coverage
-                return
-
-            # Load the registry file directly (now in correct pooch format)
-            self._pooch.load_registry(str(registry_file))
-            self._loaded_blocks.add(block_key)
-            self._parse_available_embeddings()
-            return
+    def _load_landmasks_registry(self):
+        """Load landmasks Parquet registry from local path or download from remote with If-Modified-Since refresh."""
+        if self._landmasks_registry_path and self._landmasks_registry_path.exists():
+            # Load from local file (no updates check for explicit paths)
+            self.logger.info(f"Loading landmasks registry from local file: {self._landmasks_registry_path}")
+            self._landmasks_df = pd.read_parquet(self._landmasks_registry_path)
         else:
-            # Original behavior: download from remote
-            # Get the hash from the master registry.txt file
-            registry_hash = self._get_registry_hash(registry_filename)
+            # Use cached version with If-Modified-Since to check for updates
+            landmasks_cache_path = self._registry_cache_dir / "landmasks.parquet"
 
-            # Download the specific block registry file
-            registry_url = (
-                f"{TESSERA_BASE_URL}/{self.version}/registry/{registry_filename}"
-            )
-            registry_file = pooch.retrieve(
-                url=registry_url,
-                known_hash=registry_hash,
-                fname=registry_filename,
-                path=self._registry_base_dir,
-                progressbar=False,  # Don't show progress for individual block downloads
-            )
-
-        # Load the registry into the pooch instance
-        self._pooch.load_registry(registry_file)
-        self._loaded_blocks.add(block_key)
-
-        # Update available embeddings cache
-        self._parse_available_embeddings()
-
-    def load_all_blocks(self, progress_callback: Optional[callable] = None):
-        """Load all available block registries to build complete embedding list.
-
-        This method is used when a complete listing of all embeddings is needed,
-        such as for generating coverage maps. It scans the local registry directory
-        or parses the master registry to find all block files and loads them.
-
-        Args:
-            progress_callback: Optional callback function(current, total, status) for progress tracking
-        """
-        try:
-            if self._registry_dir:
-                # Scan local embeddings directory for registry files
-                embeddings_dir = Path(self._registry_base_dir) / "embeddings"
-                if not embeddings_dir.exists():
-                    print(f"Warning: Embeddings directory not found: {embeddings_dir}")
+            if landmasks_cache_path.exists():
+                self.logger.info(f"Using cached landmasks registry: {landmasks_cache_path}")
+                # Check for updates using If-Modified-Since
+                try:
+                    self.logger.info("Checking for landmasks registry updates...")
+                    result_path = download_file_to_temp(
+                        self._landmasks_registry_url,
+                        cache_path=landmasks_cache_path
+                    )
+                    landmasks_path = Path(result_path)
+                    self._landmasks_df = pd.read_parquet(landmasks_path)
+                    if result_path == str(landmasks_cache_path):
+                        self.logger.info("Verified with server - landmasks registry is current (no download needed)")
+                    else:
+                        self.logger.info("Downloaded updated landmasks registry from server")
+                except Exception as e:
+                    # Landmasks are optional, if update check fails use cached version
+                    self.logger.warning(f"Could not check for landmasks updates: {e}")
+                    self.logger.info("Using existing cached landmasks registry")
+                    try:
+                        self._landmasks_df = pd.read_parquet(landmasks_cache_path)
+                    except (OSError, ValueError, ImportError) as read_error:
+                        # OSError: File not readable, ValueError: Invalid parquet, ImportError: Missing deps
+                        self.logger.warning(f"Could not read cached landmasks: {read_error}")
+                        self._landmasks_df = None
+                        return
+            else:
+                # Download the landmasks registry to cache for the first time
+                self.logger.info(f"Downloading landmasks registry from {self._landmasks_registry_url}")
+                try:
+                    # Download landmasks registry with caching
+                    result_path = download_file_to_temp(
+                        self._landmasks_registry_url,
+                        cache_path=landmasks_cache_path
+                    )
+                    landmasks_path = Path(result_path)
+                    self._landmasks_df = pd.read_parquet(landmasks_path)
+                    self.logger.info("Landmasks registry downloaded successfully")
+                except Exception as e:
+                    # Landmasks are optional, so just warn instead of failing
+                    self.logger.warning(f"Failed to download landmasks registry: {e}")
+                    self._landmasks_df = None
                     return
 
-                # Find all embeddings registry files
-                block_files = []
-                for file_path in embeddings_dir.glob("embeddings_*.txt"):
-                    if "_lon" in file_path.name and "_lat" in file_path.name:
-                        block_files.append(file_path.name)
+        # Validate landmasks registry structure
+        if self._landmasks_df is not None:
+            required_columns = {'lat', 'lon', 'hash', 'file_size'}
+            if not required_columns.issubset(self._landmasks_df.columns):
+                missing = required_columns - set(self._landmasks_df.columns)
+                self.logger.warning(f"Landmasks registry is missing required columns: {missing}")
+                self._landmasks_df = None
 
-                total_blocks = len(block_files)
-                if not progress_callback:
-                    print(f"Found {total_blocks} block registry files to load")
 
-                # Load each block registry
-                for i, block_file in enumerate(block_files):
-                    if progress_callback:
-                        progress_callback(
-                            i,
-                            total_blocks,
-                            f"Loading registry blocks: {i + 1}/{total_blocks}",
-                        )
-                    elif (i + 1) % 100 == 0:  # Progress indicator every 100 blocks
-                        print(f"Loading block registries: {i + 1}/{total_blocks}")
+    def iter_tiles_in_region(
+        self,
+        bounds: Tuple[float, float, float, float],
+        year: int
+    ) -> Iterator[Tuple[int, float, float]]:
+        """Lazy iterator over tiles in a region using GeoPandas spatial indexing.
 
-                    try:
-                        registry_file_path = embeddings_dir / block_file
+        GeoPandas automatically uses R-tree spatial indexing for fast queries.
+        This method:
+        - Starts yielding immediately (low latency)
+        - Uses constant memory regardless of region size
+        - Allows early termination without processing all tiles
+        - Leverages GeoPandas built-in R-tree for optimal performance
 
-                        # Load the registry file directly (now in correct pooch format)
-                        self._pooch.load_registry(str(registry_file_path))
+        Note: Registry stores tiles as Point geometries at their centers, but tiles
+        are 0.1° x 0.1° boxes. The query is expanded by 0.05° (half tile width) in
+        all directions to catch tiles whose boxes intersect the bounds but whose
+        centers fall outside.
 
-                        # Mark this block as loaded
-                        # Parse filename format: embeddings_YYYY_lonXXX_latYYY.txt
-                        # Examples: embeddings_2024_lon-15_lat10.txt, embeddings_2024_lon130_lat45.txt
-                        parts = block_file.replace(".txt", "").split("_")
-                        if len(parts) >= 4:
-                            year = int(
-                                parts[1]
-                            )  # parts[0] is "embeddings", parts[1] is year
+        Args:
+            bounds: Geographic bounds as (min_lon, min_lat, max_lon, max_lat)
+            year: Year of embeddings to load
 
-                            # Extract lon and lat values
-                            lon_part = None
-                            lat_part = None
-                            for j, part in enumerate(parts):
-                                if part.startswith("lon"):
-                                    lon_part = part[3:]  # Remove 'lon' prefix
-                                elif part.startswith("lat"):
-                                    lat_part = part[3:]  # Remove 'lat' prefix
+        Yields:
+            Tuples of (year, tile_lon, tile_lat) for each tile in the region
 
-                            if lon_part and lat_part:
-                                # Convert to block coordinates (assuming these are already block coordinates)
-                                block_lon = int(lon_part)
-                                block_lat = int(lat_part)
-                                self._loaded_blocks.add((year, block_lon, block_lat))
+        Example:
+            >>> registry = Registry('v1')
+            >>> bounds = (-0.2, 51.4, 0.1, 51.6)  # London
+            >>> for year, lon, lat in registry.iter_tiles_in_region(bounds, 2024):
+            ...     embedding = fetch_embedding(lon, lat, year)
+            ...     process(embedding)  # Start processing immediately
+        """
+        min_lon, min_lat, max_lon, max_lat = bounds
 
-                    except Exception as e:
-                        print(
-                            f"Warning: Failed to load block registry {block_file}: {e}"
-                        )
-                        continue
+        # Expand bounds by half a tile width (0.05°) to catch tiles whose boxes
+        # intersect the query region. Registry stores tiles as Point geometries at
+        # their centers, but tiles are 0.1° x 0.1° boxes, so we need to expand the
+        # query to include tiles whose centers are up to 0.05° outside the bounds.
+        expansion = 0.05
+        tiles = self._registry_gdf.cx[
+            min_lon - expansion:max_lon + expansion,
+            min_lat - expansion:max_lat + expansion
+        ]
 
-            else:
-                # Parse registry.txt to find all block registry files
-                block_files = []
-                with open(self._registry_file, "r") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line and not line.startswith("#"):
-                            parts = line.split(" ", 1)
-                            if len(parts) == 2:
-                                filename = parts[0]
-                                # Look for embeddings registry files (format: embeddings_YYYY_lonXXX_latYYY.txt)
-                                if (
-                                    filename.startswith("embeddings_")
-                                    and "_lon" in filename
-                                    and "_lat" in filename
-                                    and filename.endswith(".txt")
-                                ):
-                                    block_files.append(filename)
+        tiles = tiles[tiles['year'] == year]
 
-                total_blocks = len(block_files)
-                if not progress_callback:
-                    print(f"Found {total_blocks} block registry files to load")
-
-                # Load each block registry
-                for i, block_file in enumerate(block_files):
-                    if progress_callback:
-                        progress_callback(
-                            i,
-                            total_blocks,
-                            f"Loading registry blocks: {i + 1}/{total_blocks}",
-                        )
-                    elif (i + 1) % 100 == 0:  # Progress indicator every 100 blocks
-                        print(f"Loading block registries: {i + 1}/{total_blocks}")
-
-                    try:
-                        # Download the block registry file
-                        registry_url = (
-                            f"{TESSERA_BASE_URL}/{self.version}/registry/{block_file}"
-                        )
-                        registry_hash = self._get_registry_hash(block_file)
-
-                        downloaded_file = pooch.retrieve(
-                            url=registry_url,
-                            known_hash=registry_hash,
-                            fname=block_file,
-                            path=self._registry_base_dir,
-                            progressbar=False,  # Don't show progress for individual files
-                        )
-
-                        # Load the registry into the pooch instance
-                        self._pooch.load_registry(downloaded_file)
-
-                        # Mark this block as loaded
-                        # Parse filename format: embeddings_YYYY_lonXXX_latYYY.txt
-                        # Examples: embeddings_2024_lon-15_lat10.txt, embeddings_2024_lon130_lat45.txt
-                        parts = block_file.replace(".txt", "").split("_")
-                        if len(parts) >= 4:
-                            year = int(
-                                parts[1]
-                            )  # parts[0] is "embeddings", parts[1] is year
-
-                            # Extract lon and lat values
-                            lon_part = None
-                            lat_part = None
-                            for j, part in enumerate(parts):
-                                if part.startswith("lon"):
-                                    lon_part = part[3:]  # Remove 'lon' prefix
-                                elif part.startswith("lat"):
-                                    lat_part = part[3:]  # Remove 'lat' prefix
-
-                            if lon_part and lat_part:
-                                # Convert to block coordinates (assuming these are already block coordinates)
-                                block_lon = int(lon_part)
-                                block_lat = int(lat_part)
-                                self._loaded_blocks.add((year, block_lon, block_lat))
-
-                    except Exception as e:
-                        print(
-                            f"Warning: Failed to load block registry {block_file}: {e}"
-                        )
-                        continue
-
-            # Update available embeddings cache
-            if progress_callback:
-                progress_callback(total_blocks, total_blocks, "Parsing embeddings...")
-            self._parse_available_embeddings()
-
-            if progress_callback:
-                progress_callback(
-                    total_blocks,
-                    total_blocks,
-                    f"Loaded {len(self._available_embeddings)} total embeddings",
-                )
-            else:
-                print(f"Loaded {len(self._available_embeddings)} total embeddings")
-
-        except Exception as e:
-            print(f"Error loading all blocks: {e}")
+        # Drop duplicates and yield (vectorized iteration)
+        tiles_unique = tiles[['year', 'lon', 'lat']].drop_duplicates()
+        for year_val, lon_val, lat_val in tiles_unique.values:
+            yield (int(year_val), lon_val, lat_val)
 
     def load_blocks_for_region(
         self, bounds: Tuple[float, float, float, float], year: int
-    ) -> List[Tuple[float, float]]:
-        """Load only the registry blocks needed for a specific region and return available tiles.
+    ) -> List[Tuple[int, float, float]]:
+        """Load tiles for a region (list-returning version for backward compatibility).
 
-        This is much more efficient than loading all blocks globally when only
-        working with a specific geographic region.
+        For memory-efficient streaming, use iter_tiles_in_region() instead.
 
         Args:
             bounds: Geographic bounds as (min_lon, min_lat, max_lon, max_lat)
             year: Year of embeddings to load
 
         Returns:
-            List of (tile_lon, tile_lat) tuples for tiles available in the region
+            List of (year, tile_lon, tile_lat) tuples for tiles in the region
         """
-        min_lon, min_lat, max_lon, max_lat = bounds
+        # Use iterator and materialize to list (vectorized, 10-100x faster than iterrows)
+        tiles_list = list(self.iter_tiles_in_region(bounds, year))
 
-        # Get all blocks that intersect with the region
-        required_blocks = blocks_in_bounds(min_lon, max_lon, min_lat, max_lat)
+        if tiles_list:
+            self.logger.info(f"Found {len(tiles_list)} tiles for region in year {year}")
 
-        print(
-            f"Loading {len(required_blocks)} registry blocks for region bounds: "
-            f"({min_lon:.4f}, {min_lat:.4f}, {max_lon:.4f}, {max_lat:.4f})"
-        )
-
-        # Load each required block
-        blocks_loaded = 0
-        for block_lon, block_lat in required_blocks:
-            block_key = (year, block_lon, block_lat)
-
-            if block_key not in self._loaded_blocks:
-                # Use the center of the block to trigger loading
-                center_lon = block_lon + 2.5  # Center of 5-degree block
-                center_lat = block_lat + 2.5  # Center of 5-degree block
-
-                try:
-                    self.ensure_block_loaded(year, center_lon, center_lat)
-                    blocks_loaded += 1
-                except FileNotFoundError:
-                    # Registry file doesn't exist - this block has no data coverage
-                    # This is normal for ocean areas or regions without satellite coverage
-                    pass
-                except Exception as e:
-                    raise RuntimeError(
-                        f"Failed to load registry block ({block_lon}, {block_lat}): {e}"
-                    ) from e
-
-        # Calculate how many blocks are actually available
-        blocks_available = sum(
-            1
-            for block_lon, block_lat in required_blocks
-            if (year, block_lon, block_lat) in self._loaded_blocks
-        )
-
-        if blocks_loaded > 0:
-            print(
-                f"Successfully loaded {blocks_loaded} new registry blocks ({blocks_available}/{len(required_blocks)} total available)"
-            )
-        else:
-            print(
-                f"Using {blocks_available}/{len(required_blocks)} already loaded registry blocks"
-            )
-
-        # Update available embeddings cache
-        self._parse_available_embeddings()
-
-        # Filter tiles that are in the region for the specified year
-        tiles_in_region = []
-        for emb_year, lon, lat in self._available_embeddings:
-            if emb_year != year:
-                continue
-
-            # Check if tile intersects with region bounds
-            # Tiles are centered on 0.05-degree offsets and cover 0.1-degree squares
-            tile_min_lon, tile_min_lat = lon - 0.05, lat - 0.05
-            tile_max_lon, tile_max_lat = lon + 0.05, lat + 0.05
-
-            if (
-                tile_min_lon < max_lon
-                and tile_max_lon > min_lon
-                and tile_min_lat < max_lat
-                and tile_max_lat > min_lat
-            ):
-                tiles_in_region.append((lon, lat))
-
-        return tiles_in_region
-
-    def ensure_tile_block_loaded(self, lon: float, lat: float):
-        """Ensure registry data for a specific tile block is loaded.
-
-        Loads only the registry file containing the specific coordinates needed
-        for landmask tiles, providing efficient lazy loading.
-
-        Args:
-            lon: Longitude in decimal degrees
-            lat: Latitude in decimal degrees
-        """
-        block_lon, block_lat = block_from_world(lon, lat)
-        block_key = (block_lon, block_lat)
-
-        if block_key in self._loaded_tile_blocks:
-            return
-
-        registry_filename = block_to_landmasks_registry_filename(block_lon, block_lat)
-
-        if self._registry_dir:
-            # Load from local directory using block-based landmasks
-            landmasks_dir = Path(self._registry_base_dir) / "landmasks"
-            landmasks_registry_file = landmasks_dir / registry_filename
-
-            if not landmasks_registry_file.exists():
-                raise FileNotFoundError(
-                    f"Landmasks registry file not found: {landmasks_registry_file}"
-                )
-
-            # Load the block-specific landmasks registry
-            self._landmask_pooch.load_registry(str(landmasks_registry_file))
-            self._parse_available_landmasks()
-
-            # Mark this block as loaded
-            self._loaded_tile_blocks.add(block_key)
-            return
-        else:
-            # Original behavior: download from remote
-            # Get the hash from the master registry.txt file
-            registry_hash = self._get_registry_hash(registry_filename)
-
-            # Download the specific tile block registry file
-            registry_url = (
-                f"{TESSERA_BASE_URL}/{self.version}/registry/{registry_filename}"
-            )
-            registry_file = pooch.retrieve(
-                url=registry_url,
-                known_hash=registry_hash,
-                fname=registry_filename,
-                path=self._registry_base_dir,
-                progressbar=False,  # Don't show progress for individual block downloads
-            )
-
-        # Load the registry into the landmask pooch instance
-        self._landmask_pooch.load_registry(registry_file)
-        self._loaded_tile_blocks.add(block_key)
-
-        # Update available landmasks cache
-        self._parse_available_landmasks()
-
-    def _parse_available_embeddings(self):
-        """Parse registry files to build index of available embedding tiles.
-
-        Scans through loaded registry files to extract metadata about available
-        tiles. Each tile is identified by year, longitude, and latitude. This
-        method is called automatically when registry files are loaded.
-
-        The index is stored as a sorted list of (year, lon, lat) tuples for
-        efficient searching and iteration.
-        """
-        embeddings = []
-
-        if self._pooch and self._pooch.registry:
-            for file_path in self._pooch.registry.keys():
-                # Only process .npy files that are not scale files
-                if file_path.endswith(".npy") and not file_path.endswith("_scales.npy"):
-                    # Parse file path: e.g., "2024/grid_0.15_52.05/grid_0.15_52.05.npy"
-                    parts = file_path.split("/")
-                    if len(parts) >= 3:
-                        year_str = parts[0]
-                        grid_name = parts[1]  # e.g., "grid_0.15_52.05"
-
-                        try:
-                            year = int(year_str)
-
-                            # Extract coordinates from grid name
-                            if grid_name.startswith("grid_"):
-                                coords = grid_name[5:].split(
-                                    "_"
-                                )  # Remove "grid_" prefix
-                                if len(coords) == 2:
-                                    lon = float(coords[0])
-                                    lat = float(coords[1])
-                                    embeddings.append((year, lon, lat))
-
-                        except (ValueError, IndexError):
-                            continue
-
-        # Sort by year, then lon, then lat for consistent ordering
-        embeddings.sort(key=lambda x: (x[0], x[1], x[2]))
-        self._available_embeddings = embeddings
-
-    def _parse_available_landmasks(self):
-        """Parse land mask registry to index available GeoTIFF files.
-
-        Land mask files serve dual purposes:
-        1. Provide binary land/water classification (0=water, 1=land)
-        2. Store coordinate reference system metadata for proper georeferencing
-
-        This method builds an index of available land mask tiles as (lon, lat)
-        tuples for efficient lookup during merge operations.
-        """
-        landmasks = []
-
-        if not self._landmask_pooch or not self._landmask_pooch.registry:
-            return
-
-        for file_path in self._landmask_pooch.registry.keys():
-            # Parse file path: e.g., "grid_0.15_52.05.tiff"
-            if file_path.endswith(".tiff"):
-                # Extract coordinates from filename
-                filename = Path(file_path).name
-                if filename.startswith("grid_"):
-                    coords = filename[5:-5].split(
-                        "_"
-                    )  # Remove "grid_" prefix and ".tiff" suffix
-                    if len(coords) == 2:
-                        try:
-                            lon = float(coords[0])
-                            lat = float(coords[1])
-                            landmasks.append((lon, lat))
-                        except ValueError:
-                            continue
-
-        # Sort by lon, then lat for consistent ordering
-        landmasks.sort(key=lambda x: (x[0], x[1]))
-        self._available_landmasks = landmasks
+        return tiles_list
 
     def get_available_years(self) -> List[int]:
         """List all years with available Tessera embeddings.
 
-        Returns the years that have been loaded in blocks, or the common
-        range of years if no blocks have been loaded yet.
-
         Returns:
             List of years with available data, sorted in ascending order.
         """
-        loaded_years = {year for year, _, _ in self._loaded_blocks}
-        if loaded_years:
-            return sorted(loaded_years)
-        else:
-            # Return common range if no blocks loaded yet via an index
-            # FIXME: determine this from the registry directly
-            return list(range(2017, 2025))
+        return sorted(self._registry_gdf['year'].unique().tolist())
+
+    def get_tile_counts_by_year(self) -> Dict[int, int]:
+        """Get count of tiles per year using efficient pandas operations.
+
+        Returns:
+            Dictionary mapping year to tile count
+        """
+        # Use pandas groupby to count unique (lon, lat) coordinates per year
+        counts = self._registry_gdf.groupby('year')[['lon', 'lat']].apply(
+            lambda x: len(x.drop_duplicates())
+        ).to_dict()
+        return {int(year): int(count) for year, count in counts.items()}
 
     def get_available_embeddings(self) -> List[Tuple[int, float, float]]:
-        """Get list of all available embeddings as (year, lon, lat) tuples.
+        """Get list of all available embeddings with vectorized conversion.
 
         Returns:
             List of (year, lon, lat) tuples for all available embedding tiles
         """
-        return self._available_embeddings.copy()
-    
-    def get_manifest_info(self) -> Tuple[Optional[str], str]:
-        """Get the git short hash and repository URL of the tessera-manifests.
-        
-        Returns:
-            Tuple of (git_hash, repo_url) where git_hash may be None if not available
-        """
-        import subprocess
-        from pathlib import Path
-        
-        git_hash = None
-        repo_url = self._manifests_repo_url
-        
-        # Try to get git hash if we have a local manifest directory
-        if self._registry_dir:
-            # The registry_dir points to the 'registry' subdirectory, so go up one level
-            manifest_dir = Path(self._registry_dir).parent
-            if manifest_dir.exists() and (manifest_dir / ".git").exists():
-                try:
-                    result = subprocess.run(
-                        ["git", "rev-parse", "--short", "HEAD"],
-                        cwd=manifest_dir,
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                    )
-                    git_hash = result.stdout.strip()
-                except (subprocess.CalledProcessError, FileNotFoundError):
-                    pass
-        
-        return git_hash, repo_url
+        unique_tiles = self._registry_gdf[['year', 'lon', 'lat']].drop_duplicates()
 
-    def ensure_all_blocks_loaded(self, progress_callback: Optional[callable] = None):
-        """Ensure all registry blocks are loaded for complete coverage information.
-
-        Args:
-            progress_callback: Optional callback function(current, total, status) for progress tracking
-        """
-        if not self._available_embeddings:
-            self.load_all_blocks(progress_callback=progress_callback)
+        # Vectorized conversion using numpy (10-100x faster than iterrows)
+        return list(zip(
+            unique_tiles['year'].astype(int).values,
+            unique_tiles['lon'].values,
+            unique_tiles['lat'].values
+        ))
 
     def fetch(
         self,
-        path: str,
+        path: Optional[str] = None,
         progressbar: bool = True,
-        progress_callback: Optional[callable] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        refresh: bool = False,
+        year: Optional[int] = None,
+        lon: Optional[float] = None,
+        lat: Optional[float] = None,
+        is_scales: bool = False,
     ) -> str:
-        """Fetch a file from the main pooch registry.
+        """Fetch a file using local embeddings_dir or direct HTTP download.
 
         Args:
-            path: Path to the file in the registry
+            path: Optional path to the file (relative to base URL or embeddings_dir).
+                  If not provided, will be calculated from year/lon/lat.
             progressbar: Whether to show download progress
             progress_callback: Optional callback for progress updates
+            refresh: If True, force re-download even if local file exists
+            year: Year of the tile (required if path not provided)
+            lon: Longitude of the tile (required if path not provided)
+            lat: Latitude of the tile (required if path not provided)
+            is_scales: If True, fetch scales file instead of embedding file
 
         Returns:
-            Local file path to the cached file
+            Path to the file in embeddings_dir
         """
-        if progress_callback:
-            # Use custom HTTP downloader with Rich integration
-            from .progress import create_rich_downloader
+        # Calculate path from coordinates if not provided
+        if path is None:
+            if year is None or lon is None or lat is None:
+                raise ValueError("Must provide either 'path' or all of (year, lon, lat)")
+            embedding_path, scales_path = tile_to_embedding_paths(lon, lat, year)
+            path = scales_path if is_scales else embedding_path
 
-            downloader = create_rich_downloader(
-                progress_callback=progress_callback, description="Downloading"
-            )
-            return self._pooch.fetch(path, downloader=downloader)
-        else:
-            # Use standard Pooch progress or no progress
-            from .progress import should_show_pooch_progress
+        # Determine local file path
+        local_path = self._embeddings_dir / EMBEDDINGS_DIR_NAME / path
 
-            show_progress = should_show_pooch_progress() if progressbar else False
-            return self._pooch.fetch(path, progressbar=show_progress)
+        # Check if file exists locally and not refreshing
+        if local_path.exists() and not refresh:
+            # Use existing local file
+            return str(local_path)
+
+        # Query hash from GeoDataFrame for verification if year/lon/lat provided
+        # Note: Only verify hash for embedding files, not scales files (registry stores one hash per tile)
+        file_hash = None
+        if (self._registry_gdf is not None and year is not None and lon is not None and
+            lat is not None and not is_scales):
+            matches = self._registry_gdf[
+                (self._registry_gdf['year'] == year) &
+                (self._registry_gdf['lon'] == lon) &
+                (self._registry_gdf['lat'] == lat)
+            ]
+            if len(matches) > 0:
+                file_hash = matches.iloc[0]['hash']
+
+        # Download to embeddings_dir
+        url = f"{TESSERA_BASE_URL}/{self.version}/{EMBEDDINGS_DIR_NAME}/{path}"
+        downloaded_path = download_file_to_temp(url, expected_hash=file_hash,
+                                               progress_callback=progress_callback,
+                                               cache_path=local_path)
+
+        # Return path to saved file
+        return downloaded_path
 
     def fetch_landmask(
         self,
-        filename: str,
+        filename: Optional[str] = None,
         progressbar: bool = True,
-        progress_callback: Optional[callable] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        refresh: bool = False,
+        lon: Optional[float] = None,
+        lat: Optional[float] = None,
     ) -> str:
-        """Fetch a landmask file from the landmask pooch registry.
+        """Fetch a landmask file using local embeddings_dir or direct HTTP download.
 
         Args:
-            filename: Name of the landmask file
+            filename: Optional name of the landmask file. If not provided, will be
+                      calculated from lon/lat.
             progressbar: Whether to show download progress
             progress_callback: Optional callback for progress updates
+            refresh: If True, force re-download even if local file exists
+            lon: Longitude of the tile (required if filename not provided)
+            lat: Latitude of the tile (required if filename not provided)
 
         Returns:
-            Local file path to the cached file
+            Path to the file in embeddings_dir
         """
-        if progress_callback:
-            # Use custom HTTP downloader with Rich integration
-            from .progress import create_rich_downloader
+        # Calculate filename from coordinates if not provided
+        if filename is None:
+            if lon is None or lat is None:
+                raise ValueError("Must provide either 'filename' or both (lon, lat)")
+            filename = tile_to_landmask_filename(lon, lat)
 
-            downloader = create_rich_downloader(
-                progress_callback=progress_callback, description="Downloading"
-            )
-            return self._landmask_pooch.fetch(filename, downloader=downloader)
-        else:
-            # Use standard Pooch progress or no progress
-            from .progress import should_show_pooch_progress
+        # Determine local file path
+        local_path = self._embeddings_dir / LANDMASKS_DIR_NAME / filename
 
-            show_progress = should_show_pooch_progress() if progressbar else False
-            return self._landmask_pooch.fetch(filename, progressbar=show_progress)
+        # Check if file exists locally and not refreshing
+        if local_path.exists() and not refresh:
+            # Use existing local file
+            return str(local_path)
+
+        # Query hash from landmasks DataFrame for verification if lon/lat provided
+        file_hash = None
+        if self._landmasks_df is not None and lon is not None and lat is not None:
+            matches = self._landmasks_df[
+                (self._landmasks_df['lon'] == lon) &
+                (self._landmasks_df['lat'] == lat)
+            ]
+            if len(matches) > 0:
+                file_hash = matches.iloc[0]['hash']
+
+        # Download to embeddings_dir
+        url = f"{TESSERA_BASE_URL}/{self.version}/{LANDMASKS_DIR_NAME}/{filename}"
+        downloaded_path = download_file_to_temp(url, expected_hash=file_hash,
+                                               progress_callback=progress_callback,
+                                               cache_path=local_path)
+
+        # Return path to saved file
+        return downloaded_path
 
     @property
     def available_embeddings(self) -> List[Tuple[int, float, float]]:
         """Get list of available embeddings."""
-        return self._available_embeddings
+        return self.get_available_embeddings()
+
+    def get_landmask_count(self) -> int:
+        """Get count of unique landmask tiles using efficient pandas operations.
+
+        Returns:
+            Count of unique landmask tiles
+        """
+        if self._landmasks_df is not None:
+            # Count unique (lon, lat) combinations in landmasks registry
+            return len(self._landmasks_df[['lon', 'lat']].drop_duplicates())
+
+        # Fallback: count unique tiles in embeddings registry
+        return len(self._registry_gdf[['lon', 'lat']].drop_duplicates())
 
     @property
     def available_landmasks(self) -> List[Tuple[float, float]]:
-        """Get list of available landmasks."""
-        return self._available_landmasks
+        """Get list of available landmasks with vectorized conversion.
 
-    @property
-    def loaded_blocks(self) -> set:
-        """Get set of loaded embedding blocks."""
-        return self._loaded_blocks
+        Falls back to embedding tiles if landmasks registry is not available.
+
+        Note: For performance, use get_landmask_count() if you only need the count.
+        """
+        # Use landmasks registry if available
+        if self._landmasks_df is not None:
+            unique_tiles = self._landmasks_df[['lon', 'lat']].drop_duplicates()
+            # Vectorized conversion (10-100x faster than iterrows)
+            return list(zip(unique_tiles['lon'].values, unique_tiles['lat'].values))
+
+        # Fallback: assume landmasks are available for all embedding tiles
+        unique_tiles = self._registry_gdf[['lon', 'lat']].drop_duplicates()
+        return list(zip(unique_tiles['lon'].values, unique_tiles['lat'].values))
+
+
+    def get_manifest_info(self) -> Tuple[Optional[str], Optional[str]]:
+        """Get manifest information (git hash and repo URL).
+
+        For Parquet registries, this information is not stored in the registry.
+        Returns empty values for API compatibility.
+
+        Returns:
+            Tuple of (git_hash, repo_url) - both None for Parquet registries
+        """
+        return None, None
+
+    def get_tile_file_size(self, year: int, lon: float, lat: float) -> int:
+        """Get the file size of an embedding tile from the registry.
+
+        Args:
+            year: Year of the tile
+            lon: Longitude of the tile center
+            lat: Latitude of the tile center
+
+        Returns:
+            File size in bytes
+
+        Raises:
+            ValueError: If tile not found in registry or file_size column missing
+        """
+        if 'file_size' not in self._registry_gdf.columns:
+            raise ValueError(
+                "Registry is missing 'file_size' column. "
+                "Please update your registry to include file size metadata."
+            )
+
+        matches = self._registry_gdf[
+            (self._registry_gdf['year'] == year) &
+            (self._registry_gdf['lon'] == lon) &
+            (self._registry_gdf['lat'] == lat)
+        ]
+
+        if len(matches) == 0:
+            raise ValueError(
+                f"Tile not found in registry: year={year}, lon={lon:.2f}, lat={lat:.2f}"
+            )
+
+        return int(matches.iloc[0]['file_size'])
+
+    def get_scales_file_size(self, year: int, lon: float, lat: float) -> int:
+        """Get the file size of a scales file from the registry.
+
+        Args:
+            year: Year of the tile
+            lon: Longitude of the tile center
+            lat: Latitude of the tile center
+
+        Returns:
+            File size in bytes
+
+        Raises:
+            ValueError: If tile not found in registry or scales_size column missing
+        """
+        if 'scales_size' not in self._registry_gdf.columns:
+            raise ValueError(
+                "Registry is missing 'scales_size' column. "
+                "Please update your registry to include scales file size metadata."
+            )
+
+        matches = self._registry_gdf[
+            (self._registry_gdf['year'] == year) &
+            (self._registry_gdf['lon'] == lon) &
+            (self._registry_gdf['lat'] == lat)
+        ]
+
+        if len(matches) == 0:
+            raise ValueError(
+                f"Tile not found in registry: year={year}, lon={lon:.2f}, lat={lat:.2f}"
+            )
+
+        return int(matches.iloc[0]['scales_size'])
+
+    def get_landmask_file_size(self, lon: float, lat: float) -> int:
+        """Get the file size of a landmask tile from the registry.
+
+        Args:
+            lon: Longitude of the tile center
+            lat: Latitude of the tile center
+
+        Returns:
+            File size in bytes
+
+        Raises:
+            ValueError: If landmask not found in registry or file_size column missing
+        """
+        if self._landmasks_df is None:
+            raise ValueError(
+                "Landmasks registry is not loaded. "
+                "Please ensure landmasks.parquet is available."
+            )
+
+        if 'file_size' not in self._landmasks_df.columns:
+            raise ValueError(
+                "Landmasks registry is missing 'file_size' column. "
+                "Please update your landmasks registry to include file size metadata."
+            )
+
+        matches = self._landmasks_df[
+            (self._landmasks_df['lon'] == lon) &
+            (self._landmasks_df['lat'] == lat)
+        ]
+
+        if len(matches) == 0:
+            raise ValueError(
+                f"Landmask not found in registry: lon={lon:.2f}, lat={lat:.2f}"
+            )
+
+        return int(matches.iloc[0]['file_size'])
+
+    def calculate_download_requirements(
+        self,
+        tiles: List[Tuple[int, float, float]],
+        output_dir: Path,
+        format_type: str,
+        check_existing: bool = True
+    ) -> Tuple[int, int, Dict[str, int]]:
+        """Calculate download requirements for a set of tiles.
+
+        Args:
+            tiles: List of (year, lon, lat) tuples
+            output_dir: Output directory where files would be downloaded
+            format_type: Either 'npy' or 'tiff'
+            check_existing: If True, skip files that already exist (for resume).
+                           If False, calculate as if downloading all files (for dry-run estimates).
+
+        Returns:
+            Tuple of (total_bytes, total_files, file_sizes_dict)
+            - total_bytes: Total download size in bytes
+            - total_files: Number of files to download
+            - file_sizes_dict: Dictionary mapping file keys to sizes (for NPY format tracking)
+
+        Raises:
+            ValueError: If registry is missing required columns or tiles not found
+        """
+        total_bytes = 0
+        total_files = 0
+        file_sizes = {}  # For NPY format: cache file sizes by key
+
+        if format_type == "npy":
+            # For NPY format: embedding + scales + landmask per tile
+            for tile_year, tile_lon, tile_lat in tiles:
+                embedding_final = output_dir / EMBEDDINGS_DIR_NAME / str(tile_year) / f"grid_{tile_lon:.2f}_{tile_lat:.2f}.npy"
+                scales_final = output_dir / EMBEDDINGS_DIR_NAME / str(tile_year) / f"grid_{tile_lon:.2f}_{tile_lat:.2f}_scales.npy"
+                landmask_final = output_dir / LANDMASKS_DIR_NAME / f"landmask_{tile_lon:.2f}_{tile_lat:.2f}.tif"
+
+                # Create cache keys for tracking file sizes
+                embedding_key = f"embedding_{tile_year}_{tile_lon}_{tile_lat}"
+                scales_key = f"scales_{tile_year}_{tile_lon}_{tile_lat}"
+                landmask_key = f"landmask_{tile_lon}_{tile_lat}"
+
+                # Only count files that need downloading
+                if not check_existing or not embedding_final.exists():
+                    size = self.get_tile_file_size(tile_year, tile_lon, tile_lat)
+                    file_sizes[embedding_key] = size
+                    total_bytes += size
+                    total_files += 1
+
+                if not check_existing or not scales_final.exists():
+                    # Get actual scales file size from registry
+                    size = self.get_scales_file_size(tile_year, tile_lon, tile_lat)
+                    file_sizes[scales_key] = size
+                    total_bytes += size
+                    total_files += 1
+
+                if not check_existing or not landmask_final.exists():
+                    size = self.get_landmask_file_size(tile_lon, tile_lat)
+                    file_sizes[landmask_key] = size
+                    total_bytes += size
+                    total_files += 1
+        else:
+            # For TIFF format: one GeoTIFF per tile
+            # TIFF files will be larger than NPY due to dequantization (int8 -> float32)
+            # and additional metadata. Estimate as 4x the size of quantized embedding.
+            for tile_year, tile_lon, tile_lat in tiles:
+                embedding_size = self.get_tile_file_size(tile_year, tile_lon, tile_lat)
+                landmask_size = self.get_landmask_file_size(tile_lon, tile_lat)
+                # Estimate TIFF size: 4x embedding (float32 vs int8) + landmask overhead
+                tiff_size = (embedding_size * 4) + landmask_size
+                total_bytes += tiff_size
+                total_files += 1
+
+        return total_bytes, total_files, file_sizes

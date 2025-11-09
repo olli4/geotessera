@@ -6,10 +6,14 @@ and mosaic creation. Web/tile generation functions are in the web submodule.
 
 from pathlib import Path
 from typing import Union, List, Tuple, Optional, Dict, Callable
+import logging
 
 import numpy as np
 import geopandas as gpd
 import pandas as pd
+
+# Module-level logger
+logger = logging.getLogger(__name__)
 
 
 def analyze_geotiff_coverage(geotiff_paths: List[str]) -> Dict:
@@ -22,9 +26,10 @@ def analyze_geotiff_coverage(geotiff_paths: List[str]) -> Dict:
         Dictionary with coverage statistics and metadata
     """
     try:
-        import rasterio
+        from rasterio.warp import transform_bounds
+        from geotessera.tiles import Tile
     except ImportError:
-        raise ImportError("rasterio required: pip install rasterio")
+        raise ImportError("rasterio and geotessera.tiles required")
 
     if not geotiff_paths:
         return {"error": "No files provided"}
@@ -43,74 +48,71 @@ def analyze_geotiff_coverage(geotiff_paths: List[str]) -> Dict:
         "crs": set(),
     }
 
+    # Convert paths to Tile objects
     for path in geotiff_paths:
         try:
-            with rasterio.open(path) as src:
-                bounds = src.bounds
+            tile = Tile.from_geotiff(Path(path))
+            bounds = tile.bounds
 
-                # Convert bounds to lat/lon if needed
-                if src.crs and src.crs != "EPSG:4326":
-                    from rasterio.warp import transform_bounds
-
-                    # Transform bounds to WGS84 (lat/lon)
-                    lon_min, lat_min, lon_max, lat_max = transform_bounds(
-                        src.crs,
-                        "EPSG:4326",
-                        bounds.left,
-                        bounds.bottom,
-                        bounds.right,
-                        bounds.top,
-                    )
-                else:
-                    # Already in lat/lon
-                    lon_min, lat_min, lon_max, lat_max = (
-                        bounds.left,
-                        bounds.bottom,
-                        bounds.right,
-                        bounds.top,
-                    )
-
-                # Update overall bounds
-                coverage_info["bounds"]["min_lon"] = min(
-                    coverage_info["bounds"]["min_lon"], lon_min
+            # Convert bounds to lat/lon if needed
+            if tile.crs and str(tile.crs) != "EPSG:4326":
+                # Transform bounds to WGS84 (lat/lon)
+                lon_min, lat_min, lon_max, lat_max = transform_bounds(
+                    tile.crs,
+                    "EPSG:4326",
+                    bounds.left,
+                    bounds.bottom,
+                    bounds.right,
+                    bounds.top,
                 )
-                coverage_info["bounds"]["min_lat"] = min(
-                    coverage_info["bounds"]["min_lat"], lat_min
-                )
-                coverage_info["bounds"]["max_lon"] = max(
-                    coverage_info["bounds"]["max_lon"], lon_max
-                )
-                coverage_info["bounds"]["max_lat"] = max(
-                    coverage_info["bounds"]["max_lat"], lat_max
+            else:
+                # Already in lat/lon
+                lon_min, lat_min, lon_max, lat_max = (
+                    bounds.left,
+                    bounds.bottom,
+                    bounds.right,
+                    bounds.top,
                 )
 
-                # Track band counts
-                band_count = src.count
-                coverage_info["band_counts"][band_count] = (
-                    coverage_info["band_counts"].get(band_count, 0) + 1
-                )
+            # Update overall bounds
+            coverage_info["bounds"]["min_lon"] = min(
+                coverage_info["bounds"]["min_lon"], lon_min
+            )
+            coverage_info["bounds"]["min_lat"] = min(
+                coverage_info["bounds"]["min_lat"], lat_min
+            )
+            coverage_info["bounds"]["max_lon"] = max(
+                coverage_info["bounds"]["max_lon"], lon_max
+            )
+            coverage_info["bounds"]["max_lat"] = max(
+                coverage_info["bounds"]["max_lat"], lat_max
+            )
 
-                # Extract metadata
-                tags = src.tags()
-                if "TESSERA_YEAR" in tags:
-                    coverage_info["years"].add(tags["TESSERA_YEAR"])
+            # Track band counts (get from loaded data shape)
+            data = tile.load_embedding()
+            band_count = data.shape[2]  # (H, W, bands)
+            coverage_info["band_counts"][band_count] = (
+                coverage_info["band_counts"].get(band_count, 0) + 1
+            )
 
-                coverage_info["crs"].add(str(src.crs))
+            # Add year from tile
+            coverage_info["years"].add(str(tile.year))
+            coverage_info["crs"].add(str(tile.crs))
 
-                # Tile info (use lat/lon bounds)
-                coverage_info["tiles"].append(
-                    {
-                        "path": path,
-                        "bounds": [lon_min, lat_min, lon_max, lat_max],
-                        "bands": band_count,
-                        "year": tags.get("TESSERA_YEAR", "unknown"),
-                        "tile_lat": tags.get("TESSERA_TILE_LAT", "unknown"),
-                        "tile_lon": tags.get("TESSERA_TILE_LON", "unknown"),
-                    }
-                )
+            # Tile info (use lat/lon bounds)
+            coverage_info["tiles"].append(
+                {
+                    "path": path,
+                    "bounds": [lon_min, lat_min, lon_max, lat_max],
+                    "bands": band_count,
+                    "year": str(tile.year),
+                    "tile_lat": tile.lat,
+                    "tile_lon": tile.lon,
+                }
+            )
 
         except Exception as e:
-            print(f"Warning: Failed to read {path}: {e}")
+            logger.warning(f"Failed to read {path}: {e}")
             continue
 
     # Convert sets to lists for JSON serialization
@@ -192,7 +194,7 @@ def visualize_global_coverage(
     world = None
     if show_countries:
         if not progress_callback:
-            print("Loading world map data...")
+            logger.info("Loading world map data...")
         world = gpd.read_file(geodatasets.get_path("naturalearth.land"))
         
         # Clip world data to region if needed before plotting
@@ -202,12 +204,7 @@ def visualize_global_coverage(
             region_box = box(min_lon, min_lat, max_lon, max_lat)
             world = world.clip(region_box)
 
-    # Ensure we have embeddings loaded
-    tessera_client.registry.ensure_all_blocks_loaded(
-        progress_callback=progress_callback
-    )
-
-    # Get available embeddings
+    # Get available embeddings (registry is already loaded at initialization)
     available_embeddings = tessera_client.registry.get_available_embeddings()
     
     # Get all available years for legend use
@@ -276,7 +273,7 @@ def visualize_global_coverage(
                 title += " (Region View)"
 
     if not progress_callback:
-        print(f"Found {len(tiles)} tiles to visualize")
+        logger.info(f"Found {len(tiles)} tiles to visualize")
 
     # Calculate figure dimensions
     if progress_callback:
@@ -376,7 +373,7 @@ def visualize_global_coverage(
     if region_file and progress_callback:
         progress_callback(77, 100, "Adding region overlay...")
     elif region_file:
-        print("Adding region overlay...")
+        logger.info("Adding region overlay...")
     
     if region_file:
         try:
@@ -388,7 +385,7 @@ def visualize_global_coverage(
             if progress_callback:
                 progress_callback(77, 100, f"Warning: Could not load region file: {e}")
             else:
-                print(f"Warning: Could not load region file: {e}")
+                logger.warning(f"Could not load region file: {e}")
 
     # Add grid
     ax.grid(True, alpha=0.3, linestyle="--")
@@ -408,7 +405,7 @@ def visualize_global_coverage(
     stats_text += f"\nGenerated: {current_timestamp}"
     
     git_hash, repo_url = tessera_client.registry.get_manifest_info()
-    if "github.com" in repo_url:
+    if repo_url and "github.com" in repo_url:
         repo_name = repo_url.split("github.com/")[-1].replace(".git", "")
         stats_text += f"\nRepo: {repo_name}"
     if git_hash:
@@ -462,7 +459,7 @@ def visualize_global_coverage(
     if progress_callback:
         progress_callback(100, 100, "Done!")
     else:
-        print(f"Coverage map saved to: {output_path}")
+        logger.info(f"Coverage map saved to: {output_path}")
     return output_path
 
 
@@ -629,7 +626,7 @@ def calculate_bbox_from_points(
 
 
 def create_pca_mosaic(
-    geotiff_paths: List[str],
+    tiles_data: List[Dict],
     output_path: str,
     n_components: int = 3,
     target_crs: str = "EPSG:3857",
@@ -638,27 +635,29 @@ def create_pca_mosaic(
     percentile_range: Tuple[float, float] = (2, 98),
 ) -> str:
     """Create PCA mosaic using combined-data approach.
-    
+
     This function combines all embedding data across tiles, applies a single PCA
     transformation to the combined dataset, then creates a unified RGB mosaic.
     This ensures consistent principal components across the entire region,
     eliminating tiling artifacts.
-    
+
+    Works with both GeoTIFF and NPY format tiles (via Tile abstraction).
+
     Args:
-        geotiff_paths: List of paths to GeoTIFF files containing embeddings
+        tiles_data: List of dicts with keys: path, data, crs, transform, bounds, height, width
         output_path: Output path for the PCA mosaic
         n_components: Number of PCA components to compute (only first 3 used for RGB)
         target_crs: Target CRS for the output mosaic
         progress_callback: Optional callback function(current, total, status) for progress tracking
         balance_method: Method for balancing RGB channels: "histogram" (default), "percentile", or "adaptive"
         percentile_range: Tuple of (lower, upper) percentiles for "percentile" method
-        
+
     Returns:
         Path to created PCA mosaic file
-        
+
     Raises:
         ImportError: If scikit-learn or rasterio are not available
-        ValueError: If no GeoTIFF files are provided
+        ValueError: If no tiles are provided
     """
     try:
         import rasterio
@@ -671,40 +670,28 @@ def create_pca_mosaic(
         import shutil
     except ImportError as e:
         raise ImportError(f"Required packages missing: {e}")
-    
-    if not geotiff_paths:
-        raise ValueError("No GeoTIFF files provided")
-    
-    # Step 1: Read all embedding data from GeoTIFF files
+
+    if not tiles_data:
+        raise ValueError("No tiles provided")
+
+    # Step 1: Read all embedding data (already loaded in tiles_data)
     if progress_callback:
         progress_callback(1, 5, "Reading embedding data...")
-    
-    tiles_data = []
+
     all_pixels = []  # For combined PCA
-    
-    for i, geotiff_path in enumerate(geotiff_paths):
-        with rasterio.open(geotiff_path) as src:
-            # Read all bands: (bands, height, width) -> (height, width, bands)
-            data = np.transpose(src.read(), (1, 2, 0))
-            
-            tiles_data.append({
-                'path': geotiff_path,
-                'data': data,
-                'crs': src.crs,
-                'transform': src.transform,
-                'bounds': src.bounds,
-                'height': src.height,
-                'width': src.width
-            })
-            
-            # Flatten spatial dimensions for PCA: (height*width, bands)
-            pixels = data.reshape(-1, data.shape[2])
-            all_pixels.append(pixels)
-            
-            # Progress update
-            if progress_callback:
-                read_progress = 1 + (i / len(geotiff_paths))
-                progress_callback(read_progress, 5, f"Reading tile {i+1}/{len(geotiff_paths)}")
+
+    for i, tile_dict in enumerate(tiles_data):
+        # Data already loaded from Tile.to_dict()
+        data = tile_dict['data']
+
+        # Flatten spatial dimensions for PCA: (height*width, bands)
+        pixels = data.reshape(-1, data.shape[2])
+        all_pixels.append(pixels)
+
+        # Progress update
+        if progress_callback:
+            read_progress = 1 + (i / len(tiles_data))
+            progress_callback(read_progress, 5, f"Reading tile {i+1}/{len(tiles_data)}")
     
     # Step 2: Combine all pixel data and apply PCA
     if progress_callback:
@@ -712,7 +699,7 @@ def create_pca_mosaic(
     
     # Combine all pixels from all tiles
     combined_pixels = np.vstack(all_pixels)
-    print(f"Combined data shape: {combined_pixels.shape}")
+    logger.info(f"Combined data shape: {combined_pixels.shape}")
     
     # Standardize the combined data
     scaler = StandardScaler()
@@ -724,7 +711,7 @@ def create_pca_mosaic(
     
     explained_variance = pca.explained_variance_ratio_
     total_variance = explained_variance.sum()
-    print(f"PCA explained variance: {explained_variance[:3]} (total: {total_variance:.3f})")
+    logger.info(f"PCA explained variance: {explained_variance[:3]} (total: {total_variance:.3f})")
     
     # Step 3: Split PCA results back into tiles and create temporary GeoTIFFs
     if progress_callback:
@@ -746,7 +733,7 @@ def create_pca_mosaic(
             p_low = np.percentile(component_data, percentile_range[0])
             p_high = np.percentile(component_data, percentile_range[1])
             component_scales.append((p_low, p_high))
-            print(f"PC{j+1} percentile scaling: [{p_low:.2f}, {p_high:.2f}]")
+            logger.info(f"PC{j+1} percentile scaling: [{p_low:.2f}, {p_high:.2f}]")
     
     elif balance_method == "histogram":
         # Apply histogram equalization to the combined PCA data first
@@ -773,7 +760,7 @@ def create_pca_mosaic(
             new_min = combined_pca[:, j].min()
             new_max = combined_pca[:, j].max()
             component_scales.append((new_min, new_max))
-            print(f"PC{j+1} histogram equalized: [{new_min:.2f}, {new_max:.2f}]")
+            logger.info(f"PC{j+1} histogram equalized: [{new_min:.2f}, {new_max:.2f}]")
     
     elif balance_method == "adaptive":
         # Adaptive scaling based on variance
@@ -785,7 +772,7 @@ def create_pca_mosaic(
             p_low = mean - 2.5 * std
             p_high = mean + 2.5 * std
             component_scales.append((p_low, p_high))
-            print(f"PC{j+1} adaptive scaling (μ±2.5σ): [{p_low:.2f}, {p_high:.2f}]")
+            logger.info(f"PC{j+1} adaptive scaling (μ±2.5σ): [{p_low:.2f}, {p_high:.2f}]")
     
     else:
         raise ValueError(f"Unknown balance_method: {balance_method}")

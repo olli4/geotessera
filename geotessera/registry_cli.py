@@ -8,13 +8,16 @@ updates, and generation of a master registry index.
 """
 
 import os
+import sys
 import hashlib
 import argparse
 import subprocess
+import logging
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from collections import defaultdict
 import multiprocessing
 import pandas as pd
+import geopandas as gpd
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Callable, Any, List, Optional
@@ -22,6 +25,7 @@ from typing import Callable, Any, List, Optional
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.logging import RichHandler
 from rich.progress import (
     Progress,
     SpinnerColumn,
@@ -36,6 +40,12 @@ from .registry import (
     block_to_landmasks_registry_filename,
     parse_grid_name,
 )
+
+# Module-level logger
+logger = logging.getLogger(__name__)
+
+# Create console with automatic terminal detection
+console = Console()
 
 
 @dataclass
@@ -56,6 +66,105 @@ class TileInfo:
     scales_size: int
 
 
+def process_grid_directory(args):
+    """Process a single grid directory and return TileInfo.
+
+    Args:
+        args: Tuple of (year, year_path, grid_item, base_dir)
+
+    Returns:
+        TileInfo object or None if directory should be skipped
+    """
+    year, year_path, grid_item, base_dir = args
+    grid_path = os.path.join(year_path, grid_item)
+
+    try:
+        # Check if directory has any files at all
+        dir_contents = os.listdir(grid_path)
+        if not dir_contents:
+            return None  # Empty directory - skip silently
+
+        # Check if this looks like a tile directory (has SHA256 or .npy files)
+        has_sha256 = "SHA256" in dir_contents
+        has_npy_files = any(f.endswith('.npy') for f in dir_contents)
+
+        if not has_sha256 and not has_npy_files:
+            return None  # Directory has files but doesn't look like a tile directory - skip
+
+        # Parse coordinates from grid name
+        lon, lat = parse_grid_name(grid_item)
+        if lon is None or lat is None:
+            raise ValueError(f"Could not parse coordinates from grid name: {grid_item}")
+
+        # Read SHA256 file
+        sha256_file = os.path.join(grid_path, "SHA256")
+        if not os.path.exists(sha256_file):
+            # If there are .npy files but no SHA256, that's an error
+            if has_npy_files:
+                raise FileNotFoundError(f"Missing SHA256 file in tile directory: {sha256_file}")
+            return None  # Otherwise skip this directory
+
+        # Parse hashes from SHA256 file
+        embedding_hash = None
+        scales_hash = None
+
+        with open(sha256_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+
+                parts = line.split()
+                if len(parts) >= 2:
+                    hash_value = parts[0]
+                    filename = parts[-1]  # Handle spaces in paths
+
+                    if filename == f"{grid_item}.npy":
+                        embedding_hash = hash_value
+                    elif filename == f"{grid_item}_scales.npy":
+                        scales_hash = hash_value
+
+        # Validate required files and hashes
+        embedding_path = os.path.join(grid_path, f"{grid_item}.npy")
+        scales_path = os.path.join(grid_path, f"{grid_item}_scales.npy")
+
+        if not os.path.exists(embedding_path):
+            raise FileNotFoundError(f"Missing embedding file: {embedding_path}")
+        if not os.path.exists(scales_path):
+            raise FileNotFoundError(f"Missing scales file: {scales_path}")
+        if embedding_hash is None:
+            raise ValueError(f"No hash found for embedding in {sha256_file}")
+        if scales_hash is None:
+            raise ValueError(f"No hash found for scales in {sha256_file}")
+
+        # Get file stats
+        embedding_stat = os.stat(embedding_path)
+        scales_stat = os.stat(scales_path)
+
+        # Create TileInfo object
+        tile_info = TileInfo(
+            year=year,
+            lat=lat,
+            lon=lon,
+            grid_name=grid_item,
+            embedding_path=embedding_path,
+            scales_path=scales_path,
+            directory_path=grid_path,
+            embedding_hash=embedding_hash,
+            scales_hash=scales_hash,
+            embedding_mtime=embedding_stat.st_mtime,
+            scales_mtime=scales_stat.st_mtime,
+            embedding_size=embedding_stat.st_size,
+            scales_size=scales_stat.st_size
+        )
+
+        return tile_info
+
+    except Exception as e:
+        # Return error info as a special tuple
+        return ("ERROR", grid_item, str(e))
+
+
 def iterate_tessera_tiles(
     base_dir: str,
     callback: Callable[[TileInfo], Any],
@@ -63,21 +172,23 @@ def iterate_tessera_tiles(
 ) -> List[Any]:
     """
     Single-pass iterator through Tessera embedding filesystem structure.
-    
+
     For each tile:
     1. Reads hashes from existing SHA256 file in grid directory
     2. Gets file stats (mtime, size) from filesystem
     3. Calls callback with complete TileInfo object
     4. Validates that both embedding and scales files exist
-    
+
+    Uses multiprocessing for parallel directory scanning.
+
     Args:
         base_dir: Base directory containing global_0.1_degree_representation
         callback: Function called for each tile with TileInfo object
         progress_callback: Optional progress reporting function(current, total, status)
-        
+
     Returns:
         List of results from callback calls (None results are filtered out)
-        
+
     Raises:
         FileNotFoundError: Missing SHA256 files or embedding/scales files
         ValueError: Corrupted directory structure or hash format
@@ -103,118 +214,73 @@ def iterate_tessera_tiles(
     if total_dirs == 0:
         # No grid directories at all
         return results  # Return empty list instead of raising error
-    
-    # Process each grid directory
+
+    # Get number of CPU cores for parallel processing
+    num_cores = multiprocessing.cpu_count()
+
+    # Report parallelization to user if progress callback is available
+    if progress_callback:
+        progress_callback(0, total_dirs, f"Using {num_cores} CPU cores for parallel processing")
+
+    # Collect all grid directory tasks
+    grid_tasks = []
     for year_item in os.listdir(repr_dir):
         year_path = os.path.join(repr_dir, year_item)
         if not (os.path.isdir(year_path) and year_item.isdigit() and len(year_item) == 4):
             continue
-            
+
         year = int(year_item)
-        
+
         for grid_item in os.listdir(year_path):
             grid_path = os.path.join(year_path, grid_item)
-            if not (os.path.isdir(grid_path) and grid_item.startswith("grid_")):
-                continue
-            
+            if os.path.isdir(grid_path) and grid_item.startswith("grid_"):
+                grid_tasks.append((year, year_path, grid_item, base_dir))
+
+    # Process grid directories in parallel
+    with ProcessPoolExecutor(max_workers=num_cores) as executor:
+        # Submit all tasks
+        futures = {
+            executor.submit(process_grid_directory, task): task
+            for task in grid_tasks
+        }
+
+        # Process results as they complete
+        for future in as_completed(futures):
+            task = futures[future]
+            year, year_path, grid_item, _ = task
+
             processed_dirs += 1
-            
+
             # Update progress
             if progress_callback:
                 progress_callback(processed_dirs, total_dirs, f"Processing {grid_item}")
-            
+
             try:
-                # Check if directory has any files at all
-                dir_contents = os.listdir(grid_path)
-                if not dir_contents:
-                    # Empty directory - skip silently
+                tile_info_or_error = future.result()
+
+                # Check if this is an error result
+                if isinstance(tile_info_or_error, tuple) and len(tile_info_or_error) == 3:
+                    if tile_info_or_error[0] == "ERROR":
+                        _, grid_name, error_msg = tile_info_or_error
+                        grid_path = os.path.join(year_path, grid_name)
+                        raise RuntimeError(f"Error processing {grid_path}: {error_msg}")
+
+                # Skip None results (empty/skipped directories)
+                if tile_info_or_error is None:
                     continue
-                
-                # Check if this looks like a tile directory (has SHA256 or .npy files)
-                has_sha256 = "SHA256" in dir_contents
-                has_npy_files = any(f.endswith('.npy') for f in dir_contents)
-                
-                if not has_sha256 and not has_npy_files:
-                    # Directory has files but doesn't look like a tile directory - skip
-                    continue
-                
-                # Parse coordinates from grid name
-                lon, lat = parse_grid_name(grid_item)
-                if lon is None or lat is None:
-                    raise ValueError(f"Could not parse coordinates from grid name: {grid_item}")
-                
-                # Read SHA256 file
-                sha256_file = os.path.join(grid_path, "SHA256")
-                if not os.path.exists(sha256_file):
-                    # If there are .npy files but no SHA256, that's an error
-                    if has_npy_files:
-                        raise FileNotFoundError(f"Missing SHA256 file in tile directory: {sha256_file}")
-                    # Otherwise skip this directory
-                    continue
-                
-                # Parse hashes from SHA256 file
-                embedding_hash = None
-                scales_hash = None
-                
-                with open(sha256_file, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or line.startswith('#'):
-                            continue
-                        
-                        parts = line.split()
-                        if len(parts) >= 2:
-                            hash_value = parts[0]
-                            filename = parts[-1]  # Handle spaces in paths
-                            
-                            if filename == f"{grid_item}.npy":
-                                embedding_hash = hash_value
-                            elif filename == f"{grid_item}_scales.npy":
-                                scales_hash = hash_value
-                
-                # Validate required files and hashes
-                embedding_path = os.path.join(grid_path, f"{grid_item}.npy")
-                scales_path = os.path.join(grid_path, f"{grid_item}_scales.npy")
-                
-                if not os.path.exists(embedding_path):
-                    raise FileNotFoundError(f"Missing embedding file: {embedding_path}")
-                if not os.path.exists(scales_path):
-                    raise FileNotFoundError(f"Missing scales file: {scales_path}")
-                if embedding_hash is None:
-                    raise ValueError(f"No hash found for embedding in {sha256_file}")
-                if scales_hash is None:
-                    raise ValueError(f"No hash found for scales in {sha256_file}")
-                
-                # Get file stats
-                embedding_stat = os.stat(embedding_path)
-                scales_stat = os.stat(scales_path)
-                
-                # Create TileInfo object
-                tile_info = TileInfo(
-                    year=year,
-                    lat=lat,
-                    lon=lon,
-                    grid_name=grid_item,
-                    embedding_path=embedding_path,
-                    scales_path=scales_path,
-                    directory_path=grid_path,
-                    embedding_hash=embedding_hash,
-                    scales_hash=scales_hash,
-                    embedding_mtime=embedding_stat.st_mtime,
-                    scales_mtime=scales_stat.st_mtime,
-                    embedding_size=embedding_stat.st_size,
-                    scales_size=scales_stat.st_size
-                )
-                
+
                 # Call callback and collect result
-                result = callback(tile_info)
+                result = callback(tile_info_or_error)
                 if result is not None:
                     results.append(result)
-                    
+
             except Exception as e:
                 # Stop on first error as requested
-                raise RuntimeError(f"Error processing {grid_path}: {e}") from e
-    
+                if isinstance(e, RuntimeError):
+                    raise
+                else:
+                    raise RuntimeError(f"Unexpected error in parallel processing: {e}") from e
+
     return results
 
 
@@ -238,7 +304,7 @@ def process_file(args):
             file_hash = calculate_sha256(file_path)
         return rel_path, file_hash
     except Exception as e:
-        print(f"Error processing {file_path}: {e}")
+        logger.error(f"Error processing {file_path}: {e}")
         return None, None
 
 
@@ -316,13 +382,162 @@ def generate_master_registry(registry_dir):
     pass
 
 
+def create_landmasks_parquet_database(base_dir, output_path, console):
+    """Create a Parquet database for landmasks by reading from SHA256SUM file.
+
+    Args:
+        base_dir: Base directory containing global_0.1_degree_tiff_all
+        output_path: Output path for the Parquet file
+        console: Rich console for output
+
+    Returns:
+        True on success, False on failure
+    """
+    console.print(Panel.fit(
+        f"[bold blue]🗺️ Creating Landmasks Parquet Database[/bold blue]\n"
+        f"📁 {base_dir}\n"
+        f"📄 {output_path}",
+        style="blue"
+    ))
+
+    sha256sum_file = os.path.join(base_dir, "SHA256SUM")
+    if not os.path.exists(sha256sum_file):
+        console.print(f"[red]SHA256SUM file not found:[/red] {sha256sum_file}")
+        return False
+
+    records = []
+
+    # Progress tracking
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TextColumn("•"),
+        TextColumn("[dim]{task.fields[status]}", justify="left"),
+        console=console,
+    ) as progress:
+
+        read_task = progress.add_task(
+            "Reading SHA256SUM file...", total=100, status="Starting..."
+        )
+
+        try:
+            with open(sha256sum_file, "r") as f:
+                lines = f.readlines()
+
+            progress.update(read_task, completed=50, status="Parsing entries...")
+
+            for line in lines:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        checksum = parts[0]
+                        filename = parts[-1]
+
+                        if filename.endswith(".tiff") or filename.endswith(".tif"):
+                            if filename.startswith("grid_"):
+                                try:
+                                    # Remove 'grid_' prefix and '.tiff' suffix
+                                    coords_str = (
+                                        filename[5:]
+                                        .replace(".tiff", "")
+                                        .replace(".tif", "")
+                                    )
+                                    lon_str, lat_str = coords_str.split("_")
+                                    lon = float(lon_str)
+                                    lat = float(lat_str)
+
+                                    # Get file size
+                                    file_path = os.path.join(base_dir, filename)
+                                    file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+
+                                    records.append({
+                                        'lat': lat,
+                                        'lon': lon,
+                                        'hash': checksum,
+                                        'file_size': file_size
+                                    })
+                                except (ValueError, IndexError):
+                                    continue
+
+            progress.update(read_task, completed=100, status="Complete")
+
+        except Exception as e:
+            console.print(f"[red]Error reading SHA256SUM file: {e}[/red]")
+            return False
+
+        if not records:
+            console.print("[red]No landmask tiles found in SHA256SUM file[/red]")
+            return False
+
+        # Convert to GeoParquet
+        parquet_task = progress.add_task(
+            "Creating GeoParquet database...", total=100, status="Converting to DataFrame..."
+        )
+
+        progress.update(parquet_task, completed=25, status="Sorting records...")
+        df = pd.DataFrame(records)
+        df = df.sort_values(['lat', 'lon'])
+
+        progress.update(parquet_task, completed=50, status="Creating geometries...")
+        # Convert to GeoDataFrame with Point geometries
+        geometry = gpd.points_from_xy(df['lon'], df['lat'])
+        gdf = gpd.GeoDataFrame(df, geometry=geometry, crs='EPSG:4326')
+
+        progress.update(parquet_task, completed=75, status="Writing GeoParquet file...")
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+        # Write to temporary file first for atomic operation
+        import tempfile
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode='wb',
+                dir=Path(output_path).parent,
+                prefix=f'.{Path(output_path).name}_tmp_',
+                suffix='.parquet',
+                delete=False
+            ) as temp_file:
+                temp_path = temp_file.name
+
+            gdf.to_parquet(temp_path, compression='zstd', index=False)
+            os.rename(temp_path, output_path)
+
+        except Exception:
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise
+
+        progress.update(parquet_task, completed=100, status="Complete")
+
+    # Get file size and show results
+    file_size = Path(output_path).stat().st_size
+
+    # Summary table
+    summary_table = Table(show_header=False, box=None)
+    summary_table.add_row("📊 Records:", f"{len(records):,}")
+    summary_table.add_row("💾 File size:", f"{file_size:,} bytes")
+    summary_table.add_row("🌍 Coordinates:", f"{len(gdf[['lat', 'lon']].drop_duplicates()):,} unique tiles")
+    summary_table.add_row("🗺️ Format:", "GeoParquet with Point geometries")
+
+    console.print(Panel(
+        summary_table,
+        title="[bold green]✅ Landmasks GeoParquet Database Created[/bold green]",
+        border_style="green"
+    ))
+
+    return True
+
+
 def create_parquet_database_from_filesystem(base_dir, output_path, console):
     """Create a Parquet database by reading from existing SHA256 files.
-    
-    Fast implementation that reads hashes from SHA256 files instead of 
+
+    Fast implementation that reads hashes from SHA256 files instead of
     recalculating them, making database creation much faster.
     Uses temporary file for atomic writing to ensure cron-safe operation.
-    
+
     Args:
         base_dir: Base directory containing global_0.1_degree_representation
         output_path: Output path for the Parquet file
@@ -330,25 +545,29 @@ def create_parquet_database_from_filesystem(base_dir, output_path, console):
     """
     # Show initial header
     console.print(Panel.fit(
-        f"[bold blue]🗄️ Creating Parquet Database[/bold blue]\n"
+        f"[bold blue]🗄️ Creating Embeddings Parquet Database[/bold blue]\n"
         f"📁 {base_dir}\n"
         f"📄 {output_path}",
         style="blue"
     ))
-    
+
+    # Show CPU core count for parallel processing
+    num_cores = multiprocessing.cpu_count()
+    console.print(f"[cyan]Using {num_cores} CPU cores for parallel tile scanning[/cyan]")
+
     records = []
     
     def collect_tile_data(tile_info: TileInfo):
         """Callback to collect data for each tile."""
-        rel_path = os.path.relpath(tile_info.embedding_path, base_dir)
         return {
             'lat': tile_info.lat,
             'lon': tile_info.lon,
             'year': tile_info.year,
             'hash': tile_info.embedding_hash,  # From SHA256 file, no recalculation!
+            'scales_hash': tile_info.scales_hash,  # Scales file hash
             'mtime': tile_info.embedding_mtime,
-            'file_path': rel_path,
-            'file_size': tile_info.embedding_size
+            'file_size': tile_info.embedding_size,
+            'scales_size': tile_info.scales_size  # Scales file size
         }
     
     # Progress tracking
@@ -396,32 +615,33 @@ def create_parquet_database_from_filesystem(base_dir, output_path, console):
         progress.update(parquet_task, completed=25, status="Sorting records...")
         df = pd.DataFrame(records)
         df = df.sort_values(['year', 'lat', 'lon'])
-        
-        progress.update(parquet_task, completed=50, status="Converting timestamps...")
+
+        progress.update(parquet_task, completed=40, status="Converting timestamps...")
         df['mtime'] = pd.to_datetime(df['mtime'], unit='s')
-        
-        progress.update(parquet_task, completed=75, status="Writing Parquet file...")
+
+        progress.update(parquet_task, completed=55, status="Creating geometries...")
+        # Convert to GeoDataFrame with Point geometries
+        geometry = gpd.points_from_xy(df['lon'], df['lat'])
+        gdf = gpd.GeoDataFrame(df, geometry=geometry, crs='EPSG:4326')
+
+        progress.update(parquet_task, completed=75, status="Writing GeoParquet file...")
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Write to temporary file first for atomic operation (cron-safe)
         import tempfile
         temp_path = None
         try:
             with tempfile.NamedTemporaryFile(
-                mode='wb', 
-                dir=Path(output_path).parent, 
+                mode='wb',
+                dir=Path(output_path).parent,
                 prefix=f'.{Path(output_path).name}_tmp_',
                 suffix='.parquet',
                 delete=False
             ) as temp_file:
                 temp_path = temp_file.name
-            
-            # Write to temporary file
-            df.to_parquet(temp_path, compression='snappy', index=False)
-            
-            # Atomic rename to final location
+
+            gdf.to_parquet(temp_path, compression='zstd', index=False)
             os.rename(temp_path, output_path)
-            temp_path = None  # Successfully renamed, no cleanup needed
             
         except Exception:
             # Clean up temporary file on error
@@ -433,17 +653,18 @@ def create_parquet_database_from_filesystem(base_dir, output_path, console):
     
     # Get file size and show results
     file_size = Path(output_path).stat().st_size
-    
+
     # Summary table
     summary_table = Table(show_header=False, box=None)
     summary_table.add_row("📊 Records:", f"{len(records):,}")
     summary_table.add_row("💾 File size:", f"{file_size:,} bytes")
-    summary_table.add_row("🗓️ Years:", ", ".join(map(str, sorted(df['year'].unique()))))
-    summary_table.add_row("🌍 Coordinates:", f"{len(df[['lat', 'lon']].drop_duplicates()):,} unique tiles")
-    
+    summary_table.add_row("🗓️ Years:", ", ".join(map(str, sorted(gdf['year'].unique()))))
+    summary_table.add_row("🌍 Coordinates:", f"{len(gdf[['lat', 'lon']].drop_duplicates()):,} unique tiles")
+    summary_table.add_row("🗺️ Format:", "GeoParquet with Point geometries")
+
     console.print(Panel(
         summary_table,
-        title="[bold green]✅ Parquet Database Created[/bold green]",
+        title="[bold green]✅ GeoParquet Database Created[/bold green]",
         border_style="green"
     ))
     
@@ -554,10 +775,10 @@ def list_command(args):
     """List existing registry files in the specified directory."""
     base_dir = os.path.abspath(args.base_dir)
     if not os.path.exists(base_dir):
-        print(f"Error: Directory {base_dir} does not exist")
+        logger.error(f"Directory {base_dir} does not exist")
         return
 
-    print(f"Scanning for registry files in: {base_dir}")
+    logger.info(f"Scanning for registry files in: {base_dir}")
 
     # Find all embeddings_*.txt and landmasks_*.txt files
     registry_files = []
@@ -577,39 +798,55 @@ def list_command(args):
                 registry_files.append((file, -1))
 
     if not registry_files:
-        print("No registry files found")
+        logger.warning("No registry files found")
         return
 
     # Sort by filename
     registry_files.sort()
 
-    print(f"\nFound {len(registry_files)} registry files:")
+    logger.info(f"\nFound {len(registry_files)} registry files:")
     for filename, count in registry_files:
         if count >= 0:
-            print(f"  - {filename}: {count:,} entries")
+            logger.info(f"  - {filename}: {count:,} entries")
         else:
-            print(f"  - {filename}: (error reading file)")
+            logger.warning(f"  - {filename}: (error reading file)")
 
     # Check for master registry
     master_registry = os.path.join(base_dir, "registry.txt")
     if os.path.exists(master_registry):
-        print("\nMaster registry found: registry.txt")
+        logger.info("\nMaster registry found: registry.txt")
 
 
 def process_grid_checksum(args):
-    """Process a single grid directory to generate SHA256 checksums."""
+    """Process a single grid directory to generate SHA256 checksums.
+
+    Only recalculates checksums if:
+    - SHA256 file doesn't exist, OR
+    - force=True, OR
+    - Any .npy file has mtime newer than the SHA256 file
+    """
     year_dir, grid_name, force = args
     grid_dir = os.path.join(year_dir, grid_name)
     sha256_file = os.path.join(grid_dir, "SHA256")
 
-    # Skip if SHA256 file already exists and force is not enabled
-    if not force and os.path.exists(sha256_file):
-        # Count .npy files to report in progress
-        npy_files = [f for f in os.listdir(grid_dir) if f.endswith(".npy")]
-        return (grid_name, len(npy_files), True, "skipped")
-
     # Find all .npy files in this grid directory
     npy_files = [f for f in os.listdir(grid_dir) if f.endswith(".npy")]
+
+    # If SHA256 file exists and force is not enabled, check mtimes
+    if not force and os.path.exists(sha256_file):
+        sha256_mtime = os.path.getmtime(sha256_file)
+
+        # Check if any .npy file is newer than the SHA256 file
+        needs_update = False
+        for npy_file in npy_files:
+            npy_path = os.path.join(grid_dir, npy_file)
+            if os.path.getmtime(npy_path) > sha256_mtime:
+                needs_update = True
+                break
+
+        if not needs_update:
+            # All files are older than SHA256 file, skip
+            return (grid_name, len(npy_files), True, "skipped")
 
     if npy_files:
         try:
@@ -636,16 +873,27 @@ def process_grid_checksum(args):
 
 
 def generate_embeddings_checksums(base_dir, force=False):
-    """Generate SHA256 checksums for .npy files in each embeddings subdirectory."""
-    from tqdm import tqdm
+    """Generate SHA256 checksums for .npy files in each embeddings subdirectory.
 
-    print("Generating SHA256 checksums for embeddings...")
+    Only recalculates checksums for grid directories where:
+    - SHA256 file doesn't exist, OR
+    - force=True, OR
+    - Any .npy file has mtime newer than the SHA256 file
+
+    This optimization makes subsequent runs much faster by only updating
+    checksums when files have actually changed.
+    """
+    from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
+
+    logger.info("Generating SHA256 checksums for embeddings...")
     if force:
-        print("Force mode enabled - regenerating all checksums")
+        logger.info("Force mode enabled - regenerating all checksums")
+    else:
+        logger.info("Using smart update: only recalculating for modified files")
 
     # Get number of CPU cores
     num_cores = multiprocessing.cpu_count()
-    print(f"Using {num_cores} CPU cores for parallel processing")
+    logger.info(f"Using {num_cores} CPU cores for parallel processing")
 
     # Process each year directory
     year_dirs = []
@@ -656,67 +904,71 @@ def generate_embeddings_checksums(base_dir, force=False):
                 year_dirs.append(item)
 
     if not year_dirs:
-        print("No year directories found")
+        logger.warning("No year directories found")
         return 1
 
     total_grids = 0
     processed_grids = 0
     errors = []
 
-    for year in sorted(year_dirs):
-        year_dir = os.path.join(base_dir, year)
-        print(f"\nProcessing year: {year}")
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+    ) as progress:
+        for year in sorted(year_dirs):
+            year_dir = os.path.join(base_dir, year)
+            logger.info(f"\nProcessing year: {year}")
 
-        # Find all grid directories
-        grid_dirs = []
-        for item in os.listdir(year_dir):
-            if item.startswith("grid_"):
-                grid_path = os.path.join(year_dir, item)
-                if os.path.isdir(grid_path):
-                    grid_dirs.append(item)
+            # Find all grid directories
+            grid_dirs = []
+            for item in os.listdir(year_dir):
+                if item.startswith("grid_"):
+                    grid_path = os.path.join(year_dir, item)
+                    if os.path.isdir(grid_path):
+                        grid_dirs.append(item)
 
-        total_grids += len(grid_dirs)
+            total_grids += len(grid_dirs)
 
-        # Prepare arguments for parallel processing
-        grid_args = [(year_dir, grid_name, force) for grid_name in sorted(grid_dirs)]
+            # Prepare arguments for parallel processing
+            grid_args = [(year_dir, grid_name, force) for grid_name in sorted(grid_dirs)]
 
-        # Process grid directories in parallel
-        with ProcessPoolExecutor(max_workers=num_cores) as executor:
-            # Submit all tasks
-            futures = {
-                executor.submit(process_grid_checksum, args): args for args in grid_args
-            }
+            # Process grid directories in parallel
+            with ProcessPoolExecutor(max_workers=num_cores) as executor:
+                # Submit all tasks
+                futures = {
+                    executor.submit(process_grid_checksum, args): args for args in grid_args
+                }
 
-            # Process results with progress bar
-            skipped_grids = 0
-            with tqdm(total=len(grid_dirs), desc=f"Year {year}", unit="grids") as pbar:
+                # Process results with progress bar
+                skipped_grids = 0
+                task = progress.add_task(f"Year {year}", total=len(grid_dirs))
                 for future in as_completed(futures):
                     grid_name, num_files, success, error_msg = future.result()
 
                     if success:
                         if error_msg == "skipped":
                             skipped_grids += 1
-                            pbar.set_postfix(files=num_files, status="skipped")
                         elif num_files > 0:
                             processed_grids += 1
-                            pbar.set_postfix(files=num_files)
                     else:
                         errors.append(f"{grid_name}: {error_msg}")
 
-                    pbar.update(1)
+                    progress.update(task, advance=1)
             
             if skipped_grids > 0:
-                print(f"  Skipped {skipped_grids} directories with existing SHA256 files")
+                logger.info(f"  Skipped {skipped_grids} directories with existing SHA256 files")
 
     # Report any errors
     if errors:
-        print("\nErrors encountered:")
+        logger.error("\nErrors encountered:")
         for error in errors[:10]:  # Show first 10 errors
-            print(f"  - {error}")
+            logger.error(f"  - {error}")
         if len(errors) > 10:
-            print(f"  ... and {len(errors) - 10} more errors")
+            logger.error(f"  ... and {len(errors) - 10} more errors")
 
-    print(f"\nProcessed {processed_grids}/{total_grids} grid directories")
+    logger.info(f"\nProcessed {processed_grids}/{total_grids} grid directories")
     return 0 if processed_grids > 0 else 1
 
 
@@ -747,22 +999,24 @@ def process_tiff_chunk(args):
 
 
 def generate_tiff_checksums(base_dir, force=False):
-    """Generate SHA256 checksums for TIFF files using chunked parallel processing."""
-    from tqdm import tqdm
+    """Generate SHA256 checksums for TIFF files using chunked parallel processing.
 
-    print("Generating SHA256 checksums for TIFF files...")
+    Only recalculates checksums if:
+    - SHA256SUM file doesn't exist, OR
+    - force=True, OR
+    - Any .tiff file has mtime newer than the SHA256SUM file
+    """
+    from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
+
+    logger.info("Generating SHA256 checksums for TIFF files...")
     if force:
-        print("Force mode enabled - regenerating all checksums")
+        logger.info("Force mode enabled - regenerating all checksums")
+    else:
+        logger.info("Using smart update: only recalculating if files have been modified")
 
     # Get number of CPU cores
     num_cores = multiprocessing.cpu_count()
-    print(f"Using {num_cores} CPU cores for parallel processing")
-
-    # Check if SHA256SUM already exists and force is not enabled
-    sha256sum_file = os.path.join(base_dir, "SHA256SUM")
-    if not force and os.path.exists(sha256sum_file):
-        print("SHA256SUM file already exists. Skipping (use --force to regenerate)")
-        return 0
+    logger.info(f"Using {num_cores} CPU cores for parallel processing")
 
     # Find all .tiff files
     tiff_files = []
@@ -771,13 +1025,32 @@ def generate_tiff_checksums(base_dir, force=False):
             tiff_files.append(file)
 
     if not tiff_files:
-        print("No TIFF files found")
+        logger.warning("No TIFF files found")
         return 1
+
+    # Check if SHA256SUM already exists and force is not enabled
+    sha256sum_file = os.path.join(base_dir, "SHA256SUM")
+    if not force and os.path.exists(sha256sum_file):
+        sha256sum_mtime = os.path.getmtime(sha256sum_file)
+
+        # Check if any TIFF file is newer than the SHA256SUM file
+        needs_update = False
+        for tiff_file in tiff_files:
+            tiff_path = os.path.join(base_dir, tiff_file)
+            if os.path.getmtime(tiff_path) > sha256sum_mtime:
+                needs_update = True
+                logger.debug(f"Found updated file: {tiff_file}")
+                break
+
+        if not needs_update:
+            logger.info("SHA256SUM file is up to date (all TIFF files are older). Skipping.")
+            logger.info("Use --force to regenerate anyway.")
+            return 0
 
     # Sort files for consistent ordering
     tiff_files.sort()
     total_files = len(tiff_files)
-    print(f"Found {total_files} TIFF files")
+    logger.info(f"Found {total_files} TIFF files")
 
     # Process in chunks to avoid command line length limits
     chunk_size = 1000  # Process 1000 files at a time
@@ -794,16 +1067,21 @@ def generate_tiff_checksums(base_dir, force=False):
 
     try:
         # Process chunks in parallel
-        with ProcessPoolExecutor(max_workers=num_cores) as executor:
-            # Submit all tasks
-            futures = {
-                executor.submit(process_tiff_chunk, args): args for args in chunks
-            }
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeRemainingColumn(),
+        ) as progress:
+            task = progress.add_task("Computing checksums", total=total_files)
 
-            # Process results with progress bar
-            with tqdm(
-                total=total_files, desc="Computing checksums", unit="files"
-            ) as pbar:
+            with ProcessPoolExecutor(max_workers=num_cores) as executor:
+                # Submit all tasks
+                futures = {
+                    executor.submit(process_tiff_chunk, args): args for args in chunks
+                }
+
+                # Process results with progress bar
                 results = []
                 for future in as_completed(futures):
                     chunk_num, chunk_len, success, error_msg, temp_file = (
@@ -815,16 +1093,16 @@ def generate_tiff_checksums(base_dir, force=False):
                     else:
                         errors.append(f"Chunk {chunk_num}: {error_msg}")
 
-                    pbar.update(chunk_len)
+                    progress.update(task, advance=chunk_len)
 
-                # Sort results by chunk number to maintain order
-                results.sort(key=lambda x: x[0])
-                temp_files = [temp_file for _, temp_file in results]
+            # Sort results by chunk number to maintain order
+            results.sort(key=lambda x: x[0])
+            temp_files = [temp_file for _, temp_file in results]
 
         if errors:
-            print("\nErrors encountered during processing:")
+            logger.error("\nErrors encountered during processing:")
             for error in errors:
-                print(f"  - {error}")
+                logger.error(f"  - {error}")
             # Clean up any temporary files
             for temp_file in temp_files:
                 if os.path.exists(temp_file):
@@ -832,7 +1110,7 @@ def generate_tiff_checksums(base_dir, force=False):
             return 1
 
         # Concatenate all temporary files into final SHA256SUM
-        print("Concatenating results...")
+        logger.info("Concatenating results...")
         with open(sha256sum_file, "w") as outfile:
             for temp_file in temp_files:
                 if os.path.exists(temp_file):
@@ -844,17 +1122,64 @@ def generate_tiff_checksums(base_dir, force=False):
             if os.path.exists(temp_file):
                 os.remove(temp_file)
 
-        print(f"Successfully generated checksums for {total_files} files")
-        print(f"Checksums written to: {sha256sum_file}")
+        logger.info(f"Successfully generated checksums for {total_files} files")
+        logger.info(f"Checksums written to: {sha256sum_file}")
         return 0
 
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        logger.error(f"Unexpected error: {e}")
         # Clean up any temporary files
         for _, _, _, _, temp_file in chunks:
             if os.path.exists(temp_file):
                 os.remove(temp_file)
         return 1
+
+
+def process_grid_sha256_scan(args):
+    """Process a single grid directory's SHA256 file for scanning.
+
+    Args:
+        args: Tuple of (year_dir, grid_name, year)
+
+    Returns:
+        Tuple of (grid_name, block_key, entries, success, error_msg)
+        where entries is a list of (rel_path, checksum) tuples
+    """
+    year_dir, grid_name, year = args
+    grid_path = os.path.join(year_dir, grid_name)
+    sha256_file = os.path.join(grid_path, "SHA256")
+
+    try:
+        # Parse coordinates from grid name
+        lon, lat = parse_grid_name(grid_name)
+        if lon is None or lat is None:
+            return (grid_name, None, [], False, f"Could not parse coordinates from {grid_name}")
+
+        # Get block coordinates
+        block_lon, block_lat = block_from_world(lon, lat)
+        block_key = (block_lon, block_lat)
+
+        # Read SHA256 file and collect entries
+        entries = []
+        if os.path.exists(sha256_file):
+            with open(sha256_file, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            checksum = parts[0].strip()
+                            filename = parts[-1].strip()
+                            year_clean = year.strip()
+                            grid_name_clean = grid_name.strip()
+                            # Convert to relative path from base_dir
+                            rel_path = f"{year_clean}/{grid_name_clean}/{filename}"
+                            entries.append((rel_path, checksum))
+
+        return (grid_name, block_key, entries, True, None)
+
+    except Exception as e:
+        return (grid_name, None, [], False, str(e))
 
 
 def scan_embeddings_from_checksums(base_dir, registry_dir, console, db_mode=False):
@@ -900,56 +1225,38 @@ def scan_embeddings_from_checksums(base_dir, registry_dir, console, db_mode=Fals
                 f"  Found [green]{len(grid_dirs)}[/green] grid directories with SHA256 files"
             )
 
-            # Process each grid directory
+            # Get number of CPU cores for parallel processing
+            num_cores = multiprocessing.cpu_count()
+            console.print(f"  Using [cyan]{num_cores}[/cyan] CPU cores for parallel processing")
+
+            # Prepare arguments for parallel processing
+            grid_args = [(year_dir, grid_name, year) for grid_name in sorted(grid_dirs)]
+
+            # Process grid directories in parallel
             task = progress.add_task(f"Year {year}", total=len(grid_dirs))
 
-            for grid_name in grid_dirs:
-                grid_path = os.path.join(year_dir, grid_name)
-                sha256_file = os.path.join(grid_path, "SHA256")
+            with ProcessPoolExecutor(max_workers=num_cores) as executor:
+                # Submit all tasks
+                futures = {
+                    executor.submit(process_grid_sha256_scan, args): args
+                    for args in grid_args
+                }
 
-                # Parse coordinates from grid name
-                lon, lat = parse_grid_name(grid_name)
-                if lon is None or lat is None:
-                    console.print(
-                        f"  [yellow]Warning:[/yellow] Could not parse coordinates from {grid_name}"
-                    )
+                # Process results as they complete
+                for future in as_completed(futures):
+                    grid_name, block_key, entries, success, error_msg = future.result()
+
+                    if success:
+                        if block_key and entries:
+                            # Add all entries from this grid to the appropriate block
+                            files_by_year_and_block[year][block_key].extend(entries)
+                            total_entries += len(entries)
+                    else:
+                        console.print(
+                            f"  [yellow]Warning:[/yellow] {error_msg}"
+                        )
+
                     progress.advance(task)
-                    continue
-
-                # Get block coordinates
-                block_lon, block_lat = block_from_world(lon, lat)
-                block_key = (block_lon, block_lat)
-
-                # Read SHA256 file and add entries
-                try:
-                    with open(sha256_file, "r") as f:
-                        for line in f:
-                            line = line.strip()
-                            if line and not line.startswith("#"):
-                                parts = line.split()
-                                if len(parts) >= 2:
-                                    checksum = parts[0]
-                                    filename = parts[
-                                        -1
-                                    ]  # Take the last part as filename
-                                    # Strip whitespace from all components
-                                    checksum = checksum.strip()
-                                    filename = filename.strip()
-                                    year_clean = year.strip()
-                                    grid_name_clean = grid_name.strip()
-                                    # Convert to relative path from base_dir
-                                    # Use forward slashes and ensure no trailing slashes or spaces
-                                    rel_path = (
-                                        f"{year_clean}/{grid_name_clean}/{filename}"
-                                    )
-                                    files_by_year_and_block[year][block_key].append(
-                                        (rel_path, checksum)
-                                    )
-                                    total_entries += 1
-                except Exception as e:
-                    console.print(f"  [red]Error reading {sha256_file}:[/red] {e}")
-
-                progress.advance(task)
 
     console.print(f"[green]Total entries found:[/green] {total_entries:,}")
 
@@ -1143,21 +1450,28 @@ def scan_command(args):
     else:
         output_dir = base_dir
 
-    # Create parquet database first
-    parquet_path = os.path.join(output_dir, "registry.parquet")
-    
     # Look for expected directories
     repr_dir = os.path.join(base_dir, "global_0.1_degree_representation")
     tiles_dir = os.path.join(base_dir, "global_0.1_degree_tiff_all")
-    
-    if not os.path.exists(repr_dir):
+
+    # Create embeddings Parquet database
+    embeddings_parquet_path = os.path.join(output_dir, "registry.parquet")
+    if os.path.exists(repr_dir):
+        if not create_parquet_database_from_filesystem(base_dir, embeddings_parquet_path, console):
+            console.print("[red]Failed to create embeddings parquet database[/red]")
+            return 1
+    else:
         console.print(f"[red]Error: Embeddings directory not found: {repr_dir}[/red]")
         return 1
 
-    # Create parquet database
-    if not create_parquet_database_from_filesystem(base_dir, parquet_path, console):
-        console.print("[red]Failed to create parquet database[/red]")
-        return 1
+    # Create landmasks Parquet database
+    landmasks_parquet_path = os.path.join(output_dir, "landmasks.parquet")
+    if os.path.exists(tiles_dir):
+        if not create_landmasks_parquet_database(tiles_dir, landmasks_parquet_path, console):
+            console.print("[yellow]Warning: Failed to create landmasks parquet database[/yellow]")
+            # Don't return error, landmasks are optional
+    else:
+        console.print(f"[yellow]Warning: Landmasks directory not found: {tiles_dir}[/yellow]")
 
     # Create text-based registry files
     registry_dir = os.path.join(output_dir, "registry")
@@ -1198,7 +1512,10 @@ def scan_command(args):
     # Show final summary
     summary_lines = ["[green]✅ Registry Generation Complete[/green]\n"]
     summary_lines.append("📊 Generated outputs:")
-    summary_lines.append(f"• Parquet database: {parquet_path}")
+    summary_lines.append("• Parquet databases:")
+    summary_lines.append(f"  → {embeddings_parquet_path} (embeddings)")
+    if os.path.exists(landmasks_parquet_path):
+        summary_lines.append(f"  → {landmasks_parquet_path} (landmasks)")
     summary_lines.append("• Text registry files:")
     if os.path.exists(repr_dir):
         summary_lines.append(f"  → registry/embeddings/ (from {repr_dir})")
@@ -1215,7 +1532,7 @@ def hash_command(args):
     """Generate SHA256 checksums for embeddings and TIFF files."""
     base_dir = os.path.abspath(args.base_dir)
     if not os.path.exists(base_dir):
-        print(f"Error: Directory {base_dir} does not exist")
+        logger.error(f"Directory {base_dir} does not exist")
         return 1
 
     force = getattr(args, 'force', False)
@@ -1228,20 +1545,20 @@ def hash_command(args):
 
     # Process embeddings if directory exists
     if os.path.exists(repr_dir):
-        print(f"Processing embeddings directory: {repr_dir}")
+        logger.info(f"Processing embeddings directory: {repr_dir}")
         if generate_embeddings_checksums(repr_dir, force=force) == 0:
             processed_any = True
 
     # Process TIFF files if directory exists
     if os.path.exists(tiles_dir):
-        print(f"Processing TIFF directory: {tiles_dir}")
+        logger.info(f"Processing TIFF directory: {tiles_dir}")
         if generate_tiff_checksums(tiles_dir, force=force) == 0:
             processed_any = True
 
     if not processed_any:
-        print("No data directories found. Expected:")
-        print(f"  - {repr_dir}")
-        print(f"  - {tiles_dir}")
+        logger.error("No data directories found. Expected:")
+        logger.error(f"  - {repr_dir}")
+        logger.error(f"  - {tiles_dir}")
         return 1
 
     return 0
@@ -1589,8 +1906,233 @@ def commit_command(args):
         return 1
 
 
+def export_manifests_command(args):
+    """Convert Parquet registry files to Pooch-format text manifests.
+
+    This command reads registry.parquet and landmasks.parquet files and exports
+    them to the old block-based text registry format for backwards compatibility.
+    Useful for maintaining the tessera-manifests repository.
+    """
+    console = Console()
+
+    # Resolve input directory
+    input_dir = Path(args.input_dir).resolve()
+    if not input_dir.exists():
+        console.print(f"[red]Error: Input directory does not exist: {input_dir}[/red]")
+        return 1
+
+    # Find Parquet files
+    registry_parquet = input_dir / "registry.parquet"
+    landmasks_parquet = input_dir / "landmasks.parquet"
+
+    if not registry_parquet.exists():
+        console.print(f"[red]Error: registry.parquet not found in {input_dir}[/red]")
+        return 1
+
+    # Determine output directory
+    if args.output_dir:
+        output_dir = Path(args.output_dir).resolve()
+    else:
+        output_dir = input_dir / "registry"
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    console.print(Panel.fit(
+        f"[bold blue]📦 Converting Parquet to Text Manifests[/bold blue]\n"
+        f"📁 Input: {input_dir}\n"
+        f"📁 Output: {output_dir}",
+        style="blue"
+    ))
+
+    total_files_written = 0
+
+    # ========== Process Embeddings ==========
+    console.print("\n[cyan]Processing embeddings registry...[/cyan]")
+
+    try:
+        df = pd.read_parquet(registry_parquet)
+        console.print(f"  Loaded [green]{len(df):,}[/green] embedding records")
+
+        # Verify required columns
+        required_cols = ['lat', 'lon', 'year', 'hash', 'scales_hash']
+        missing = set(required_cols) - set(df.columns)
+        if missing:
+            console.print(f"[red]Error: Missing required columns in registry.parquet: {missing}[/red]")
+            console.print(f"[yellow]Available columns: {df.columns.tolist()}[/yellow]")
+            console.print("[yellow]Hint: Regenerate registry.parquet with latest geotessera-registry scan[/yellow]")
+            return 1
+
+        # Group by year and block
+        files_by_year_and_block = defaultdict(lambda: defaultdict(list))
+
+        for _, row in df.iterrows():
+            lon, lat, year = row['lon'], row['lat'], row['year']
+            embedding_hash = row['hash']
+            scales_hash = row['scales_hash']
+
+            # Calculate block coordinates
+            block_lon, block_lat = block_from_world(lon, lat)
+
+            # Construct file paths (matching the structure in data directories)
+            grid_name = f"grid_{lon:.2f}_{lat:.2f}"
+            embedding_path = f"{year}/{grid_name}/{grid_name}.npy"
+            scales_path = f"{year}/{grid_name}/{grid_name}_scales.npy"
+
+            # Add both files to the block with their respective hashes
+            files_by_year_and_block[year][(block_lon, block_lat)].append(
+                (embedding_path, embedding_hash)
+            )
+            files_by_year_and_block[year][(block_lon, block_lat)].append(
+                (scales_path, scales_hash)
+            )
+
+        # Write embeddings registry files
+        embeddings_dir = output_dir / "embeddings"
+        embeddings_dir.mkdir(parents=True, exist_ok=True)
+
+        for year in sorted(files_by_year_and_block.keys()):
+            blocks = files_by_year_and_block[year]
+            console.print(f"  Year {year}: {len(blocks)} blocks")
+
+            for (block_lon, block_lat), entries in sorted(blocks.items()):
+                registry_filename = block_to_embeddings_registry_filename(
+                    str(year), block_lon, block_lat
+                )
+                registry_file = embeddings_dir / registry_filename
+
+                # Write file atomically
+                import tempfile
+                temp_path = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        mode='w',
+                        dir=embeddings_dir,
+                        prefix=f'.{registry_filename}_tmp_',
+                        suffix='.txt',
+                        delete=False
+                    ) as temp_file:
+                        temp_path = temp_file.name
+                        for rel_path, checksum in sorted(entries):
+                            temp_file.write(f"{rel_path} {checksum}\n")
+
+                    os.rename(temp_path, registry_file)
+                    temp_path = None
+                    total_files_written += 1
+
+                except Exception:
+                    if temp_path and os.path.exists(temp_path):
+                        os.remove(temp_path)
+                    raise
+
+                console.print(f"    Block ({block_lon:4d}, {block_lat:4d}): {len(entries):4d} files → {registry_filename}")
+
+        console.print(f"[green]✓ Wrote {total_files_written} embeddings registry files[/green]")
+
+    except Exception as e:
+        console.print(f"[red]Error processing embeddings: {e}[/red]")
+        import traceback
+        console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        return 1
+
+    # ========== Process Landmasks ==========
+    if landmasks_parquet.exists():
+        console.print("\n[cyan]Processing landmasks registry...[/cyan]")
+
+        try:
+            df = pd.read_parquet(landmasks_parquet)
+            console.print(f"  Loaded [green]{len(df):,}[/green] landmask records")
+
+            # Verify required columns
+            required_cols = ['lat', 'lon', 'hash']
+            missing = set(required_cols) - set(df.columns)
+            if missing:
+                console.print(f"[yellow]Warning: Missing columns in landmasks.parquet: {missing}[/yellow]")
+            else:
+                # Group by block
+                files_by_block = defaultdict(list)
+
+                for _, row in df.iterrows():
+                    lon, lat = row['lon'], row['lat']
+                    sha256 = row['hash']
+
+                    # Calculate block coordinates
+                    block_lon, block_lat = block_from_world(lon, lat)
+
+                    # Construct file path
+                    filename = f"grid_{lon:.2f}_{lat:.2f}.tiff"
+
+                    files_by_block[(block_lon, block_lat)].append((filename, sha256))
+
+                # Write landmask registry files
+                landmasks_dir = output_dir / "landmasks"
+                landmasks_dir.mkdir(parents=True, exist_ok=True)
+
+                landmask_files_written = 0
+                console.print(f"  Writing {len(files_by_block)} landmask blocks")
+
+                for (block_lon, block_lat), entries in sorted(files_by_block.items()):
+                    registry_filename = block_to_landmasks_registry_filename(
+                        block_lon, block_lat
+                    )
+                    registry_file = landmasks_dir / registry_filename
+
+                    # Write file atomically
+                    temp_path = None
+                    try:
+                        with tempfile.NamedTemporaryFile(
+                            mode='w',
+                            dir=landmasks_dir,
+                            prefix=f'.{registry_filename}_tmp_',
+                            suffix='.txt',
+                            delete=False
+                        ) as temp_file:
+                            temp_path = temp_file.name
+                            for rel_path, checksum in sorted(entries):
+                                temp_file.write(f"{rel_path} {checksum}\n")
+
+                        os.rename(temp_path, registry_file)
+                        temp_path = None
+                        landmask_files_written += 1
+
+                    except Exception:
+                        if temp_path and os.path.exists(temp_path):
+                            os.remove(temp_path)
+                        raise
+
+                    console.print(f"    Block ({block_lon:4d}, {block_lat:4d}): {len(entries):4d} files → {registry_filename}")
+
+                console.print(f"[green]✓ Wrote {landmask_files_written} landmask registry files[/green]")
+                total_files_written += landmask_files_written
+
+        except Exception as e:
+            console.print(f"[yellow]Warning: Error processing landmasks: {e}[/yellow]")
+            import traceback
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
+    else:
+        console.print(f"[yellow]Landmasks parquet not found, skipping: {landmasks_parquet}[/yellow]")
+
+    # Summary
+    console.print(Panel.fit(
+        f"[green]✅ Export Complete[/green]\n"
+        f"📊 Total registry files written: {total_files_written}\n"
+        f"📁 Output directory: {output_dir}",
+        style="green"
+    ))
+
+    return 0
+
+
 def main():
     """Main entry point for the geotessera-registry CLI tool."""
+    # Configure logging with rich handler
+    # Disable rich formatting in dumb terminals (use Rich Console's built-in detection)
+    use_rich = console.is_terminal
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=[RichHandler(rich_tracebacks=True, show_time=False, show_path=False, console=console)] if use_rich else [logging.StreamHandler()]
+    )
+
     parser = argparse.ArgumentParser(
         description="GeoTessera Registry Management Tool - Generate and maintain Pooch registry files",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1630,11 +2172,23 @@ Examples:
   
   # Analyze registry changes and create a git commit with detailed summary
   geotessera-registry commit
-  
+
   # This will:
   # - Analyze git changes in registry files
   # - Summarize changes by year (tiles added/removed/modified)
   # - Stage registry files and create a commit with detailed message
+
+  # Export Parquet registry to text manifests for backwards compatibility
+  geotessera-registry export-manifests /path/to/v1
+
+  # This will:
+  # - Read registry.parquet and landmasks.parquet
+  # - Generate block-based text registry files in registry/embeddings/ and registry/landmasks/
+  # - Create separate entries for .npy and _scales.npy with their respective hashes
+  # - Useful for maintaining the tessera-manifests repository
+
+  # Export to custom output directory
+  geotessera-registry export-manifests /path/to/v1 --output-dir ~/src/git/ucam-eo/tessera-manifests
 
 This tool is intended for GeoTessera data maintainers to generate the registry
 files that are distributed with the package. End users typically don't need
@@ -1716,6 +2270,23 @@ Directory Structure:
         help="Analyze registry changes and create a git commit with detailed summary",
     )
     commit_parser.set_defaults(func=commit_command)
+
+    # Export-manifests command
+    export_parser = subparsers.add_parser(
+        "export-manifests",
+        help="Convert Parquet registry files to Pooch-format text manifests for backwards compatibility",
+    )
+    export_parser.add_argument(
+        "input_dir",
+        help="Directory containing registry.parquet and landmasks.parquet files",
+    )
+    export_parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Output directory for text manifest files (default: INPUT_DIR/registry)",
+    )
+    export_parser.set_defaults(func=export_manifests_command)
 
     args = parser.parse_args()
 

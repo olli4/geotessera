@@ -7,6 +7,10 @@ visualizations using Leaflet and other web technologies.
 from pathlib import Path
 from typing import List, Tuple, Optional, Callable
 import json
+import logging
+
+# Module-level logger
+logger = logging.getLogger(__name__)
 
 
 def prepare_mosaic_for_web(
@@ -154,20 +158,20 @@ def geotiff_to_web_tiles(
             ]
 
             try:
-                print(f"Running gdal raster tile: {' '.join(cmd)}")
+                logger.info(f"Running gdal raster tile: {' '.join(cmd)}")
                 result = subprocess.run(cmd, check=True, capture_output=True, text=True)
                 if result.stdout:
-                    print("GDAL stdout:", result.stdout)
+                    logger.debug("GDAL stdout: %s", result.stdout)
                 if result.stderr:
-                    print("GDAL stderr:", result.stderr)
+                    logger.debug("GDAL stderr: %s", result.stderr)
                 return str(output_dir)
             except subprocess.CalledProcessError as e:
-                print(f"gdal raster tile failed (return code {e.returncode}):")
-                print(f"Command: {' '.join(cmd)}")
+                logger.error(f"gdal raster tile failed (return code {e.returncode}):")
+                logger.error(f"Command: {' '.join(cmd)}")
                 if e.stdout:
-                    print(f"Stdout: {e.stdout}")
+                    logger.error(f"Stdout: {e.stdout}")
                 if e.stderr:
-                    print(f"Stderr: {e.stderr}")
+                    logger.error(f"Stderr: {e.stderr}")
                 raise RuntimeError(f"gdal raster tile failed: {e}")
         else:
             raise RuntimeError("gdal raster tile not available. Use default gdal2tiles or install gdal with raster tile support.")
@@ -188,20 +192,20 @@ def geotiff_to_web_tiles(
     ]
 
     try:
-        print(f"Running gdal2tiles fallback: {' '.join(cmd)}")
+        logger.info(f"Running gdal2tiles fallback: {' '.join(cmd)}")
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         if result.stdout:
-            print("gdal2tiles stdout:", result.stdout)
+            logger.debug("gdal2tiles stdout: %s", result.stdout)
         if result.stderr:
-            print("gdal2tiles stderr:", result.stderr)
+            logger.debug("gdal2tiles stderr: %s", result.stderr)
         return str(output_dir)
     except subprocess.CalledProcessError as e:
-        print(f"gdal2tiles failed (return code {e.returncode}):")
-        print(f"Command: {' '.join(cmd)}")
+        logger.error(f"gdal2tiles failed (return code {e.returncode}):")
+        logger.error(f"Command: {' '.join(cmd)}")
         if e.stdout:
-            print(f"Stdout: {e.stdout}")
+            logger.error(f"Stdout: {e.stdout}")
         if e.stderr:
-            print(f"Stderr: {e.stderr}")
+            logger.error(f"Stderr: {e.stderr}")
         raise RuntimeError(f"Tile generation failed with both gdal raster tile and gdal2tiles: {e}")
     except FileNotFoundError:
         raise RuntimeError(
@@ -276,7 +280,7 @@ def create_simple_web_viewer(
             boundary_geojson = json.dumps(boundary_geojson)
 
         except Exception as e:
-            print(f"Warning: Could not process region file {region_file}: {e}")
+            logger.warning(f"Could not process region file {region_file}: {e}")
             boundary_geojson = None
 
     html_content = f"""<!DOCTYPE html>

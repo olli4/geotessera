@@ -37,3 +37,6 @@ jobs:
 
       - name: Build
         run: uv sync --locked --all-extras --dev
+
+      - name: Test
+        run: env TERM=dumb TTY_INTERACTIVE=0 uv run cram tests -v

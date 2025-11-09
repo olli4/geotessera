@@ -12,17 +12,18 @@ Key Features:
     - Separate visualization utilities for creating maps and web viewers
     - Clean CLI interface for common workflows
 
-Simplified Usage:
+Usage:
     >>> from geotessera import GeoTessera
     >>> gt = GeoTessera()
     >>>
     >>> # Fetch embedding tiles in a bounding box
     >>> bbox = (-0.2, 51.4, 0.1, 51.6)  # London area
-    >>> tiles = gt.fetch_embeddings(bbox, year=2024)
+    >>> tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+    >>> tiles = gt.fetch_embeddings(tiles_to_fetch)
     >>>
     >>> # Export as individual GeoTIFF files
     >>> files = gt.export_embedding_geotiffs(
-    ...     bbox=bbox,
+    ...     tiles_to_fetch,
     ...     output_dir="tiles/",
     ...     bands=[0, 1, 2]  # Select specific bands
     ... )
@@ -48,7 +49,7 @@ This design enables the use of standard GIS tools and libraries for all
 downstream processing, keeping GeoTessera focused on reliable data access.
 """
 
-from .core import GeoTessera
+from .core import GeoTessera, dequantize_embedding
 from . import visualization
 from . import web
 from . import registry
@@ -61,4 +62,4 @@ except importlib.metadata.PackageNotFoundError:
     # Fallback for development installs
     __version__ = "unknown"
 
-__all__ = ["GeoTessera", "visualization", "web", "registry"]
+__all__ = ["GeoTessera", "dequantize_embedding", "visualization", "web", "registry"]

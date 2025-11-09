@@ -2,8 +2,8 @@
 
 from typing import Tuple, Optional, List, Dict, Callable
 import geopandas as gpd
-import pooch
 import zipfile
+import os
 from pathlib import Path
 import difflib
 
@@ -22,7 +22,17 @@ class CountryLookup:
             cache_dir: Optional cache directory path
             progress_callback: Optional callback(current, total, status) for progress updates
         """
-        self._cache_dir = cache_dir or Path(pooch.os_cache("geotessera"))
+        if cache_dir:
+            self._cache_dir = Path(cache_dir)
+        else:
+            # Use platform-appropriate cache directory
+            if os.name == 'nt':
+                base = Path(os.environ.get('LOCALAPPDATA', '~')).expanduser()
+            else:
+                base = Path(os.environ.get('XDG_CACHE_HOME', '~/.cache')).expanduser()
+            self._cache_dir = base / 'geotessera'
+
+        self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._countries_gdf: Optional[gpd.GeoDataFrame] = None
         self._name_lookup: Optional[Dict[str, str]] = None
         self._progress_callback = progress_callback
@@ -56,7 +66,7 @@ class CountryLookup:
                 # Don't call parent init, we'll handle progress ourselves
                 self.outer_progress_callback = progress_callback
 
-            def __call__(self, url, output_file, pooch):
+            def __call__(self, url, output_file):
                 """Download with progress reporting."""
                 import requests
                 from pathlib import Path
@@ -141,22 +151,17 @@ class CountryLookup:
                 return str(output_file)
 
         # Download the archive
+        url = "https://github.com/nvkelso/natural-earth-vector/archive/refs/tags/v5.1.2.zip"
+        archive_path = self._cache_dir / "natural-earth-v5.1.2.zip"
+
         if self._progress_callback:
             downloader = CountryDataDownloader(self._progress_callback)
-            archive_path = pooch.retrieve(
-                url="https://github.com/nvkelso/natural-earth-vector/archive/refs/tags/v5.1.2.zip",
-                known_hash=None,
-                path=self._cache_dir,
-                fname="natural-earth-v5.1.2.zip",
-                downloader=downloader,
-            )
+            downloader(url, str(archive_path))
         else:
-            archive_path = pooch.retrieve(
-                url="https://github.com/nvkelso/natural-earth-vector/archive/refs/tags/v5.1.2.zip",
-                known_hash=None,
-                path=self._cache_dir,
-                fname="natural-earth-v5.1.2.zip",
-            )
+            # Simple download without progress reporting
+            from urllib.request import urlretrieve
+            archive_path.parent.mkdir(parents=True, exist_ok=True)
+            urlretrieve(url, str(archive_path))
 
         # Extract the specific GeoJSON file we need
         if self._progress_callback:
@@ -322,8 +327,8 @@ def get_country_bbox(
     return get_country_lookup(progress_callback).get_bbox(country_name)
 
 
-def get_country_tiles(country_name: str, year: int = 2024) -> List[Tuple[float, float]]:
-    """Get list of GeoTessera tile coordinates that intersect with country."""
+def get_country_tiles(country_name: str, year: int = 2024) -> List[Tuple[int, float, float]]:
+    """Get list of GeoTessera tile (year, tile_lon, tile_lat) tuples that intersect with country."""
     from .core import GeoTessera
 
     # Get country bounding box
@@ -332,6 +337,6 @@ def get_country_tiles(country_name: str, year: int = 2024) -> List[Tuple[float, 
 
     # Use existing registry to find tiles in the bounding box
     gt = GeoTessera()
-    tiles = gt.registry.load_blocks_for_region(bbox, year)
+    tiles = gt.registry.load_blocks_for_region(bounds=bbox, year=year)
 
     return tiles

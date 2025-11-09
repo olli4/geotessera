@@ -1,3 +1,151 @@
+## v0.7.0 (2025-11-09)
+
+This release moves to a Parquet-based registry for more efficient handling of
+the growing embeddings metadata for TESSERA. It no longer maintains a central
+cache, instead preferring the user to specify an embeddings directory within
+which the remote registry tiles are mirrored (as npy files) and additional
+mosaics and GeoTIFFs are generated. This helps make efficient use of disk space
+due to the large size of the embeddings.
+
+There are also new APIs for efficiently sampling embeddings for point data, and
+to generate mosaics for classifiers over ROIs.
+
+Note that there are significant interface changes throughout this release
+compared to 0.6; please read the migration notes below. The library will
+continue to evolve as we add more usecases, so please create issues on
+<https://github.com/ucam-eo/geotessera> with your wishlists!
+
+- **GeoParquet registry support**: Transitioned from text-based manifests to
+  Parquet files (`registry.parquet`, `landmasks.parquet') for all tile metadata
+- **Remove caching layer for tiles**: All embedding and landmask tiles are
+  now directly downloaded to temporary files and only the Parquet registry is
+  cached, since users were finding that embeddings storage was being duplicated
+  in the old tile cache. This leads to a significant reduction in disk space.
+- **Direct embeddings downloads**: Replaced Pooch with direct downloads
+  to temporary files with SHA256 verification.
+- **Lazy iterators** for reducing memory usage for large ROIs.
+
+### CLI Changes
+
+- **New global options**:
+  - `--registry-path` - Specify registry.parquet file
+  - `--registry-url` - Specify registry URL
+  - `--cache-dir` - Control registry cache location (replaces `TESSERA_DATA_DIR`)
+  - Removed `--auto-update` and `--manifests-repo-url`
+
+- **Enhanced `info` command**: Shows tiles per year and total landmask counts using fast pandas operations
+- **Enhanced `coverage` command**: Generate a 3D globegl globe with coverage textures for HTML viewing.
+- **New `--dry-run` option for `download` command**: Calculate total download size without downloading
+  - Shows file count, total size, number of tiles, year, and format
+  - Accounts for existing files (resume capability) - only counts files that would be downloaded
+  - For NPY format: calculates exact sizes from registry for embeddings, scales, and landmasks
+  - For TIFF format: provides size estimates (4x quantized size due to float32 conversion)
+  - Useful for planning downloads and estimating bandwidth/storage requirements
+  - Usage: `geotessera download --bbox '...' --dry-run`
+
+### Registry CLI Changes
+
+- **New `export-manifests` command**: Convert Parquet registry files to Pooch-format text manifests for backwards compatibility
+  - Reads `registry.parquet` and `landmasks.parquet` files
+  - Generates block-based text registry files in `registry/embeddings/` and `registry/landmasks/` subdirectories
+  - Creates separate entries for `.npy` and `_scales.npy` files with their respective hashes
+  - Useful for maintaining the tessera-manifests repository
+  - Usage: `geotessera-registry export-manifests /path/to/v1 --output-dir ~/src/git/ucam-eo/tessera-manifests`
+
+### Infrastructure Improvements
+
+- **CRAM test suite**: Added comprehensive CLI tests using CRAM (Command-line Regression Acceptance Testing)
+- **Dumb terminal support**: Added `TERM=dumb` support for non-interactive environments and CI pipelines
+- **Logging system**: Migrated from print statements to Python's standard `logging` module for better integration
+
+### Breaking Changes
+
+- **NPY Download Format**: `geotessera download --format npy` now saves **quantized** embeddings with scales instead of dequantized embeddings
+  - **New structure**: Files saved in `embeddings/{year}/grid_{lon}_{lat}.npy` (quantized) and `_scales.npy` (float32 scales)
+  - **Landmasks included**: Saved in `landmasks/landmask_{lon}_{lat}.tif` structure
+  - **No JSON metadata**: Removed JSON metadata files (use registry for metadata)
+  - **Resume capability**: Can interrupt and restart downloads without re-downloading existing files
+  - If you have existing NPY downloads, re-download with new version. Downloaded directories can now be reused with `GeoTessera(embeddings_dir=...)`
+
+- **Registry API Changes**: Internal registry methods now return tuple for better resource management
+  - `Registry.fetch()` now returns `(file_path, needs_cleanup)` tuple instead of just path
+  - `Registry.fetch_landmask()` now returns `(file_path, needs_cleanup)` tuple instead of just path
+  - These are internal changes - most users won't be affected
+
+- **Registry Format Requirements**: Updated schema for Parquet registry files
+  - `registry.parquet` now requires both `file_size` and `scales_hash` columns
+  - `landmasks.parquet` requires `file_size` column
+  - `file_size` used for accurate download progress reporting with total size
+  - `scales_hash` stores SHA256 hash for scales files separately from embedding hash
+  - Registry validation will fail if required columns are missing
+  - Regenerate registries with latest `geotessera-registry scan` to include new columns
+
+- **Environment variables**: `TESSERA_REGISTRY_DIR` and `TESSERA_DATA_DIR` deprecated in favor of CLI parameters
+- **Registry format**: Completely new backend that migrates from text manifests to GeoParquet.
+- **Cache behavior**: Only the registry is now cached, and not tile data to allow clients to manage their own disk usage.
+
+### New API Features
+
+- **`Tiles` class**: New abstraction for working with Tessera tiles
+  - Provides unified interface for tile manipulation as either GeoTIFF or dequantized NumPy arrays
+  - Simplifies conversion between formats
+  - Accessible via `from geotessera.tiles import Tiles`
+
+- **`GeoTessera(embeddings_dir=...)`**: New constructor parameter for local tile reuse
+  - Points to directory containing pre-downloaded tiles
+  - Expected structure: `embeddings/{year}/grid_{lon}_{lat}.npy` and `_scales.npy`, `landmasks/landmask_{lon}_{lat}.tif`
+  - Automatically uses local files when available, downloads only if missing
+
+- **`sample_embeddings_at_points(points, year, embeddings_dir=None, refresh=False)`**: Efficient point sampling
+  - Extract embedding values at arbitrary lon/lat coordinates
+  - Supports multiple input formats: list of tuples, GeoJSON FeatureCollection, GeoPandas GeoDataFrame
+  - Automatically groups points by tile for efficient batch processing
+  - Optional metadata return (tile info, pixel coords, CRS)
+  - Can override instance `embeddings_dir` per call
+  - Example: `embeddings = gt.sample_embeddings_at_points([(lon, lat), ...], year=2024)`
+
+- **`fetch_embedding(..., refresh=False)`**: New parameter to force re-download
+  - When `refresh=True`, re-downloads even if local tiles exist in `embeddings_dir`
+  - Useful for updating tiles or verifying data integrity
+
+- **New Registry size query methods**: Public API for querying file sizes from registry
+  - `registry.get_tile_file_size(year, lon, lat)` - Get size of an embedding tile in bytes
+  - `registry.get_landmask_file_size(lon, lat)` - Get size of a landmask tile in bytes
+  - `registry.calculate_download_requirements(tiles, output_dir, format_type)` - Calculate total download size for a list of tiles
+  - These methods replace direct registry DataFrame access and provide proper error handling
+  - Used internally by CLI `--dry-run` option and available for programmatic use
+  - Example: `size = gt.registry.get_tile_file_size(2024, 0.15, 52.05)`
+
+- **`embeddings_count(bbox, year)`**: Get count of tiles in a bounding box
+  - Returns total number of embedding tiles within a geographic region
+  - Useful for planning downloads and estimating processing requirements
+  - Example: `count = gt.embeddings_count((min_lon, min_lat, max_lon, max_lat), 2024)`
+
+- **`export_coverage_map(output_file)`**: Export coverage data to JSON
+  - Generates global coverage map showing which tiles have embeddings for which years
+  - Returns dictionary with tile coverage information
+  - Optionally saves to JSON file for use in visualizations
+
+- **`generate_coverage_texture(coverage_data, output_file)`**: Generate coverage texture for globe visualization
+  - Creates 3600x1800 pixel equirectangular projection texture
+  - Each pixel represents a 0.1-degree tile, colored by coverage status
+  - Used with `coverage` command for 3D globe visualizations, but also for your own visualisations
+
+- **`dequantize_embedding(quantized_embedding, scales)`**: Public utility function for dequantization
+  - Converts quantized embeddings to float32 by multiplying with scale factors
+  - Useful when working directly with downloaded quantized NPY files, but use the Tiles class for normal usage.
+  - Example: `embedding = dequantize_embedding(quantized, scales)`
+
+### Migration Notes
+
+From v0.6.0 to v0.7.0:
+- Update initialization code to use new `cache_dir` parameter instead of environment variables
+- Remove any custom `TESSERA_DATA_DIR` or `TESSERA_REGISTRY_DIR` environment variable usage
+- Expect reduced disk usage as tiles are no longer cached but potentially more downloads.
+- **If using NPY downloads**: Re-download tiles with new format to get quantized structure
+- **To reuse downloaded tiles**: Use `GeoTessera(embeddings_dir="path/to/tiles")` when initializing
+- **For point sampling**: Replace manual tile iteration with `sample_embeddings_at_points()`
+
 ## v0.6.0 (2025-09-15)
 
 - registry: Add support for a Parquet registry as an alternative source
