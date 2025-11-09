@@ -388,7 +388,7 @@ requires-dist = [
     { name = "geodatasets", specifier = ">=2024.8.0" },
     { name = "geopandas" },
     { name = "matplotlib" },
-    { name = "numpy" },
+    { name = "numpy", specifier = ">=2.3.0" },
     { name = "pandas" },
     { name = "pyarrow", specifier = ">=17.0.0" },
     { name = "rasterio" },

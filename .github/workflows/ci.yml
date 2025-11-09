@@ -39,4 +39,4 @@ jobs:
         run: uv sync --locked --all-extras --dev
 
       - name: Test
-        run: uv run cram tests/cli.t
+        run: uv run cram tests -v
