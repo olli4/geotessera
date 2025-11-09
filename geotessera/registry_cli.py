@@ -507,12 +507,8 @@ def create_landmasks_parquet_database(base_dir, output_path, console):
             ) as temp_file:
                 temp_path = temp_file.name
 
-            # Write GeoParquet file
-            gdf.to_parquet(temp_path, compression='snappy', index=False)
-
-            # Atomic rename to final location
+            gdf.to_parquet(temp_path, compression='zstd', index=False)
             os.rename(temp_path, output_path)
-            temp_path = None
 
         except Exception:
             if temp_path and os.path.exists(temp_path):
@@ -649,12 +645,8 @@ def create_parquet_database_from_filesystem(base_dir, output_path, console):
             ) as temp_file:
                 temp_path = temp_file.name
 
-            # Write GeoParquet file
-            gdf.to_parquet(temp_path, compression='snappy', index=False)
-            
-            # Atomic rename to final location
+            gdf.to_parquet(temp_path, compression='zstd', index=False)
             os.rename(temp_path, output_path)
-            temp_path = None  # Successfully renamed, no cleanup needed
             
         except Exception:
             # Clean up temporary file on error
