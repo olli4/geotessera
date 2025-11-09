@@ -19,14 +19,18 @@ Step 1: Check Data Availability
 
 Before downloading embeddings, we recommend check what data is available for your region of interest.
 
-Generate a global coverage map::
+Generate coverage visualizations (PNG map, JSON data, and interactive HTML globe)::
 
     geotessera coverage --output global_coverage.png
+    # Creates three files:
+    # 1. global_coverage.png - Static world map with tiles
+    # 2. coverage.json - JSON data with global coverage information
+    # 3. globe.html - Interactive 3D globe visualization
 
 This creates a world map showing all available embedding tiles. By default, it uses multi-year color coding:
 
 - **Green**: All available years present for this tile
-- **Blue**: Only the latest year available for this tile  
+- **Blue**: Only the latest year available for this tile
 - **Orange**: Partial years coverage (some combination of years)
 
 **✨ Boundary Visualization**: When you specify a country or region file, the precise boundaries are outlined on the map for better clarity.
@@ -62,8 +66,8 @@ Step 2: Download Embeddings
 
 GeoTessera supports two output formats:
 
-- **tiff**: Georeferenced GeoTIFF files (default, best for GIS)
-- **npy**: Raw numpy arrays with metadata (best for analysis)
+- **tiff**: Georeferenced GeoTIFF files (default, best for GIS) - fully dequantized and ready to use
+- **npy**: Quantized numpy arrays with scales and landmask TIFFs (for advanced analysis and storage efficiency)
 
 Download as GeoTIFF (Recommended for GIS)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -123,7 +127,7 @@ Download using a region file::
 Download as NumPy Arrays (For Analysis)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Download raw numpy arrays with metadata::
+Download quantized numpy arrays with scales and landmask TIFFs::
 
     geotessera download \
         --bbox "-0.2,51.4,0.1,51.6" \
@@ -131,10 +135,13 @@ Download raw numpy arrays with metadata::
         --year 2024 \
         --output ./london_arrays
 
-This creates:
+This creates the registry directory structure:
 
-- Individual ``.npy`` files for each tile (e.g., ``embedding_51.45_-0.15.npy``)
-- A ``metadata.json`` file with tile coordinates, shapes, and band information
+- ``global_0.1_degree_representation/{year}/grid_{lon}_{lat}/grid_{lon}_{lat}.npy`` - Quantized embeddings (int8)
+- ``global_0.1_degree_representation/{year}/grid_{lon}_{lat}/grid_{lon}_{lat}_scales.npy`` - Scale factors (float32)
+- ``global_0.1_degree_tiff_all/grid_{lon}_{lat}.tiff`` - Landmask TIFF with CRS and transform
+
+To dequantize: ``dequantized = quantized.astype(np.float32) * scales``
 
 Step 3: Work with the Data
 ---------------------------
@@ -162,23 +169,44 @@ Fetch a single embedding tile with CRS information::
 Fetch multiple tiles in a bounding box::
 
     bbox = (-0.2, 51.4, 0.1, 51.6)  # (min_lon, min_lat, max_lon, max_lat)
+
+    # Step 1: Get list of tiles in the region
     tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+
+    # Step 2: Fetch the tiles (returns a generator for memory efficiency)
     tiles = gt.fetch_embeddings(tiles_to_fetch)
-    
+
     for year, tile_lon, tile_lat, embedding_array, crs, transform in tiles:
         print(f"Tile ({tile_lon}, {tile_lat}): {embedding_array.shape}")
         print(f"  CRS: {crs}")
-        
+
         # Compute basic statistics
         mean_values = np.mean(embedding_array, axis=(0, 1))  # Mean per channel
         print(f"  Mean of first 5 channels: {mean_values[:5]}")
 
+Sample embeddings at specific points::
+
+    # Define points of interest (lon, lat tuples)
+    points = [(0.15, 52.05), (0.25, 52.15), (-0.05, 51.55)]
+
+    # Sample embeddings at these points (automatically downloads tiles if needed)
+    embeddings = gt.sample_embeddings_at_points(points, year=2024)
+    print(f"Sampled embeddings shape: {embeddings.shape}")  # (3, 128)
+
+    # With metadata
+    embeddings, metadata = gt.sample_embeddings_at_points(points, year=2024, include_metadata=True)
+    for i, meta in enumerate(metadata):
+        print(f"Point {i}: tile ({meta['tile_lon']}, {meta['tile_lat']}), pixel ({meta['pixel_row']}, {meta['pixel_col']})")
+
 Export embeddings to GeoTIFF::
 
+    # Step 1: Get list of tiles in the region
+    tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+
+    # Step 2: Export as GeoTIFF files
     files = gt.export_embedding_geotiffs(
-        bbox=bbox,
+        tiles_to_fetch,
         output_dir="./output",
-        year=2024,
         bands=[10, 30, 50],  # Custom band selection
         compress="lzw"
     )
@@ -187,35 +215,45 @@ Export embeddings to GeoTIFF::
 Working with Downloaded NumPy Arrays
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Load and analyze downloaded numpy arrays::
+Load and analyze downloaded numpy arrays (NPY format)::
 
-    import json
     import numpy as np
-    
-    # Load metadata
-    with open("london_arrays/metadata.json", "r") as f:
-        metadata = json.load(f)
-    
-    print(f"Downloaded {len(metadata['tiles'])} tiles")
-    print(f"Bounding box: {metadata['bbox']}")
-    print(f"Year: {metadata['year']}")
-    
-    # Load and process each tile
-    for tile_info in metadata["tiles"]:
-        lat, lon = tile_info["lat"], tile_info["lon"]
-        filename = tile_info["filename"]
-        
-        # Load the numpy array
-        embedding = np.load(f"london_arrays/{filename}")
-        
-        # Perform analysis
-        print(f"Tile ({lat}, {lon}):")
-        print(f"  Shape: {embedding.shape}")
-        print(f"  Mean per band (first 5): {np.mean(embedding, axis=(0,1))[:5]}")
-        
-        # Extract center pixel features
-        center_pixel = embedding[embedding.shape[0]//2, embedding.shape[1]//2, :]
-        print(f"  Center pixel features (first 5): {center_pixel[:5]}")
+    from pathlib import Path
+    from geotessera import dequantize_embedding
+
+    # NPY format uses the registry directory structure
+    base_dir = Path("london_arrays")
+    year = 2024
+
+    # Example: Load a specific tile
+    lon, lat = 0.15, 52.05
+    grid_name = f"grid_{lon:.2f}_{lat:.2f}"
+
+    # Load quantized embedding and scales
+    embedding_path = base_dir / "global_0.1_degree_representation" / str(year) / grid_name / f"{grid_name}.npy"
+    scales_path = base_dir / "global_0.1_degree_representation" / str(year) / grid_name / f"{grid_name}_scales.npy"
+    landmask_path = base_dir / "global_0.1_degree_tiff_all" / f"{grid_name}.tiff"
+
+    quantized = np.load(embedding_path)  # int8
+    scales = np.load(scales_path)  # float32
+
+    # Dequantize using the helper function
+    embedding = dequantize_embedding(quantized, scales)
+
+    print(f"Tile ({lat}, {lon}):")
+    print(f"  Shape: {embedding.shape}")
+    print(f"  Data type: {embedding.dtype}")  # float32
+    print(f"  Mean per band (first 5): {np.mean(embedding, axis=(0,1))[:5]}")
+
+    # Extract center pixel features
+    center_pixel = embedding[embedding.shape[0]//2, embedding.shape[1]//2, :]
+    print(f"  Center pixel features (first 5): {center_pixel[:5]}")
+
+    # Load landmask for CRS information (optional)
+    import rasterio
+    with rasterio.open(landmask_path) as src:
+        print(f"  CRS: {src.crs}")
+        print(f"  Transform: {src.transform}")
 
 Step 4: Create PCA Visualizations
 ----------------------------------

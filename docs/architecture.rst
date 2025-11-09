@@ -300,36 +300,37 @@ GeoTessera uses direct HTTP downloads with temporary file handling:
 
     import tempfile
     from urllib.request import urlopen
+    from geotessera import dequantize_embedding
 
     def fetch_embedding(lon, lat, year):
         # 1. Query registry for tile metadata
         tile_info = registry.query_tile(lon, lat, year)
 
-        # 2. Download to temporary files
-        embedding_temp = download_file_to_temp(
-            f"https://dl2.geotessera.org/v1/{tile_info['embedding_path']}",
-            expected_hash=tile_info['sha256']
+        # 2. Download to temporary files (or use local if exists in embeddings_dir)
+        embedding_file, cleanup_embedding = registry.fetch(
+            year=year, lon=lon, lat=lat, is_scales=False
         )
-        scales_temp = download_file_to_temp(
-            f"https://dl2.geotessera.org/v1/{tile_info['scales_path']}",
-            expected_hash=tile_info['scales_sha256']
+        scales_file, cleanup_scales = registry.fetch(
+            year=year, lon=lon, lat=lat, is_scales=True
         )
 
         try:
             # 3. Load and dequantize
-            quantized = np.load(embedding_temp)
-            scales = np.load(scales_temp)
-            embedding = quantized.astype(np.float32) * scales
+            quantized = np.load(embedding_file)
+            scales = np.load(scales_file)
+            embedding = dequantize_embedding(quantized, scales)
 
-            # 4. Get CRS from landmask (also temporary)
+            # 4. Get CRS from landmask (also temporary or local)
             crs, transform = get_utm_projection_from_landmask(lon, lat)
 
             return embedding, crs, transform
 
         finally:
-            # 5. Clean up temporary files
-            Path(embedding_temp).unlink(missing_ok=True)
-            Path(scales_temp).unlink(missing_ok=True)
+            # 5. Clean up temporary files (if they were temporary)
+            if cleanup_embedding:
+                Path(embedding_file).unlink(missing_ok=True)
+            if cleanup_scales:
+                Path(scales_file).unlink(missing_ok=True)
 
 Temporary File Management
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -416,48 +417,52 @@ When processing large regions, GeoTessera uses several strategies:
     def process_large_region(bbox, year, bands=None):
         """Process a large region without loading all tiles into memory."""
         gt = GeoTessera()
-        
-        # Get tile list (metadata only)
-        tiles = gt.registry.load_blocks_for_region(bbox, year)
-        
-        for tile_lon, tile_lat in tiles:  # Note: lon, lat order
-            # Process one tile at a time  
-            embedding, crs, transform = gt.fetch_embedding(tile_lon, tile_lat, year)
-            
-            # Apply band selection early
+
+        # Step 1: Get tile list (metadata only, no data loaded)
+        tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=year)
+
+        # Step 2: Process tiles one at a time using generator
+        for year, tile_lon, tile_lat, embedding, crs, transform in gt.fetch_embeddings(tiles_to_fetch):
+            # Apply band selection early to reduce memory
             if bands:
                 embedding = embedding[:, :, bands]
-                
+
             # Process this tile
             result = process_single_tile(embedding)
-            
+
             # Save or accumulate results
             save_tile_result(result, tile_lat, tile_lon)
-            
+
             # Free memory
             del embedding
 
 Network Optimization
 ~~~~~~~~~~~~~~~~~~~~
 
-**Concurrent Downloads**:
+**Sequential Processing**:
 
-For multiple tiles, downloads can be parallelized::
+The fetch_embeddings() generator processes tiles sequentially, which is optimal for most use cases::
 
-    import concurrent.futures
-    
-    def download_tiles_parallel(tile_coords, year, max_workers=4):
-        """Download multiple tiles in parallel."""
-        gt = GeoTessera()
-        
-        def download_single(coords):
-            lon, lat = coords  # Note: lon, lat order
-            return gt.fetch_embedding(lon, lat, year)
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            embeddings = list(executor.map(download_single, tile_coords))
-        
-        return embeddings
+    # Sequential processing (recommended for most cases)
+    gt = GeoTessera()
+    tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+
+    # Returns generator - tiles are fetched one at a time
+    for year, tile_lon, tile_lat, embedding, crs, transform in gt.fetch_embeddings(tiles_to_fetch):
+        process_tile(embedding)  # Memory efficient
+
+**Point Sampling**:
+
+For sampling at specific locations, use the optimized point sampling method::
+
+    # Efficient point sampling with automatic tile download
+    points = [(0.15, 52.05), (0.25, 52.15), (-0.05, 51.55)]
+    embeddings = gt.sample_embeddings_at_points(points, year=2024)
+
+    # With metadata about which tile each point came from
+    embeddings, metadata = gt.sample_embeddings_at_points(
+        points, year=2024, include_metadata=True
+    )
 
 **Cache Efficiency**:
 

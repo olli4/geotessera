@@ -92,41 +92,54 @@ Basic Usage
 Initialize and fetch embeddings::
 
     from geotessera import GeoTessera
-    
+
     # Initialize client
     gt = GeoTessera()
-    
-    # Fetch single tile with CRS information
+
+    # Method 1: Fetch single tile with CRS information
     embedding, crs, transform = gt.fetch_embedding(lon=0.15, lat=52.05, year=2024)
     print(f"CRS: {crs}")  # Native UTM projection
-    
-    # Fetch region with projection info
+
+    # Method 2: Fetch region with projection info
     bbox = (-0.2, 51.4, 0.1, 51.6)
+
+    # Step 1: Get list of tiles in region
     tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+
+    # Step 2: Fetch the tiles (returns generator for memory efficiency)
     tiles = gt.fetch_embeddings(tiles_to_fetch)
-    
+
     for year, tile_lon, tile_lat, embedding, crs, transform in tiles:
         print(f"Tile ({tile_lon}, {tile_lat}): {embedding.shape}, CRS: {crs}")
+
+    # Method 3: Sample at specific points
+    points = [(0.15, 52.05), (0.25, 52.15), (-0.05, 51.55)]
+    embeddings = gt.sample_embeddings_at_points(points, year=2024)
+    print(f"Sampled {len(points)} points: {embeddings.shape}")
 
 Export to GeoTIFF
 ~~~~~~~~~~~~~~~~~
 
 Export embeddings for GIS use with preserved projections::
 
-    # Export all bands with native UTM projections
+    # Step 1: Get list of tiles to export
+    bbox = (-0.2, 51.4, 0.1, 51.6)
+    tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+
+    # Step 2: Export all bands with native UTM projections
     files = gt.export_embedding_geotiffs(
-        files_to_fetch,
+        tiles_to_fetch,
         output_dir="./output",
     )
-    
+
     # Export specific bands
     rgb_files = gt.export_embedding_geotiffs(
-        files_to_fetch,
-        output_dir="./rgb_output", 
+        tiles_to_fetch,
+        output_dir="./rgb_output",
         bands=[0, 1, 2]  # Each tile preserves its native UTM projection
     )
-    
-    # Export single tile  
+
+    # Export single tile
     single_file = gt.export_embedding_geotiff(
         lon=0.15, lat=52.05,
         output_path="./single_tile.tif",

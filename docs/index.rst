@@ -46,55 +46,64 @@ Quick Start
 
 Check data availability first::
 
-    # Generate a coverage map
+    # Generate coverage visualizations (creates PNG map, JSON data, and interactive HTML globe)
     geotessera coverage --output coverage_map.png
-    
+    # Creates: coverage_map.png, coverage.json, globe.html
+
     # View coverage for a specific year
     geotessera coverage --year 2024
 
-    # Check coverage for a single country
-    geotessera coverage --country uk
+    # Check coverage for a single country with precise boundary outline
+    geotessera coverage --country "United Kingdom"
+    geotessera coverage --country uk  # Also accepts country codes
 
 Download embeddings in your preferred format::
 
-    # Download as GeoTIFF (georeferenced, for GIS)
+    # Download as GeoTIFF (default, georeferenced, ready for GIS)
     geotessera download --bbox "-0.2,51.4,0.1,51.6" --year 2024 --output ./london_tiffs --bands 1,2,3
-    
-    # Download as numpy arrays (for analysis, all 128 bands)
-    geotessera download --bbox "-0.2,51.4,0.1,51.6" --format npy --year 2024 --output ./london_arrays
 
-    # Download by country name
+    # Download as quantized numpy arrays (for analysis, includes scales and landmask TIFFs)
+    geotessera download --bbox "-0.2,51.4,0.1,51.6" --format npy --year 2024 --output ./london_arrays
+    # NPY format includes: quantized .npy, _scales.npy, and landmask .tiff files
+
+    # Download by country name with precise boundary filtering
     geotessera download --country "United Kingdom" --year 2024 --output ./uk_tiles
 
-    # Download tiles from a region file
-    geotessera download --region-file example/CB.geojson --format npy --year 2024 --output ./cambridge
+    # Download tiles from a region file (supports GeoJSON, Shapefile, or URLs)
+    geotessera download --region-file example/CB.geojson --year 2024 --output ./cambridge
+    geotessera download --region-file https://example.com/region.geojson --year 2024 --output ./remote_region
 
 
 Python API usage::
 
     from geotessera import GeoTessera
-    
+
     # Initialize client
     gt = GeoTessera()
-    
+
     # Method 1: Fetch a single tile with CRS information
     embedding, crs, transform = gt.fetch_embedding(lon=0.15, lat=52.05, year=2024)
     print(f"Shape: {embedding.shape}")  # e.g., (1200, 1200, 128)
     print(f"CRS: {crs}")  # UTM projection
-    
+
     # Method 2: Fetch all tiles in a bounding box
     bbox = (-0.2, 51.4, 0.1, 51.6)  # (min_lon, min_lat, max_lon, max_lat)
     tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
     tiles = gt.fetch_embeddings(tiles_to_fetch)
-    
+
     for year, tile_lon, tile_lat, embedding, crs, transform in tiles:
         print(f"Tile ({tile_lon}, {tile_lat}): {embedding.shape}")
-    
+
+    # Method 3: Sample embeddings at specific point locations
+    points = [(0.15, 52.05), (0.25, 52.15), (-0.05, 51.55)]  # (lon, lat) tuples
+    embeddings = gt.sample_embeddings_at_points(points, year=2024)
+    print(f"Sampled embeddings shape: {embeddings.shape}")  # (3, 128)
+
     # Export as GeoTIFF files with preserved UTM projections
+    tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
     files = gt.export_embedding_geotiffs(
-        bbox=bbox,
+        tiles_to_fetch,
         output_dir="./output",
-        year=2024,
         bands=[0, 1, 2]  # Export first 3 bands only
     )
 

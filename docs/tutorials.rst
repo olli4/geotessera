@@ -130,13 +130,14 @@ Download and analyze multiple tiles for a region::
 
     # Define bounding box for Cambridge area
     bbox = (0.0, 52.0, 0.3, 52.2)  # (min_lon, min_lat, max_lon, max_lat)
-    
-    # Fetch all tiles in the region with projection info
+
+    # Step 1: Get list of available tiles in the region
     tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
-    tiles = gt.fetch_embeddings(tiles_to_fetch)
-    
     print(f"Found {len(tiles_to_fetch)} tiles in the region")
-    
+
+    # Step 2: Fetch all tiles with projection info (returns generator)
+    tiles = gt.fetch_embeddings(tiles_to_fetch)
+
     # Analyze each tile
     tile_stats = []
     for year, tile_lon, tile_lat, embedding, crs, transform in tiles:
@@ -150,7 +151,7 @@ Download and analyze multiple tiles for a region::
             'crs': str(crs)
         }
         tile_stats.append(stats)
-        
+
         print(f"Tile ({tile_lon:.2f}, {tile_lat:.2f}): "
               f"overall_mean={stats['mean_all_channels']:.3f}, "
               f"ch50_mean={stats['channel_50_mean']:.3f}")
@@ -164,13 +165,111 @@ Save the analysis results for later use::
     with open('cambridge_analysis.json', 'w') as f:
         json.dump(tile_stats, f, indent=2)
     
-    # Save raw embeddings for further analysis  
-    for i, (year, tile_lon, tile_lat, embedding, crs, transform) in enumerate(tiles):
+    # Save raw embeddings for further analysis
+    # Note: Need to re-fetch tiles if already consumed the generator
+    tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+    tiles = gt.fetch_embeddings(tiles_to_fetch)
+
+    for year, tile_lon, tile_lat, embedding, crs, transform in tiles:
         filename = f'cambridge_tile_{tile_lat:.2f}_{tile_lon:.2f}.npy'
         np.save(filename, embedding)
         print(f"Saved {filename}")
 
-Tutorial 2: GIS Integration Workflow
+Tutorial 2: Point Sampling Workflow
+------------------------------------
+
+This tutorial shows how to efficiently sample embeddings at specific point locations.
+
+Sample Embeddings at Points
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``sample_embeddings_at_points()`` method provides an efficient way to extract embedding values at arbitrary locations::
+
+    from geotessera import GeoTessera
+    import numpy as np
+
+    gt = GeoTessera()
+
+    # Define points of interest (lon, lat tuples)
+    points = [
+        (0.15, 52.05),   # Cambridge
+        (0.25, 52.15),   # Nearby location
+        (-0.05, 51.55),  # London
+        (-0.12, 51.50),  # Westminster
+    ]
+
+    # Sample embeddings at these points (auto-downloads tiles if needed)
+    embeddings = gt.sample_embeddings_at_points(points, year=2024)
+    print(f"Sampled embeddings shape: {embeddings.shape}")  # (4, 128)
+
+    # Analyze the sampled embeddings
+    for i, point in enumerate(points):
+        print(f"Point {i} ({point[0]}, {point[1]}):")
+        print(f"  Mean: {np.mean(embeddings[i]):.3f}")
+        print(f"  Std: {np.std(embeddings[i]):.3f}")
+        print(f"  First 5 channels: {embeddings[i][:5]}")
+
+Get Metadata About Samples
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Include metadata to know which tile and pixel each sample came from::
+
+    # Sample with metadata
+    embeddings, metadata = gt.sample_embeddings_at_points(
+        points, year=2024, include_metadata=True
+    )
+
+    for i, meta in enumerate(metadata):
+        print(f"Point {i}:")
+        print(f"  From tile: ({meta['tile_lon']}, {meta['tile_lat']})")
+        print(f"  Pixel location: row={meta['pixel_row']}, col={meta['pixel_col']}")
+        print(f"  CRS: {meta['crs']}")
+
+Offline Mode for Point Sampling
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For guaranteed offline operation with no network requests::
+
+    from geotessera import GeoTessera
+
+    # Initialize with embeddings directory containing pre-downloaded tiles
+    gt = GeoTessera(embeddings_dir="./my_tiles")
+
+    # Option 1: Pre-download tiles first
+    points = [(0.15, 52.05), (0.25, 52.15)]
+    gt.download_tiles_for_points(points, year=2024)
+
+    # Option 2: Sample in offline mode (will fail if tiles are missing)
+    embeddings = gt.sample_embeddings_at_points(
+        points, year=2024, auto_download=False
+    )
+
+Sample from GeoJSON or GeoDataFrame
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+You can also pass GeoJSON or GeoPandas GeoDataFrame directly::
+
+    import geopandas as gpd
+
+    # From GeoJSON FeatureCollection
+    geojson = {
+        "type": "FeatureCollection",
+        "features": [
+            {"type": "Feature", "geometry": {"type": "Point", "coordinates": [0.15, 52.05]}},
+            {"type": "Feature", "geometry": {"type": "Point", "coordinates": [0.25, 52.15]}},
+        ]
+    }
+    embeddings = gt.sample_embeddings_at_points(geojson, year=2024)
+
+    # From GeoPandas GeoDataFrame
+    gdf = gpd.GeoDataFrame(
+        {'name': ['Cambridge', 'Nearby']},
+        geometry=gpd.points_from_xy([0.15, 0.25], [52.05, 52.15]),
+        crs='EPSG:4326'
+    )
+    embeddings = gt.sample_embeddings_at_points(gdf, year=2024)
+
+Tutorial 3: GIS Integration Workflow
 ------------------------------------
 
 This tutorial shows how to work with GeoTIFF exports for GIS software integration.
@@ -307,7 +406,7 @@ Example QGIS workflow::
     # Configure color ramp...
     layer.setRenderer(renderer)
 
-Tutorial 3: Large-Scale Analysis
+Tutorial 4: Large-Scale Analysis
 --------------------------------
 
 This tutorial covers working with large regions and multiple years of data.
@@ -320,47 +419,49 @@ When working with large regions, use CLI for efficient processing::
     # Use CLI for large regions
     # Step 1: Check coverage first
     # geotessera coverage --bbox "-3.0,50.0,2.0,53.0" --year 2024
-    
+
     # Step 2: Download in smaller chunks or use selective bands
     # geotessera download --bbox "-3.0,50.0,2.0,53.0" --year 2024 --bands "0,10,20,30,40" --output ./southern_england
-    
+
     # Step 3: Create PCA visualization (handles large datasets efficiently)
     # geotessera visualize ./southern_england pca_southern_england.tif --n-components 5
-    
+
     # For Python analysis of large regions:
     from geotessera import GeoTessera
     import numpy as np
-    
+
     gt = GeoTessera()
-    
+
     # Large region (entire southern England)
     bbox = (-3.0, 50.0, 2.0, 53.0)
     year = 2024
-    
+
     def process_large_region_efficiently(bbox, year, analysis_func):
         """Process a large region without loading all tiles into memory."""
-        
-        # Get list of available tiles (metadata only)
-        tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+
+        # Step 1: Get list of available tiles (metadata only, no data loaded)
+        tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=year)
         total_tiles = len(tiles_to_fetch)
-        tiles = gt.fetch_embeddings(tiles_to_fetch)
-        
+
         print(f"Processing {total_tiles} tiles...")
         print("Consider using CLI: geotessera download + geotessera visualize for large regions")
-        
+
+        # Step 2: Fetch tiles as generator (one at a time, memory efficient)
+        tiles = gt.fetch_embeddings(tiles_to_fetch)
+
         results = []
         for i, (year, tile_lon, tile_lat, embedding, crs, transform) in enumerate(tiles):
             # Process one tile at a time
             result = analysis_func(embedding, tile_lat, tile_lon)
             results.append(result)
-            
+
             # Progress indicator
             if (i + 1) % 10 == 0:
                 print(f"Processed {i + 1}/{total_tiles} tiles")
-            
+
             # Free memory
             del embedding
-        
+
         return results
     
     def vegetation_analysis(embedding, lat, lon):
@@ -543,7 +644,7 @@ Compare embeddings across different years::
     plt.savefig('cambridge_temporal_trend.png', dpi=150, bbox_inches='tight')
     plt.show()
 
-Tutorial 4: Coverage Analysis with Boundary Visualization
+Tutorial 5: Coverage Analysis with Boundary Visualization
 --------------------------------------------------------
 
 Understanding data coverage with precise geographic boundaries.
@@ -580,7 +681,7 @@ Comparing Boundary vs Bounding Box
 The country approach shows only tiles that actually intersect with Greek territory,
 excluding tiles over water or neighboring countries that fall within the bounding box.
 
-Tutorial 5: Custom Analysis Workflows
+Tutorial 6: Custom Analysis Workflows
 -------------------------------------
 
 Advanced analysis techniques and custom workflows.
