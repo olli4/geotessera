@@ -20,13 +20,13 @@ def prepare_mosaic_for_web(
     progress_callback: Optional[Callable] = None,
 ) -> str:
     """Prepare an RGB mosaic for web visualization by reprojecting if needed.
-    
+
     Args:
         input_mosaic: Path to input RGB mosaic (3-band GeoTIFF)
         output_path: Output path for web-ready mosaic
         target_crs: Target CRS for web visualization (default: Web Mercator)
         progress_callback: Optional progress callback
-        
+
     Returns:
         Path to web-ready mosaic (may be same as input if no reprojection needed)
     """
@@ -35,40 +35,44 @@ def prepare_mosaic_for_web(
         from rasterio.warp import reproject, calculate_default_transform, Resampling
     except ImportError:
         raise ImportError("rasterio required: pip install rasterio")
-    
+
     if progress_callback:
         progress_callback(10, 100, "Checking mosaic CRS...")
-    
+
     # Check if reprojection is needed
     with rasterio.open(input_mosaic) as src:
         if str(src.crs) == target_crs:
             if progress_callback:
                 progress_callback(100, 100, f"Mosaic already in {target_crs}")
             return input_mosaic
-        
+
         if progress_callback:
-            progress_callback(20, 100, f"Reprojecting from {src.crs} to {target_crs}...")
-        
+            progress_callback(
+                20, 100, f"Reprojecting from {src.crs} to {target_crs}..."
+            )
+
         # Calculate transform and dimensions for target CRS
         dst_transform, dst_width, dst_height = calculate_default_transform(
             src.crs, target_crs, src.width, src.height, *src.bounds
         )
-        
+
         # Create output profile
         profile = src.profile.copy()
-        profile.update({
-            'crs': target_crs,
-            'transform': dst_transform,
-            'width': dst_width,
-            'height': dst_height,
-            'compress': 'lzw',
-        })
-        
+        profile.update(
+            {
+                "crs": target_crs,
+                "transform": dst_transform,
+                "width": dst_width,
+                "height": dst_height,
+                "compress": "lzw",
+            }
+        )
+
         if progress_callback:
             progress_callback(50, 100, "Writing reprojected mosaic...")
-        
+
         # Write reprojected mosaic
-        with rasterio.open(output_path, 'w', **profile) as dst:
+        with rasterio.open(output_path, "w", **profile) as dst:
             for i in range(1, src.count + 1):
                 reproject(
                     source=rasterio.band(src, i),
@@ -77,21 +81,24 @@ def prepare_mosaic_for_web(
                     src_crs=src.crs,
                     dst_transform=dst_transform,
                     dst_crs=target_crs,
-                    resampling=Resampling.bilinear
+                    resampling=Resampling.bilinear,
                 )
-            
+
             # Copy tags and color interpretation
             dst.update_tags(**src.tags())
             dst.colorinterp = src.colorinterp
-    
+
     if progress_callback:
         progress_callback(100, 100, "Mosaic prepared for web visualization")
-    
+
     return output_path
 
 
 def geotiff_to_web_tiles(
-    geotiff_path: str, output_dir: str, zoom_levels: Tuple[int, int] = (8, 15), use_gdal_raster: bool = False
+    geotiff_path: str,
+    output_dir: str,
+    zoom_levels: Tuple[int, int] = (8, 15),
+    use_gdal_raster: bool = False,
 ) -> str:
     """Convert GeoTIFF to web tiles for interactive display.
 
@@ -119,6 +126,7 @@ def geotiff_to_web_tiles(
 
     # Use gdal raster tile if explicitly requested and available
     if use_gdal_raster:
+
         def _has_gdal_raster_tile() -> bool:
             """Check if 'gdal raster tile' command is available."""
             try:
@@ -174,7 +182,9 @@ def geotiff_to_web_tiles(
                     logger.error(f"Stderr: {e.stderr}")
                 raise RuntimeError(f"gdal raster tile failed: {e}")
         else:
-            raise RuntimeError("gdal raster tile not available. Use default gdal2tiles or install gdal with raster tile support.")
+            raise RuntimeError(
+                "gdal raster tile not available. Use default gdal2tiles or install gdal with raster tile support."
+            )
 
     # Use traditional gdal2tiles.py (default)
     cmd = [
@@ -206,7 +216,9 @@ def geotiff_to_web_tiles(
             logger.error(f"Stdout: {e.stdout}")
         if e.stderr:
             logger.error(f"Stderr: {e.stderr}")
-        raise RuntimeError(f"Tile generation failed with both gdal raster tile and gdal2tiles: {e}")
+        raise RuntimeError(
+            f"Tile generation failed with both gdal raster tile and gdal2tiles: {e}"
+        )
     except FileNotFoundError:
         raise RuntimeError(
             "Neither 'gdal raster tile' nor 'gdal2tiles.py' found. Install GDAL tools."
@@ -393,7 +405,7 @@ def create_coverage_summary_map(
         Path to created HTML file
     """
     from .visualization import analyze_geotiff_coverage
-    
+
     # Analyze coverage
     coverage = analyze_geotiff_coverage(geotiff_paths)
 

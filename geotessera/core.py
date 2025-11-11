@@ -23,8 +23,7 @@ except importlib.metadata.PackageNotFoundError:
 
 
 def dequantize_embedding(
-    quantized_embedding: np.ndarray,
-    scales: np.ndarray
+    quantized_embedding: np.ndarray, scales: np.ndarray
 ) -> np.ndarray:
     """Dequantize embedding by multiplying with scale factors.
 
@@ -56,6 +55,7 @@ def dequantize_embedding(
         scales = scales[..., np.newaxis]  # Add channel dimension
 
     return quantized_embedding.astype(np.float32) * scales
+
 
 class GeoTessera:
     """Library for downloading Tessera tiles and exporting GeoTIFFs.
@@ -153,18 +153,20 @@ class GeoTessera:
         """Get the GeoTessera library version."""
         return __version__
 
-    def embeddings_count(self, bbox: Tuple[float, float, float, float], year: int = 2024) -> int:
-            """Get total number of embedding tiles within a bounding box.
+    def embeddings_count(
+        self, bbox: Tuple[float, float, float, float], year: int = 2024
+    ) -> int:
+        """Get total number of embedding tiles within a bounding box.
 
-            Args:
-                bbox: Bounding box as (min_lon, min_lat, max_lon, max_lat)
-                year: Year of embeddings to consider
+        Args:
+            bbox: Bounding box as (min_lon, min_lat, max_lon, max_lat)
+            year: Year of embeddings to consider
 
-            Returns:
-                Total number of tiles in the bounding box
-            """
-            tiles = self.registry.load_blocks_for_region(bbox, year)
-            return len(tiles)
+        Returns:
+            Total number of tiles in the bounding box
+        """
+        tiles = self.registry.load_blocks_for_region(bbox, year)
+        return len(tiles)
 
     def export_coverage_map(self, output_file: Optional[str] = None) -> Dict:
         """Generate global coverage map showing which tiles have embeddings for which years.
@@ -229,27 +231,29 @@ class GeoTessera:
 
         # Create coverage map
         coverage_map = {
-            'tiles': tiles_by_location,
-            'landmasks': landmask_keys,
-            'no_coverage': no_coverage_tiles,  # Explicit list of land tiles without data
-            'years': available_years,
-            'metadata': {
-                'total_tiles': len(tiles_by_location),
-                'total_landmasks': len(landmask_keys),
-                'total_no_coverage': len(no_coverage_tiles),
-                'version': self.dataset_version,
-            }
+            "tiles": tiles_by_location,
+            "landmasks": landmask_keys,
+            "no_coverage": no_coverage_tiles,  # Explicit list of land tiles without data
+            "years": available_years,
+            "metadata": {
+                "total_tiles": len(tiles_by_location),
+                "total_landmasks": len(landmask_keys),
+                "total_no_coverage": len(no_coverage_tiles),
+                "version": self.dataset_version,
+            },
         }
 
         # Write to file if requested
         if output_file:
-            with open(output_file, 'w') as f:
+            with open(output_file, "w") as f:
                 json.dump(coverage_map, f, indent=2)
             self.logger.info(f"Coverage map written to {output_file}")
 
         return coverage_map
 
-    def generate_coverage_texture(self, coverage_data: Dict, output_file: Optional[str] = None) -> str:
+    def generate_coverage_texture(
+        self, coverage_data: Dict, output_file: Optional[str] = None
+    ) -> str:
         """Generate coverage texture image for globe visualization.
 
         Creates a 3600x1800 pixel equirectangular projection texture where each pixel
@@ -265,8 +269,9 @@ class GeoTessera:
         try:
             from PIL import Image, ImageDraw
         except ImportError:
-            raise ImportError("PIL/Pillow required for texture generation: pip install Pillow")
-
+            raise ImportError(
+                "PIL/Pillow required for texture generation: pip install Pillow"
+            )
 
         # Constants matching JavaScript
         TILE_SIZE = 0.1
@@ -279,13 +284,13 @@ class GeoTessera:
         self.logger.info(f"Generating coverage texture ({width}x{height} pixels)...")
 
         # Create RGBA image
-        img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+        img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
 
         # Get metadata for coloring logic
-        tiles_dict = coverage_data['tiles']
-        no_coverage_set = set(coverage_data.get('no_coverage', []))
-        all_years = coverage_data['years']
+        tiles_dict = coverage_data["tiles"]
+        no_coverage_set = set(coverage_data.get("no_coverage", []))
+        all_years = coverage_data["years"]
         max_years = len(all_years)
         latest_year = max(all_years) if all_years else 0
 
@@ -328,12 +333,21 @@ class GeoTessera:
             output_file = "coverage_texture.png"
 
         img.save(output_file, "PNG")
-        self.logger.info(f"Generated texture with {tile_count} tiles, saved to {output_file}")
+        self.logger.info(
+            f"Generated texture with {tile_count} tiles, saved to {output_file}"
+        )
 
         return output_file
 
-    def _get_tile_color(self, key: str, tiles_dict: Dict, no_coverage_set: set,
-                        all_years: list, max_years: int, latest_year: int) -> tuple:
+    def _get_tile_color(
+        self,
+        key: str,
+        tiles_dict: Dict,
+        no_coverage_set: set,
+        all_years: list,
+        max_years: int,
+        latest_year: int,
+    ) -> tuple:
         """Get RGBA color for a tile based on coverage (matches JavaScript logic)."""
 
         # Check if tile has coverage data
@@ -477,15 +491,11 @@ class GeoTessera:
 
         # Discover local tiles and build map for this year
         local_tiles = discover_tiles(self.embeddings_dir)
-        local_tile_map = {
-            (t.lon, t.lat): t
-            for t in local_tiles
-            if t.year == year
-        }
+        local_tile_map = {(t.lon, t.lat): t for t in local_tiles if t.year == year}
 
         # Find missing tiles
         missing_tiles = []
-        for (tile_lon, tile_lat) in required_coords:
+        for tile_lon, tile_lat in required_coords:
             tile = local_tile_map.get((tile_lon, tile_lat))
             if tile is None or not tile.is_available(require_landmask=require_landmask):
                 missing_tiles.append((tile_lon, tile_lat))
@@ -507,7 +517,7 @@ class GeoTessera:
                         progress_callback(
                             current,
                             total,
-                            f"Downloading {grid_name} ({idx + 1}/{len(missing_tiles)})"
+                            f"Downloading {grid_name} ({idx + 1}/{len(missing_tiles)})",
                         )
 
                     success = self.download_tile(tile_lon, tile_lat, year)
@@ -517,13 +527,13 @@ class GeoTessera:
                 # Re-discover tiles after downloading
                 local_tiles = discover_tiles(self.embeddings_dir)
                 local_tile_map = {
-                    (t.lon, t.lat): t
-                    for t in local_tiles
-                    if t.year == year
+                    (t.lon, t.lat): t for t in local_tiles if t.year == year
                 }
             else:
                 # In offline mode, raise error with helpful message
-                missing_names = [f"grid_{lon:.2f}_{lat:.2f}" for lon, lat in missing_tiles]
+                missing_names = [
+                    f"grid_{lon:.2f}_{lat:.2f}" for lon, lat in missing_tiles
+                ]
 
                 # Build helpful error message
                 error_msg = (
@@ -533,9 +543,7 @@ class GeoTessera:
                 if len(missing_names) > 5:
                     error_msg += f"... (and {len(missing_names) - 5} more)"
 
-                error_msg += (
-                    "\n\nSet auto_download=True to download automatically, or download tiles manually using:\n"
-                )
+                error_msg += "\n\nSet auto_download=True to download automatically, or download tiles manually using:\n"
 
                 if bbox:
                     min_lon, min_lat, max_lon, max_lat = bbox
@@ -544,9 +552,7 @@ class GeoTessera:
                         f"--year {year} --output {self.embeddings_dir}"
                     )
                 else:
-                    error_msg += (
-                        f"geotessera download --year {year} --output {self.embeddings_dir}"
-                    )
+                    error_msg += f"geotessera download --year {year} --output {self.embeddings_dir}"
 
                 raise FileNotFoundError(error_msg)
 
@@ -661,12 +667,15 @@ class GeoTessera:
         # Calculate number of missing tiles for progress tracking
         # (already downloaded by _ensure_tiles_available if auto_download=True)
         num_missing = sum(
-            1 for coord in tiles_needed_coords
+            1
+            for coord in tiles_needed_coords
             if coord not in local_tile_map or not local_tile_map[coord].is_available()
         )
 
         # Track progress for loading + reprojecting + merging
-        total_steps = len(tiles_needed_coords) * 2 + 1  # load+reproject per tile, then merge
+        total_steps = (
+            len(tiles_needed_coords) * 2 + 1
+        )  # load+reproject per tile, then merge
         current_step = num_missing if auto_download else 0
 
         def update_progress(status: str):
@@ -678,11 +687,13 @@ class GeoTessera:
         # Load all tiles from embeddings_dir and reproject to target CRS
         reprojected_memfiles = []
 
-        for (tile_lon, tile_lat) in tiles_needed_coords:
+        for tile_lon, tile_lat in tiles_needed_coords:
             # Get Tile object from local storage
             tile = local_tile_map.get((tile_lon, tile_lat))
             if tile is None or not tile.is_available():
-                self.logger.warning(f"Tile ({tile_lat:.2f}, {tile_lon:.2f}) not available after download, skipping")
+                self.logger.warning(
+                    f"Tile ({tile_lat:.2f}, {tile_lon:.2f}) not available after download, skipping"
+                )
                 continue
 
             update_progress(f"Loading tile ({tile_lat:.2f}, {tile_lon:.2f})")
@@ -888,28 +899,32 @@ class GeoTessera:
 
         if progress_callback:
             progress_callback(
-                0, len(points_by_tile),
-                f"Found {len(tile_map)} local tiles for year {year}"
+                0,
+                len(points_by_tile),
+                f"Found {len(tile_map)} local tiles for year {year}",
             )
 
         # Process each tile
         total_tiles = len(points_by_tile)
-        for tile_idx, ((tile_lon, tile_lat), point_indices) in enumerate(points_by_tile.items()):
+        for tile_idx, ((tile_lon, tile_lat), point_indices) in enumerate(
+            points_by_tile.items()
+        ):
             if progress_callback:
                 progress_callback(
-                    tile_idx, total_tiles,
-                    f"Processing tile {tile_idx + 1}/{total_tiles}: ({tile_lat:.2f}, {tile_lon:.2f})"
+                    tile_idx,
+                    total_tiles,
+                    f"Processing tile {tile_idx + 1}/{total_tiles}: ({tile_lat:.2f}, {tile_lon:.2f})",
                 )
 
             try:
                 # Use Tile abstraction for local files
                 tile = tile_map.get((tile_lon, tile_lat))
                 if tile is None:
-                    error_msg = (
-                        f"Tile ({tile_lon:.2f}, {tile_lat:.2f}) not found in {self.embeddings_dir}. "
-                    )
+                    error_msg = f"Tile ({tile_lon:.2f}, {tile_lat:.2f}) not found in {self.embeddings_dir}. "
                     if auto_download:
-                        error_msg += "Download may have failed. Check network connectivity."
+                        error_msg += (
+                            "Download may have failed. Check network connectivity."
+                        )
                     else:
                         error_msg += (
                             "Set auto_download=True to download automatically, or use "
@@ -944,33 +959,35 @@ class GeoTessera:
                         # Store metadata if requested
                         if include_metadata:
                             result_metadata[original_idx] = {
-                                'tile_lon': tile_lon,
-                                'tile_lat': tile_lat,
-                                'pixel_row': row,
-                                'pixel_col': col,
-                                'crs': str(crs),
+                                "tile_lon": tile_lon,
+                                "tile_lat": tile_lat,
+                                "pixel_row": row,
+                                "pixel_col": col,
+                                "crs": str(crs),
                             }
                     else:
                         # Point is outside tile bounds (shouldn't happen, but handle gracefully)
                         if include_metadata:
                             result_metadata[original_idx] = {
-                                'tile_lon': tile_lon,
-                                'tile_lat': tile_lat,
-                                'pixel_row': None,
-                                'pixel_col': None,
-                                'crs': str(crs),
-                                'error': 'pixel_out_of_bounds'
+                                "tile_lon": tile_lon,
+                                "tile_lat": tile_lat,
+                                "pixel_row": None,
+                                "pixel_col": None,
+                                "crs": str(crs),
+                                "error": "pixel_out_of_bounds",
                             }
 
             except Exception as e:
                 # If tile fetch/load fails, leave those points as NaN
-                self.logger.warning(f"Failed to process tile ({tile_lat:.2f}, {tile_lon:.2f}): {e}")
+                self.logger.warning(
+                    f"Failed to process tile ({tile_lat:.2f}, {tile_lon:.2f}): {e}"
+                )
                 if include_metadata:
                     for original_idx in point_indices:
                         result_metadata[original_idx] = {
-                            'tile_lon': tile_lon,
-                            'tile_lat': tile_lat,
-                            'error': str(e)
+                            "tile_lon": tile_lon,
+                            "tile_lat": tile_lat,
+                            "error": str(e),
                         }
 
         if progress_callback:
@@ -997,12 +1014,12 @@ class GeoTessera:
 
         # Handle GeoJSON FeatureCollection
         if isinstance(points, dict):
-            if points.get('type') == 'FeatureCollection':
+            if points.get("type") == "FeatureCollection":
                 result = []
-                for feature in points.get('features', []):
-                    geom = feature.get('geometry', {})
-                    if geom.get('type') == 'Point':
-                        coords = geom.get('coordinates', [])
+                for feature in points.get("features", []):
+                    geom = feature.get("geometry", {})
+                    if geom.get("type") == "Point":
+                        coords = geom.get("coordinates", [])
                         if len(coords) >= 2:
                             result.append((coords[0], coords[1]))
                 return result
@@ -1013,16 +1030,15 @@ class GeoTessera:
 
         # Handle GeoDataFrame
         import geopandas as gpd
+
         if isinstance(points, gpd.GeoDataFrame):
-          result = []
-          for geom in points.geometry:
-            if geom.geom_type == 'Point':
-              result.append((geom.x, geom.y))
-            else:
-              raise ValueError(
-                "GeoDataFrame must contain only Point geometries"
-              )
-          return result
+            result = []
+            for geom in points.geometry:
+                if geom.geom_type == "Point":
+                    result.append((geom.x, geom.y))
+                else:
+                    raise ValueError("GeoDataFrame must contain only Point geometries")
+            return result
 
         raise ValueError(
             "points must be a list of (lon, lat) tuples, GeoJSON FeatureCollection, "
@@ -1053,9 +1069,9 @@ class GeoTessera:
             points_by_tile[tile_key].append(idx)
 
         # Filter to only tiles that exist in the registry
-        available_tiles = set(self.registry.load_blocks_for_region(
-            (-180, -90, 180, 90), year
-        ))
+        available_tiles = set(
+            self.registry.load_blocks_for_region((-180, -90, 180, 90), year)
+        )
 
         # Convert to set of (lon, lat) for faster lookup
         available_tile_coords = {(lon, lat) for (y, lon, lat) in available_tiles}
@@ -1104,12 +1120,22 @@ class GeoTessera:
 
         # Fetch the files using coordinates
         embedding_file = self.registry.fetch(
-            year=year, lon=lon, lat=lat, is_scales=False,
-            progressbar=False, progress_callback=progress_callback, refresh=refresh
+            year=year,
+            lon=lon,
+            lat=lat,
+            is_scales=False,
+            progressbar=False,
+            progress_callback=progress_callback,
+            refresh=refresh,
         )
         scales_file = self.registry.fetch(
-            year=year, lon=lon, lat=lat, is_scales=True,
-            progressbar=False, progress_callback=progress_callback, refresh=refresh
+            year=year,
+            lon=lon,
+            lat=lat,
+            is_scales=True,
+            progressbar=False,
+            progress_callback=progress_callback,
+            refresh=refresh,
         )
 
         # Load quantized data and scales
@@ -1151,13 +1177,23 @@ class GeoTessera:
             # Download files directly to embeddings_dir (using refresh=True to force download)
             # fetch() handles creating directory structure and saving to correct locations
             self.registry.fetch(
-                year=year, lon=lon, lat=lat, is_scales=False,
-                progressbar=False, progress_callback=progress_callback, refresh=True
+                year=year,
+                lon=lon,
+                lat=lat,
+                is_scales=False,
+                progressbar=False,
+                progress_callback=progress_callback,
+                refresh=True,
             )
 
             self.registry.fetch(
-                year=year, lon=lon, lat=lat, is_scales=True,
-                progressbar=False, progress_callback=progress_callback, refresh=True
+                year=year,
+                lon=lon,
+                lat=lat,
+                is_scales=True,
+                progressbar=False,
+                progress_callback=progress_callback,
+                refresh=True,
             )
 
             self.registry.fetch_landmask(
@@ -1211,8 +1247,9 @@ class GeoTessera:
 
             if progress_callback:
                 progress_callback(
-                    idx, total_tiles,
-                    f"Downloading tile {idx + 1}/{total_tiles}: {grid_name}"
+                    idx,
+                    total_tiles,
+                    f"Downloading tile {idx + 1}/{total_tiles}: {grid_name}",
                 )
 
             success = self.download_tile(tile_lon, tile_lat, year)
@@ -1220,8 +1257,9 @@ class GeoTessera:
 
             if progress_callback:
                 progress_callback(
-                    idx + 1, total_tiles,
-                    f"Completed {idx + 1}/{total_tiles}: {grid_name}"
+                    idx + 1,
+                    total_tiles,
+                    f"Completed {idx + 1}/{total_tiles}: {grid_name}",
                 )
 
         return results
@@ -1260,11 +1298,7 @@ class GeoTessera:
 
         # Discover local tiles
         tiles = discover_tiles(self.embeddings_dir)
-        tile_map = {
-            (t.lon, t.lat): t
-            for t in tiles
-            if t.year == year
-        }
+        tile_map = {(t.lon, t.lat): t for t in tiles if t.year == year}
 
         # Check each required tile
         results = {}
@@ -1277,31 +1311,35 @@ class GeoTessera:
 
     def _reproject_geotiff_file(self, args):
         """Helper function to reproject a single GeoTIFF file.
-                
+
         Args:
             args: Tuple containing (source_file, output_file, target_crs, source_resolution, compress)
-        
+
         Returns:
             Tuple of (output_file, None) on success or (None, error_message) on failure
         """
         source_file, output_file, target_crs, source_resolution, compress = args
-        
+
         try:
             import rasterio
             from rasterio.warp import calculate_default_transform, reproject, Resampling
-            
+
             with rasterio.open(source_file) as src:
                 # Calculate transform and dimensions for target CRS
                 transform, width, height = calculate_default_transform(
-                    src.crs, target_crs, src.width, src.height, *src.bounds,
-                    resolution=source_resolution
+                    src.crs,
+                    target_crs,
+                    src.width,
+                    src.height,
+                    *src.bounds,
+                    resolution=source_resolution,
                 )
-                
+
                 # Create reprojected file
                 with rasterio.open(
                     output_file,
-                    'w',
-                    driver='GTiff',
+                    "w",
+                    driver="GTiff",
                     height=height,
                     width=width,
                     count=src.count,
@@ -1322,24 +1360,24 @@ class GeoTessera:
                             src_crs=src.crs,
                             dst_transform=transform,
                             dst_crs=target_crs,
-                            resampling=Resampling.bilinear
+                            resampling=Resampling.bilinear,
                         )
-                    
+
                     # Copy metadata and band descriptions
                     dst.update_tags(**src.tags())
                     for band_idx in range(1, src.count + 1):
                         if src.descriptions and band_idx <= len(src.descriptions):
-                            band_desc = src.descriptions[band_idx-1]
+                            band_desc = src.descriptions[band_idx - 1]
                             if band_desc:
                                 dst.set_band_description(band_idx, band_desc)
-            
+
             return output_file, None
         except Exception as e:
             return None, str(e)
 
-
-
-    def _get_utm_projection_from_landmask(self, lon: float, lat: float, refresh: bool = False):
+    def _get_utm_projection_from_landmask(
+        self, lon: float, lat: float, refresh: bool = False
+    ):
         """Get UTM projection info from corresponding landmask tile.
 
         Args:
@@ -1524,7 +1562,11 @@ class GeoTessera:
         if progress_callback:
             progress_callback(0, 100, "Loading registry blocks...")
 
-        tiles = list(self.fetch_embeddings(tiles_to_fetch, fetch_progress_callback if progress_callback else None))
+        tiles = list(
+            self.fetch_embeddings(
+                tiles_to_fetch, fetch_progress_callback if progress_callback else None
+            )
+        )
         if progress_callback:
             total_tiles = len(tiles_to_fetch)
 
@@ -1540,7 +1582,9 @@ class GeoTessera:
         created_files = []
 
         # Sequential GeoTIFF writing
-        for i, (year, tile_lon, tile_lat, embedding, crs, transform) in enumerate(tiles):
+        for i, (year, tile_lon, tile_lat, embedding, crs, transform) in enumerate(
+            tiles
+        ):
             # Use centralized path construction from registry
             geotiff_rel_path = tile_to_geotiff_path(tile_lon, tile_lat, year)
             output_path = output_dir / EMBEDDINGS_DIR_NAME / geotiff_rel_path
@@ -1549,7 +1593,9 @@ class GeoTessera:
             # Update progress to show we're starting this file
             if progress_callback:
                 export_progress = int(50 + (i / total_tiles) * 50)
-                progress_callback(export_progress, 100, f"Creating {output_path.name}...")
+                progress_callback(
+                    export_progress, 100, f"Creating {output_path.name}..."
+                )
 
             # Select bands
             if bands is not None:
@@ -1607,7 +1653,9 @@ class GeoTessera:
                 # Phase 2: Exporting GeoTIFFs (50-100% of total progress)
                 export_progress = int(50 + ((i + 1) / total_tiles) * 50)
                 progress_callback(
-                    export_progress, 100, f"Exported {output_path.name} ({i + 1}/{total_tiles})"
+                    export_progress,
+                    100,
+                    f"Exported {output_path.name} ({i + 1}/{total_tiles})",
                 )
 
         if progress_callback:
@@ -1657,10 +1705,12 @@ class GeoTessera:
 
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Determine source resolution from first file
         with rasterio.open(geotiff_paths[0]) as first_src:
-            source_resolution = min(abs(first_src.transform.a), abs(first_src.transform.e))
+            source_resolution = min(
+                abs(first_src.transform.a), abs(first_src.transform.e)
+            )
 
         # Create temporary directory for reprojected files
         with tempfile.TemporaryDirectory(prefix="geotessera_reproject_") as temp_dir:
@@ -1668,76 +1718,105 @@ class GeoTessera:
             total_files = len(geotiff_paths)
             reproject_args = []
             reprojected_files = []
-            
+
             for i, geotiff_file in enumerate(geotiff_paths):
                 reprojected_file = os.path.join(temp_dir, f"reprojected_{i}.tif")
                 reprojected_files.append(reprojected_file)
-                reproject_args.append((geotiff_file, reprojected_file, target_crs, source_resolution, compress))
-            
+                reproject_args.append(
+                    (
+                        geotiff_file,
+                        reprojected_file,
+                        target_crs,
+                        source_resolution,
+                        compress,
+                    )
+                )
+
             if progress_callback:
                 progress_callback(0, total_files * 2 + 2, "Starting reprojection...")
-            
+
             # Sequential reprojection
             failed_files = []
             for i, args in enumerate(reproject_args):
                 if progress_callback:
-                    progress_callback(i, total_files * 2 + 2, f"Reprojecting file {i+1}/{total_files}...")
-                
+                    progress_callback(
+                        i,
+                        total_files * 2 + 2,
+                        f"Reprojecting file {i + 1}/{total_files}...",
+                    )
+
                 _, error = self._reproject_geotiff_file(args)
-                
+
                 if error:
                     failed_files.append((geotiff_paths[i], error))
-            
+
             if failed_files:
                 error_msg = f"Failed to reproject {len(failed_files)} files: "
-                error_msg += ", ".join([f"{Path(f).name}: {e}" for f, e in failed_files[:3]])
+                error_msg += ", ".join(
+                    [f"{Path(f).name}: {e}" for f, e in failed_files[:3]]
+                )
                 if len(failed_files) > 3:
                     error_msg += f" and {len(failed_files) - 3} more"
                 raise RuntimeError(error_msg)
-            
+
             # Filter out any failed reprojections
             reprojected_files = [f for f in reprojected_files if os.path.exists(f)]
 
             if progress_callback:
-                progress_callback(total_files, total_files * 2 + 2, "Opening files for merging...")
+                progress_callback(
+                    total_files, total_files * 2 + 2, "Opening files for merging..."
+                )
 
             # Open all reprojected files for merging
             src_files = [rasterio.open(f) for f in reprojected_files]
-            
+
             try:
                 if progress_callback:
-                    progress_callback(total_files + 1, total_files * 2 + 2, "Merging tiles...")
-                
+                    progress_callback(
+                        total_files + 1, total_files * 2 + 2, "Merging tiles..."
+                    )
+
                 # Merge tiles
-                mosaic_array, mosaic_transform = merge(src_files, method='first')
-                
+                mosaic_array, mosaic_transform = merge(src_files, method="first")
+
                 # Get metadata from first file
                 first_src = src_files[0]
                 profile = first_src.profile.copy()
-                profile.update({
-                    'height': mosaic_array.shape[1],
-                    'width': mosaic_array.shape[2],
-                    'transform': mosaic_transform,
-                    'dtype': mosaic_array.dtype,  # Use mosaic array dtype
-                    'compress': compress,
-                    'tiled': True,
-                    'blockxsize': 512,
-                    'blockysize': 512,
-                })
-                
+                profile.update(
+                    {
+                        "height": mosaic_array.shape[1],
+                        "width": mosaic_array.shape[2],
+                        "transform": mosaic_transform,
+                        "dtype": mosaic_array.dtype,  # Use mosaic array dtype
+                        "compress": compress,
+                        "tiled": True,
+                        "blockxsize": 512,
+                        "blockysize": 512,
+                    }
+                )
+
                 if progress_callback:
-                    progress_callback(total_files * 2, total_files * 2 + 2, "Writing mosaic to disk...")
-                
+                    progress_callback(
+                        total_files * 2,
+                        total_files * 2 + 2,
+                        "Writing mosaic to disk...",
+                    )
+
                 # Write mosaic
-                with rasterio.open(output_path, 'w', **profile) as dst:
+                with rasterio.open(output_path, "w", **profile) as dst:
                     dst.write(mosaic_array)
-                    
+
                     # Copy band descriptions from first file
                     for band_idx in range(1, mosaic_array.shape[0] + 1):
-                        band_desc = first_src.descriptions[band_idx-1] if first_src.descriptions and band_idx <= len(first_src.descriptions) else None
+                        band_desc = (
+                            first_src.descriptions[band_idx - 1]
+                            if first_src.descriptions
+                            and band_idx <= len(first_src.descriptions)
+                            else None
+                        )
                         if band_desc:
                             dst.set_band_description(band_idx, band_desc)
-                    
+
                     # Update metadata
                     dst.update_tags(
                         TESSERA_TARGET_CRS=target_crs,
@@ -1746,9 +1825,11 @@ class GeoTessera:
                         TESSERA_DESCRIPTION="GeoTessera satellite embedding mosaic",
                         GEOTESSERA_VERSION=__version__,
                     )
-                
+
                 if progress_callback:
-                    progress_callback(total_files * 2 + 2, total_files * 2 + 2, "Complete")
+                    progress_callback(
+                        total_files * 2 + 2, total_files * 2 + 2, "Complete"
+                    )
 
             finally:
                 # Close all source files
@@ -1756,7 +1837,7 @@ class GeoTessera:
                     src.close()
 
         return str(output_path)
-    
+
     def apply_pca_to_embeddings(
         self,
         embeddings: List[Tuple[int, float, float, np.ndarray, object, object]],
@@ -1765,20 +1846,20 @@ class GeoTessera:
         progress_callback: Optional[callable] = None,
     ) -> List[Tuple[int, float, float, np.ndarray, object, object, Dict]]:
         """Apply PCA to embedding tiles for visualization.
-        
+
         Args:
             embeddings: List of (year, tile_lon, tile_lat, embedding_array, crs, transform) tuples
             n_components: Number of principal components to extract (default: 3 for RGB)
             standardize: Whether to standardize features before PCA
             progress_callback: Optional callback function(current, total, status) for progress tracking
-            
+
         Returns:
             List of tuples with PCA-transformed data:
                 (year, tile_lon, tile_lat, pca_array, crs, transform, pca_info)
             where pca_info contains:
                 - explained_variance: Explained variance ratio for each component
                 - total_variance: Total explained variance
-                
+
         Raises:
             ImportError: If scikit-learn is not available
         """
@@ -1789,56 +1870,64 @@ class GeoTessera:
             raise ImportError(
                 "scikit-learn required for PCA visualization: pip install scikit-learn"
             )
-        
+
         if not embeddings:
             return []
-        
+
         pca_results = []
         total_tiles = len(embeddings)
-        
+
         if progress_callback:
             progress_callback(0, total_tiles, "Starting PCA analysis...")
-        
-        for i, (year, tile_lon, tile_lat, embedding, crs, transform) in enumerate(embeddings):
+
+        for i, (year, tile_lon, tile_lat, embedding, crs, transform) in enumerate(
+            embeddings
+        ):
             if progress_callback:
-                progress_callback(i, total_tiles, f"Processing tile {i+1}/{total_tiles}: ({tile_lat:.2f}, {tile_lon:.2f})")
-            
+                progress_callback(
+                    i,
+                    total_tiles,
+                    f"Processing tile {i + 1}/{total_tiles}: ({tile_lat:.2f}, {tile_lon:.2f})",
+                )
+
             # Reshape for PCA: (height, width, channels) -> (pixels, channels)
             height, width, n_bands = embedding.shape
             data_reshaped = embedding.reshape(-1, n_bands)
-            
+
             # Handle NaN values by replacing with 0
             data_reshaped = np.nan_to_num(data_reshaped, nan=0.0)
-            
+
             # Standardize data if requested
             if standardize:
                 scaler = StandardScaler()
                 data_scaled = scaler.fit_transform(data_reshaped)
             else:
                 data_scaled = data_reshaped
-            
+
             # Apply PCA
             pca = PCA(n_components=n_components)
             pca_result = pca.fit_transform(data_scaled)
-            
+
             # Reshape back to image: (pixels, n_components) -> (height, width, n_components)
             pca_image = pca_result.reshape(height, width, n_components)
-            
+
             # Create PCA info dictionary
             pca_info = {
-                'explained_variance': pca.explained_variance_ratio_.tolist(),
-                'total_variance': float(pca.explained_variance_ratio_.sum()),
-                'n_components': n_components,
-                'standardized': standardize,
+                "explained_variance": pca.explained_variance_ratio_.tolist(),
+                "total_variance": float(pca.explained_variance_ratio_.sum()),
+                "n_components": n_components,
+                "standardized": standardize,
             }
-            
-            pca_results.append((year, tile_lon, tile_lat, pca_image, crs, transform, pca_info))
-        
+
+            pca_results.append(
+                (year, tile_lon, tile_lat, pca_image, crs, transform, pca_info)
+            )
+
         if progress_callback:
             progress_callback(total_tiles, total_tiles, "PCA analysis complete")
-        
+
         return pca_results
-    
+
     def export_pca_geotiffs(
         self,
         tiles_to_fetch: Iterable[Tuple[int, float, float]],
@@ -1850,10 +1939,10 @@ class GeoTessera:
         progress_callback: Optional[callable] = None,
     ) -> List[str]:
         """Export PCA-transformed embeddings as GeoTIFF files.
-        
+
         This method fetches embeddings, applies PCA transformation, and exports
         the results as GeoTIFF files suitable for RGB visualization.
-        
+
         Args:
             tiles_to_fetch: List of tiles as (year, tile_lon, tile_lat) tuples
             output_dir: Directory to save PCA GeoTIFF files
@@ -1862,7 +1951,7 @@ class GeoTessera:
             compress: Compression method for GeoTIFF
             normalize: Whether to use global normalization across tiles (vs per-tile)
             progress_callback: Optional callback function(current, total, status)
-            
+
         Returns:
             List of paths to created PCA GeoTIFF files
         """
@@ -1873,90 +1962,111 @@ class GeoTessera:
             raise ImportError(
                 "rasterio required for GeoTIFF export: pip install rasterio"
             )
-        
+
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Phase 1: Fetch embeddings (0-40% progress)
         def fetch_progress(current, total, status=None):
             overall_progress = int((current / total) * 40)
-            progress_callback(overall_progress, 100, status or f"Fetching tile {current}/{total}")
-        
+            progress_callback(
+                overall_progress, 100, status or f"Fetching tile {current}/{total}"
+            )
+
         if progress_callback:
             progress_callback(0, 100, "Fetching embedding tiles...")
-        
-        embeddings = self.fetch_embeddings(tiles_to_fetch, fetch_progress if progress_callback else None)
-        
+
+        embeddings = self.fetch_embeddings(
+            tiles_to_fetch, fetch_progress if progress_callback else None
+        )
+
         if not embeddings:
             if progress_callback:
                 progress_callback(100, 100, "No tiles found in bounding box")
             return []
-        
+
         # Phase 2: Apply PCA (40-70% progress)
         def pca_progress(current, total, status=None):
             overall_progress = int(40 + (current / total) * 30)
-            progress_callback(overall_progress, 100, status or f"Applying PCA to tile {current}/{total}")
-        
+            progress_callback(
+                overall_progress,
+                100,
+                status or f"Applying PCA to tile {current}/{total}",
+            )
+
         pca_results = self.apply_pca_to_embeddings(
-            embeddings, n_components, standardize, pca_progress if progress_callback else None
+            embeddings,
+            n_components,
+            standardize,
+            pca_progress if progress_callback else None,
         )
-        
+
         # Phase 3: Export GeoTIFFs (70-100% progress)
         created_files = []
         if progress_callback:
             total_tiles = len(pca_results)
-        
+
         # Calculate global min/max if normalize is True (for consistent scaling across tiles)
         if normalize:
             # Global normalization: find min/max across ALL tiles first
-            global_min = [float('inf')] * n_components
-            global_max = [float('-inf')] * n_components
-            
+            global_min = [float("inf")] * n_components
+            global_max = [float("-inf")] * n_components
+
             for _, _, pca_img, _, _, _ in pca_results:
                 for j in range(n_components):
                     comp = pca_img[:, :, j]
                     global_min[j] = min(global_min[j], np.nanmin(comp))
                     global_max[j] = max(global_max[j], np.nanmax(comp))
-        
-        for i, (year, tile_lon, tile_lat, pca_image, crs, transform, pca_info) in enumerate(pca_results):
+
+        for i, (
+            year,
+            tile_lon,
+            tile_lat,
+            pca_image,
+            crs,
+            transform,
+            pca_info,
+        ) in enumerate(pca_results):
             if progress_callback:
                 export_progress = int(70 + (i / total_tiles) * 30)
                 filename = f"grid_{tile_lon:.2f}_{tile_lat:.2f}_{year}_pca.tiff"
                 progress_callback(export_progress, 100, f"Writing {filename}...")
-            
+
             # Always normalize PCA components to 0-255 for visualization
             pca_normalized = np.zeros_like(pca_image)
             for j in range(n_components):
                 component = pca_image[:, :, j]
-                
+
                 if normalize:
                     # Use global min/max for consistent scaling across tiles
                     comp_min, comp_max = global_min[j], global_max[j]
                 else:
                     # Use local min/max for per-tile normalization
                     comp_min, comp_max = np.nanmin(component), np.nanmax(component)
-                
+
                 if comp_max > comp_min:
-                    pca_normalized[:, :, j] = (component - comp_min) / (comp_max - comp_min)
+                    pca_normalized[:, :, j] = (component - comp_min) / (
+                        comp_max - comp_min
+                    )
                 else:
                     pca_normalized[:, :, j] = 0
-            
+
             # Always convert to uint8 for visualization output
             output_data = (np.clip(pca_normalized, 0, 1) * 255).astype(np.uint8)
-            dtype = 'uint8'
-            
+            dtype = "uint8"
+
             # Create filename and path
             filename = f"grid_{tile_lon:.2f}_{tile_lat:.2f}_{year}_pca.tiff"
             output_path = output_dir / filename
-            
+
             # Get dimensions
             height, width = output_data.shape[:2]
-            
+
             # Write PCA GeoTIFF
             with rasterio.open(
                 output_path,
-                'w',
-                driver='GTiff',
+                "w",
+                driver="GTiff",
                 height=height,
                 width=width,
                 count=n_components,
@@ -1971,18 +2081,21 @@ class GeoTessera:
                 # Write each component as a band
                 for band_idx in range(n_components):
                     dst.write(output_data[:, :, band_idx], band_idx + 1)
-                    
+
                     # Set band description with explained variance
-                    variance_pct = pca_info['explained_variance'][band_idx] * 100
+                    variance_pct = pca_info["explained_variance"][band_idx] * 100
                     dst.set_band_description(
-                        band_idx + 1,
-                        f"PC{band_idx + 1} ({variance_pct:.1f}% variance)"
+                        band_idx + 1, f"PC{band_idx + 1} ({variance_pct:.1f}% variance)"
                     )
-                
+
                 # Set color interpretation for RGB visualization
                 if n_components >= 3 and normalize:
-                    dst.colorinterp = [ColorInterp.red, ColorInterp.green, ColorInterp.blue][:n_components]
-                
+                    dst.colorinterp = [
+                        ColorInterp.red,
+                        ColorInterp.green,
+                        ColorInterp.blue,
+                    ][:n_components]
+
                 # Add metadata
                 dst.update_tags(
                     TESSERA_YEAR=str(year),
@@ -1990,15 +2103,17 @@ class GeoTessera:
                     TESSERA_TILE_LAT=str(tile_lat),
                     PCA_COMPONENTS=str(n_components),
                     PCA_TOTAL_VARIANCE=f"{pca_info['total_variance']:.3f}",
-                    PCA_EXPLAINED_VARIANCE=json.dumps(pca_info['explained_variance']),
+                    PCA_EXPLAINED_VARIANCE=json.dumps(pca_info["explained_variance"]),
                     PCA_STANDARDIZED=str(standardize),
                     PCA_NORMALIZED=str(normalize),
                     GEOTESSERA_VERSION=__version__,
                 )
-            
+
             created_files.append(str(output_path))
-        
+
         if progress_callback:
-            progress_callback(100, 100, f"Created {len(created_files)} PCA GeoTIFF files")
-        
+            progress_callback(
+                100, 100, f"Created {len(created_files)} PCA GeoTIFF files"
+            )
+
         return created_files

@@ -50,6 +50,7 @@ console = Console()
 @dataclass
 class TileInfo:
     """Complete information about a single tessera tile."""
+
     year: int
     lat: float
     lon: float
@@ -85,7 +86,7 @@ def process_grid_directory(args):
 
         # Check if this looks like a tile directory (has SHA256 or .npy files)
         has_sha256 = "SHA256" in dir_contents
-        has_npy_files = any(f.endswith('.npy') for f in dir_contents)
+        has_npy_files = any(f.endswith(".npy") for f in dir_contents)
 
         if not has_sha256 and not has_npy_files:
             return None  # Directory has files but doesn't look like a tile directory - skip
@@ -100,17 +101,19 @@ def process_grid_directory(args):
         if not os.path.exists(sha256_file):
             # If there are .npy files but no SHA256, that's an error
             if has_npy_files:
-                raise FileNotFoundError(f"Missing SHA256 file in tile directory: {sha256_file}")
+                raise FileNotFoundError(
+                    f"Missing SHA256 file in tile directory: {sha256_file}"
+                )
             return None  # Otherwise skip this directory
 
         # Parse hashes from SHA256 file
         embedding_hash = None
         scales_hash = None
 
-        with open(sha256_file, 'r') as f:
+        with open(sha256_file, "r") as f:
             for line in f:
                 line = line.strip()
-                if not line or line.startswith('#'):
+                if not line or line.startswith("#"):
                     continue
 
                 parts = line.split()
@@ -154,7 +157,7 @@ def process_grid_directory(args):
             embedding_mtime=embedding_stat.st_mtime,
             scales_mtime=scales_stat.st_mtime,
             embedding_size=embedding_stat.st_size,
-            scales_size=scales_stat.st_size
+            scales_size=scales_stat.st_size,
         )
 
         return tile_info
@@ -167,7 +170,7 @@ def process_grid_directory(args):
 def iterate_tessera_tiles(
     base_dir: str,
     callback: Callable[[TileInfo], Any],
-    progress_callback: Optional[Callable] = None
+    progress_callback: Optional[Callable] = None,
 ) -> List[Any]:
     """
     Single-pass iterator through Tessera embedding filesystem structure.
@@ -196,11 +199,11 @@ def iterate_tessera_tiles(
     repr_dir = os.path.join(base_dir, "global_0.1_degree_representation")
     if not os.path.exists(repr_dir):
         raise FileNotFoundError(f"Embeddings directory not found: {repr_dir}")
-    
+
     results = []
     processed_dirs = 0
     total_dirs = 0
-    
+
     # First count total directories for progress (all grid directories, even empty ones)
     for year_item in os.listdir(repr_dir):
         year_path = os.path.join(repr_dir, year_item)
@@ -209,7 +212,7 @@ def iterate_tessera_tiles(
                 grid_path = os.path.join(year_path, grid_item)
                 if os.path.isdir(grid_path) and grid_item.startswith("grid_"):
                     total_dirs += 1
-    
+
     if total_dirs == 0:
         # No grid directories at all
         return results  # Return empty list instead of raising error
@@ -219,13 +222,17 @@ def iterate_tessera_tiles(
 
     # Report parallelization to user if progress callback is available
     if progress_callback:
-        progress_callback(0, total_dirs, f"Using {num_cores} CPU cores for parallel processing")
+        progress_callback(
+            0, total_dirs, f"Using {num_cores} CPU cores for parallel processing"
+        )
 
     # Collect all grid directory tasks
     grid_tasks = []
     for year_item in os.listdir(repr_dir):
         year_path = os.path.join(repr_dir, year_item)
-        if not (os.path.isdir(year_path) and year_item.isdigit() and len(year_item) == 4):
+        if not (
+            os.path.isdir(year_path) and year_item.isdigit() and len(year_item) == 4
+        ):
             continue
 
         year = int(year_item)
@@ -239,8 +246,7 @@ def iterate_tessera_tiles(
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks
         futures = {
-            executor.submit(process_grid_directory, task): task
-            for task in grid_tasks
+            executor.submit(process_grid_directory, task): task for task in grid_tasks
         }
 
         # Process results as they complete
@@ -258,7 +264,10 @@ def iterate_tessera_tiles(
                 tile_info_or_error = future.result()
 
                 # Check if this is an error result
-                if isinstance(tile_info_or_error, tuple) and len(tile_info_or_error) == 3:
+                if (
+                    isinstance(tile_info_or_error, tuple)
+                    and len(tile_info_or_error) == 3
+                ):
                     if tile_info_or_error[0] == "ERROR":
                         _, grid_name, error_msg = tile_info_or_error
                         grid_path = os.path.join(year_path, grid_name)
@@ -278,7 +287,9 @@ def iterate_tessera_tiles(
                 if isinstance(e, RuntimeError):
                     raise
                 else:
-                    raise RuntimeError(f"Unexpected error in parallel processing: {e}") from e
+                    raise RuntimeError(
+                        f"Unexpected error in parallel processing: {e}"
+                    ) from e
 
     return results
 
@@ -392,12 +403,14 @@ def create_landmasks_parquet_database(base_dir, output_path, console):
     Returns:
         True on success, False on failure
     """
-    console.print(Panel.fit(
-        f"[bold blue]🗺️ Creating Landmasks Parquet Database[/bold blue]\n"
-        f"📁 {base_dir}\n"
-        f"📄 {output_path}",
-        style="blue"
-    ))
+    console.print(
+        Panel.fit(
+            f"[bold blue]🗺️ Creating Landmasks Parquet Database[/bold blue]\n"
+            f"📁 {base_dir}\n"
+            f"📄 {output_path}",
+            style="blue",
+        )
+    )
 
     sha256sum_file = os.path.join(base_dir, "SHA256SUM")
     if not os.path.exists(sha256sum_file):
@@ -416,7 +429,6 @@ def create_landmasks_parquet_database(base_dir, output_path, console):
         TextColumn("[dim]{task.fields[status]}", justify="left"),
         console=console,
     ) as progress:
-
         read_task = progress.add_task(
             "Reading SHA256SUM file...", total=100, status="Starting..."
         )
@@ -450,14 +462,20 @@ def create_landmasks_parquet_database(base_dir, output_path, console):
 
                                     # Get file size
                                     file_path = os.path.join(base_dir, filename)
-                                    file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+                                    file_size = (
+                                        os.path.getsize(file_path)
+                                        if os.path.exists(file_path)
+                                        else 0
+                                    )
 
-                                    records.append({
-                                        'lat': lat,
-                                        'lon': lon,
-                                        'hash': checksum,
-                                        'file_size': file_size
-                                    })
+                                    records.append(
+                                        {
+                                            "lat": lat,
+                                            "lon": lon,
+                                            "hash": checksum,
+                                            "file_size": file_size,
+                                        }
+                                    )
                                 except (ValueError, IndexError):
                                     continue
 
@@ -473,35 +491,38 @@ def create_landmasks_parquet_database(base_dir, output_path, console):
 
         # Convert to GeoParquet
         parquet_task = progress.add_task(
-            "Creating GeoParquet database...", total=100, status="Converting to DataFrame..."
+            "Creating GeoParquet database...",
+            total=100,
+            status="Converting to DataFrame...",
         )
 
         progress.update(parquet_task, completed=25, status="Sorting records...")
         df = pd.DataFrame(records)
-        df = df.sort_values(['lat', 'lon'])
+        df = df.sort_values(["lat", "lon"])
 
         progress.update(parquet_task, completed=50, status="Creating geometries...")
         # Convert to GeoDataFrame with Point geometries
-        geometry = gpd.points_from_xy(df['lon'], df['lat'])
-        gdf = gpd.GeoDataFrame(df, geometry=geometry, crs='EPSG:4326')
+        geometry = gpd.points_from_xy(df["lon"], df["lat"])
+        gdf = gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
 
         progress.update(parquet_task, completed=75, status="Writing GeoParquet file...")
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
         # Write to temporary file first for atomic operation
         import tempfile
+
         temp_path = None
         try:
             with tempfile.NamedTemporaryFile(
-                mode='wb',
+                mode="wb",
                 dir=Path(output_path).parent,
-                prefix=f'.{Path(output_path).name}_tmp_',
-                suffix='.parquet',
-                delete=False
+                prefix=f".{Path(output_path).name}_tmp_",
+                suffix=".parquet",
+                delete=False,
             ) as temp_file:
                 temp_path = temp_file.name
 
-            gdf.to_parquet(temp_path, compression='zstd', index=False)
+            gdf.to_parquet(temp_path, compression="zstd", index=False)
             os.rename(temp_path, output_path)
 
         except Exception:
@@ -518,14 +539,19 @@ def create_landmasks_parquet_database(base_dir, output_path, console):
     summary_table = Table(show_header=False, box=None)
     summary_table.add_row("📊 Records:", f"{len(records):,}")
     summary_table.add_row("💾 File size:", f"{file_size:,} bytes")
-    summary_table.add_row("🌍 Coordinates:", f"{len(gdf[['lat', 'lon']].drop_duplicates()):,} unique tiles")
+    summary_table.add_row(
+        "🌍 Coordinates:",
+        f"{len(gdf[['lat', 'lon']].drop_duplicates()):,} unique tiles",
+    )
     summary_table.add_row("🗺️ Format:", "GeoParquet with Point geometries")
 
-    console.print(Panel(
-        summary_table,
-        title="[bold green]✅ Landmasks GeoParquet Database Created[/bold green]",
-        border_style="green"
-    ))
+    console.print(
+        Panel(
+            summary_table,
+            title="[bold green]✅ Landmasks GeoParquet Database Created[/bold green]",
+            border_style="green",
+        )
+    )
 
     return True
 
@@ -543,32 +569,36 @@ def create_parquet_database_from_filesystem(base_dir, output_path, console):
         console: Rich console for output
     """
     # Show initial header
-    console.print(Panel.fit(
-        f"[bold blue]🗄️ Creating Embeddings Parquet Database[/bold blue]\n"
-        f"📁 {base_dir}\n"
-        f"📄 {output_path}",
-        style="blue"
-    ))
+    console.print(
+        Panel.fit(
+            f"[bold blue]🗄️ Creating Embeddings Parquet Database[/bold blue]\n"
+            f"📁 {base_dir}\n"
+            f"📄 {output_path}",
+            style="blue",
+        )
+    )
 
     # Show CPU core count for parallel processing
     num_cores = multiprocessing.cpu_count()
-    console.print(f"[cyan]Using {num_cores} CPU cores for parallel tile scanning[/cyan]")
+    console.print(
+        f"[cyan]Using {num_cores} CPU cores for parallel tile scanning[/cyan]"
+    )
 
     records = []
-    
+
     def collect_tile_data(tile_info: TileInfo):
         """Callback to collect data for each tile."""
         return {
-            'lat': tile_info.lat,
-            'lon': tile_info.lon,
-            'year': tile_info.year,
-            'hash': tile_info.embedding_hash,  # From SHA256 file, no recalculation!
-            'scales_hash': tile_info.scales_hash,  # Scales file hash
-            'mtime': tile_info.embedding_mtime,
-            'file_size': tile_info.embedding_size,
-            'scales_size': tile_info.scales_size  # Scales file size
+            "lat": tile_info.lat,
+            "lon": tile_info.lon,
+            "year": tile_info.year,
+            "hash": tile_info.embedding_hash,  # From SHA256 file, no recalculation!
+            "scales_hash": tile_info.scales_hash,  # Scales file hash
+            "mtime": tile_info.embedding_mtime,
+            "file_size": tile_info.embedding_size,
+            "scales_size": tile_info.scales_size,  # Scales file size
         }
-    
+
     # Progress tracking
     with Progress(
         SpinnerColumn(),
@@ -579,77 +609,79 @@ def create_parquet_database_from_filesystem(base_dir, output_path, console):
         TextColumn("[dim]{task.fields[status]}", justify="left"),
         console=console,
     ) as progress:
-        
         # Single progress task for the iterator
         process_task = progress.add_task(
             "Reading tile metadata...", total=100, status="Starting..."
         )
-        
+
         def progress_callback(current, total, status):
             progress.update(process_task, completed=current, total=total, status=status)
-        
+
         try:
             # Use the fast iterator - reads SHA256 files, no hash calculation
             records = iterate_tessera_tiles(
-                base_dir, 
-                collect_tile_data, 
-                progress_callback=progress_callback
+                base_dir, collect_tile_data, progress_callback=progress_callback
             )
-            
+
             progress.update(process_task, completed=100, status="Complete")
-            
+
         except Exception as e:
             console.print(f"[red]Error iterating tiles: {e}[/red]")
             return False
-        
+
         if not records:
-            console.print("[red]No tiles found. Make sure 'geotessera-registry hash' has been run first.[/red]")
+            console.print(
+                "[red]No tiles found. Make sure 'geotessera-registry hash' has been run first.[/red]"
+            )
             return False
-        
+
         # Convert to Parquet
         parquet_task = progress.add_task(
-            "Creating Parquet database...", total=100, status="Converting to DataFrame..."
+            "Creating Parquet database...",
+            total=100,
+            status="Converting to DataFrame...",
         )
-        
+
         progress.update(parquet_task, completed=25, status="Sorting records...")
         df = pd.DataFrame(records)
-        df = df.sort_values(['year', 'lat', 'lon'])
+        df = df.sort_values(["year", "lat", "lon"])
 
         progress.update(parquet_task, completed=40, status="Converting timestamps...")
-        df['mtime'] = pd.to_datetime(df['mtime'], unit='s')
+        df["mtime"] = pd.to_datetime(df["mtime"], unit="s")
 
         progress.update(parquet_task, completed=55, status="Creating geometries...")
         # Convert to GeoDataFrame with Point geometries
-        geometry = gpd.points_from_xy(df['lon'], df['lat'])
-        gdf = gpd.GeoDataFrame(df, geometry=geometry, crs='EPSG:4326')
+        geometry = gpd.points_from_xy(df["lon"], df["lat"])
+        gdf = gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
 
         progress.update(parquet_task, completed=75, status="Writing GeoParquet file...")
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
         # Write to temporary file first for atomic operation (cron-safe)
         import tempfile
+
         temp_path = None
         try:
             with tempfile.NamedTemporaryFile(
-                mode='wb',
+                mode="wb",
                 dir=Path(output_path).parent,
-                prefix=f'.{Path(output_path).name}_tmp_',
-                suffix='.parquet',
-                delete=False
+                prefix=f".{Path(output_path).name}_tmp_",
+                suffix=".parquet",
+                delete=False,
             ) as temp_file:
                 temp_path = temp_file.name
 
-            gdf.to_parquet(temp_path, compression='zstd', index=False)
+            gdf.to_parquet(temp_path, compression="zstd", index=False)
             os.rename(temp_path, output_path)
-            
+
         except Exception:
             # Clean up temporary file on error
             if temp_path and os.path.exists(temp_path):
                 os.remove(temp_path)
             raise
-        
+
         progress.update(parquet_task, completed=100, status="Complete")
-    
+
     # Get file size and show results
     file_size = Path(output_path).stat().st_size
 
@@ -657,51 +689,58 @@ def create_parquet_database_from_filesystem(base_dir, output_path, console):
     summary_table = Table(show_header=False, box=None)
     summary_table.add_row("📊 Records:", f"{len(records):,}")
     summary_table.add_row("💾 File size:", f"{file_size:,} bytes")
-    summary_table.add_row("🗓️ Years:", ", ".join(map(str, sorted(gdf['year'].unique()))))
-    summary_table.add_row("🌍 Coordinates:", f"{len(gdf[['lat', 'lon']].drop_duplicates()):,} unique tiles")
+    summary_table.add_row("🗓️ Years:", ", ".join(map(str, sorted(gdf["year"].unique()))))
+    summary_table.add_row(
+        "🌍 Coordinates:",
+        f"{len(gdf[['lat', 'lon']].drop_duplicates()):,} unique tiles",
+    )
     summary_table.add_row("🗺️ Format:", "GeoParquet with Point geometries")
 
-    console.print(Panel(
-        summary_table,
-        title="[bold green]✅ GeoParquet Database Created[/bold green]",
-        border_style="green"
-    ))
-    
+    console.print(
+        Panel(
+            summary_table,
+            title="[bold green]✅ GeoParquet Database Created[/bold green]",
+            border_style="green",
+        )
+    )
+
     return True
 
 
 def check_command(args):
     """Check the integrity of the tessera filesystem structure."""
     console = Console()
-    
+
     base_dir = os.path.abspath(args.base_dir)
     if not os.path.exists(base_dir):
         console.print(f"[red]Error: Directory {base_dir} does not exist[/red]")
         return 1
-    
-    verify_hashes = getattr(args, 'verify_hashes', False)
-    
+
+    verify_hashes = getattr(args, "verify_hashes", False)
+
     # Show header
-    console.print(Panel.fit(
-        f"[bold blue]🔍 Checking Tessera Structure[/bold blue]\n"
-        f"📁 {base_dir}\n"
-        f"🔐 Hash verification: {'enabled' if verify_hashes else 'disabled'}",
-        style="blue"
-    ))
-    
+    console.print(
+        Panel.fit(
+            f"[bold blue]🔍 Checking Tessera Structure[/bold blue]\n"
+            f"📁 {base_dir}\n"
+            f"🔐 Hash verification: {'enabled' if verify_hashes else 'disabled'}",
+            style="blue",
+        )
+    )
+
     checked_tiles = 0
-    
+
     def validate_tile(tile_info: TileInfo):
         """Callback to validate each tile."""
         nonlocal checked_tiles
         checked_tiles += 1
-        
+
         # Check if files exist (already done by iterator, but good to be explicit)
         if not os.path.exists(tile_info.embedding_path):
             raise FileNotFoundError(f"Missing embedding: {tile_info.embedding_path}")
         if not os.path.exists(tile_info.scales_path):
             raise FileNotFoundError(f"Missing scales: {tile_info.scales_path}")
-        
+
         # Verify hashes if requested
         if verify_hashes:
             actual_embedding_hash = calculate_sha256(tile_info.embedding_path)
@@ -710,16 +749,16 @@ def check_command(args):
                     f"Hash mismatch in {tile_info.embedding_path}: "
                     f"expected {tile_info.embedding_hash}, got {actual_embedding_hash}"
                 )
-            
+
             actual_scales_hash = calculate_sha256(tile_info.scales_path)
             if actual_scales_hash != tile_info.scales_hash:
                 raise ValueError(
                     f"Hash mismatch in {tile_info.scales_path}: "
                     f"expected {tile_info.scales_hash}, got {actual_scales_hash}"
                 )
-        
+
         return "OK"
-    
+
     # Run validation with progress tracking
     with Progress(
         SpinnerColumn(),
@@ -730,28 +769,25 @@ def check_command(args):
         TextColumn("[dim]{task.fields[status]}", justify="left"),
         console=console,
     ) as progress:
-        
         check_task = progress.add_task(
             "Validating tiles...", total=100, status="Starting..."
         )
-        
+
         def progress_callback(current, total, status):
             progress.update(check_task, completed=current, total=total, status=status)
-        
+
         try:
             # Run validation
             iterate_tessera_tiles(
-                base_dir,
-                validate_tile,
-                progress_callback=progress_callback
+                base_dir, validate_tile, progress_callback=progress_callback
             )
-            
+
             progress.update(check_task, completed=100, status="Complete")
-            
+
         except Exception as e:
             console.print(f"[red]❌ Validation failed: {e}[/red]")
             return 1
-    
+
     # Show results
     summary_table = Table(show_header=False, box=None)
     summary_table.add_row("🔍 Tiles checked:", f"{checked_tiles:,}")
@@ -760,13 +796,15 @@ def check_command(args):
         summary_table.add_row("🔐 Hash verification:", "All hashes verified")
     else:
         summary_table.add_row("🔐 Hash verification:", "Skipped (use --verify-hashes)")
-    
-    console.print(Panel(
-        summary_table,
-        title="[bold green]✅ Tessera Structure Check Complete[/bold green]",
-        border_style="green"
-    ))
-    
+
+    console.print(
+        Panel(
+            summary_table,
+            title="[bold green]✅ Tessera Structure Check Complete[/bold green]",
+            border_style="green",
+        )
+    )
+
     return 0
 
 
@@ -884,7 +922,9 @@ def process_grid_checksum(args):
     return (grid_name, 0, True, None, None)
 
 
-def generate_embeddings_checksums(base_dir, force=False, dry_run=False, year_filter=None):
+def generate_embeddings_checksums(
+    base_dir, force=False, dry_run=False, year_filter=None
+):
     """Generate SHA256 checksums for .npy files in each embeddings subdirectory.
 
     Only recalculates checksums for grid directories where:
@@ -901,14 +941,22 @@ def generate_embeddings_checksums(base_dir, force=False, dry_run=False, year_fil
         dry_run: Don't actually update files, just report what would be done
         year_filter: Optional year to process (e.g. 2024), or None for all years
     """
-    from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
+    from rich.progress import (
+        Progress,
+        TextColumn,
+        BarColumn,
+        TaskProgressColumn,
+        TimeRemainingColumn,
+    )
 
     # Print header info before starting progress display
     if dry_run:
         console.print("[yellow]DRY RUN MODE - no files will be modified[/yellow]")
     console.print("Generating SHA256 checksums for embeddings...")
     if force:
-        console.print("[yellow]Force mode enabled - regenerating all checksums[/yellow]")
+        console.print(
+            "[yellow]Force mode enabled - regenerating all checksums[/yellow]"
+        )
     else:
         console.print("Using smart update: only recalculating for modified files")
 
@@ -965,13 +1013,16 @@ def generate_embeddings_checksums(base_dir, force=False, dry_run=False, year_fil
             total_grids += len(grid_dirs)
 
             # Prepare arguments for parallel processing
-            grid_args = [(year_dir, grid_name, force, dry_run) for grid_name in sorted(grid_dirs)]
+            grid_args = [
+                (year_dir, grid_name, force, dry_run) for grid_name in sorted(grid_dirs)
+            ]
 
             # Process grid directories in parallel
             with ProcessPoolExecutor(max_workers=num_cores) as executor:
                 # Submit all tasks
                 futures = {
-                    executor.submit(process_grid_checksum, args): args for args in grid_args
+                    executor.submit(process_grid_checksum, args): args
+                    for args in grid_args
                 }
 
                 # Process results with progress bar
@@ -987,7 +1038,9 @@ def generate_embeddings_checksums(base_dir, force=False, dry_run=False, year_fil
                             skipped_grids += 1
                         elif error_msg == "would_update":
                             would_update_grids += 1
-                            if details and len(update_details) < 20:  # Limit to first 20 examples
+                            if (
+                                details and len(update_details) < 20
+                            ):  # Limit to first 20 examples
                                 update_details.append((year, grid_name, details))
                         elif error_msg == "would_create":
                             would_create_grids += 1
@@ -1021,24 +1074,36 @@ def generate_embeddings_checksums(base_dir, force=False, dry_run=False, year_fil
         console.print("=" * 60)
         console.print(f"Total directories scanned: [cyan]{total_grids:,}[/cyan]")
         console.print(f"  Would skip (up to date): [green]{skipped_total:,}[/green]")
-        console.print(f"  Would update (files modified): [yellow]{would_update_total:,}[/yellow]")
-        console.print(f"  Would create (no SHA256): [yellow]{would_create_total:,}[/yellow]")
+        console.print(
+            f"  Would update (files modified): [yellow]{would_update_total:,}[/yellow]"
+        )
+        console.print(
+            f"  Would create (no SHA256): [yellow]{would_create_total:,}[/yellow]"
+        )
 
         if update_details:
             console.print("\n[bold]Example directories that would be updated:[/bold]")
             for year, grid_name, details in update_details[:10]:
                 if details == "no_sha256":
-                    console.print(f"  [yellow]{year}/{grid_name}[/yellow] - No SHA256 file exists")
+                    console.print(
+                        f"  [yellow]{year}/{grid_name}[/yellow] - No SHA256 file exists"
+                    )
                 else:
-                    console.print(f"  [yellow]{year}/{grid_name}[/yellow] - {len(details)} files newer than SHA256:")
+                    console.print(
+                        f"  [yellow]{year}/{grid_name}[/yellow] - {len(details)} files newer than SHA256:"
+                    )
                     for npy_file, delta in details[:3]:  # Show first 3 files
                         console.print(f"    - {npy_file} [dim](+{delta:.1f}s)[/dim]")
         console.print("\n[green]No files were modified (dry-run mode)[/green]")
         return 0
     else:
-        console.print(f"Processed [cyan]{processed_grids:,}[/cyan] / [cyan]{total_grids:,}[/cyan] grid directories")
+        console.print(
+            f"Processed [cyan]{processed_grids:,}[/cyan] / [cyan]{total_grids:,}[/cyan] grid directories"
+        )
         if skipped_total > 0:
-            console.print(f"Skipped [green]{skipped_total:,}[/green] directories (SHA256 files up to date)")
+            console.print(
+                f"Skipped [green]{skipped_total:,}[/green] directories (SHA256 files up to date)"
+            )
         return 0 if processed_grids > 0 else 1
 
 
@@ -1076,13 +1141,21 @@ def generate_tiff_checksums(base_dir, force=False):
     - force=True, OR
     - Any .tiff file has mtime newer than the SHA256SUM file
     """
-    from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
+    from rich.progress import (
+        Progress,
+        TextColumn,
+        BarColumn,
+        TaskProgressColumn,
+        TimeRemainingColumn,
+    )
 
     logger.info("Generating SHA256 checksums for TIFF files...")
     if force:
         logger.info("Force mode enabled - regenerating all checksums")
     else:
-        logger.info("Using smart update: only recalculating if files have been modified")
+        logger.info(
+            "Using smart update: only recalculating if files have been modified"
+        )
 
     # Get number of CPU cores
     num_cores = multiprocessing.cpu_count()
@@ -1113,7 +1186,9 @@ def generate_tiff_checksums(base_dir, force=False):
                 break
 
         if not needs_update:
-            logger.info("SHA256SUM file is up to date (all TIFF files are older). Skipping.")
+            logger.info(
+                "SHA256SUM file is up to date (all TIFF files are older). Skipping."
+            )
             logger.info("Use --force to regenerate anyway.")
             return 0
 
@@ -1223,7 +1298,13 @@ def process_grid_sha256_scan(args):
         # Parse coordinates from grid name
         lon, lat = parse_grid_name(grid_name)
         if lon is None or lat is None:
-            return (grid_name, None, [], False, f"Could not parse coordinates from {grid_name}")
+            return (
+                grid_name,
+                None,
+                [],
+                False,
+                f"Could not parse coordinates from {grid_name}",
+            )
 
         # Get block coordinates
         block_lon, block_lat = block_from_world(lon, lat)
@@ -1297,7 +1378,9 @@ def scan_embeddings_from_checksums(base_dir, registry_dir, console, db_mode=Fals
 
             # Get number of CPU cores for parallel processing
             num_cores = multiprocessing.cpu_count()
-            console.print(f"  Using [cyan]{num_cores}[/cyan] CPU cores for parallel processing")
+            console.print(
+                f"  Using [cyan]{num_cores}[/cyan] CPU cores for parallel processing"
+            )
 
             # Prepare arguments for parallel processing
             grid_args = [(year_dir, grid_name, year) for grid_name in sorted(grid_dirs)]
@@ -1322,9 +1405,7 @@ def scan_embeddings_from_checksums(base_dir, registry_dir, console, db_mode=Fals
                             files_by_year_and_block[year][block_key].extend(entries)
                             total_entries += len(entries)
                     else:
-                        console.print(
-                            f"  [yellow]Warning:[/yellow] {error_msg}"
-                        )
+                        console.print(f"  [yellow]Warning:[/yellow] {error_msg}")
 
                     progress.advance(task)
 
@@ -1356,23 +1437,24 @@ def scan_embeddings_from_checksums(base_dir, registry_dir, console, db_mode=Fals
 
             # Write registry file atomically using temporary file
             import tempfile
+
             temp_path = None
             try:
                 with tempfile.NamedTemporaryFile(
-                    mode='w', 
-                    dir=embeddings_dir, 
-                    prefix=f'.{registry_filename}_tmp_',
-                    suffix='.txt',
-                    delete=False
+                    mode="w",
+                    dir=embeddings_dir,
+                    prefix=f".{registry_filename}_tmp_",
+                    suffix=".txt",
+                    delete=False,
                 ) as temp_file:
                     temp_path = temp_file.name
                     for rel_path, checksum in sorted(block_entries):
                         temp_file.write(f"{rel_path} {checksum}\n")
-                
+
                 # Atomic rename to final location
                 os.rename(temp_path, registry_file)
                 temp_path = None  # Successfully renamed, no cleanup needed
-                
+
             except Exception:
                 # Clean up temporary file on error
                 if temp_path and os.path.exists(temp_path):
@@ -1468,23 +1550,24 @@ def scan_tiffs_from_checksums(base_dir, registry_dir, console):
 
         # Write registry file atomically using temporary file
         import tempfile
+
         temp_path = None
         try:
             with tempfile.NamedTemporaryFile(
-                mode='w', 
-                dir=landmasks_dir, 
-                prefix=f'.{registry_filename}_tmp_',
-                suffix='.txt',
-                delete=False
+                mode="w",
+                dir=landmasks_dir,
+                prefix=f".{registry_filename}_tmp_",
+                suffix=".txt",
+                delete=False,
             ) as temp_file:
                 temp_path = temp_file.name
                 for rel_path, checksum in sorted(block_entries):
                     temp_file.write(f"{rel_path} {checksum}\n")
-            
+
             # Atomic rename to final location
             os.rename(temp_path, registry_file)
             temp_path = None  # Successfully renamed, no cleanup needed
-            
+
         except Exception:
             # Clean up temporary file on error
             if temp_path and os.path.exists(temp_path):
@@ -1527,7 +1610,9 @@ def scan_command(args):
     # Create embeddings Parquet database
     embeddings_parquet_path = os.path.join(output_dir, "registry.parquet")
     if os.path.exists(repr_dir):
-        if not create_parquet_database_from_filesystem(base_dir, embeddings_parquet_path, console):
+        if not create_parquet_database_from_filesystem(
+            base_dir, embeddings_parquet_path, console
+        ):
             console.print("[red]Failed to create embeddings parquet database[/red]")
             return 1
     else:
@@ -1537,11 +1622,17 @@ def scan_command(args):
     # Create landmasks Parquet database
     landmasks_parquet_path = os.path.join(output_dir, "landmasks.parquet")
     if os.path.exists(tiles_dir):
-        if not create_landmasks_parquet_database(tiles_dir, landmasks_parquet_path, console):
-            console.print("[yellow]Warning: Failed to create landmasks parquet database[/yellow]")
+        if not create_landmasks_parquet_database(
+            tiles_dir, landmasks_parquet_path, console
+        ):
+            console.print(
+                "[yellow]Warning: Failed to create landmasks parquet database[/yellow]"
+            )
             # Don't return error, landmasks are optional
     else:
-        console.print(f"[yellow]Warning: Landmasks directory not found: {tiles_dir}[/yellow]")
+        console.print(
+            f"[yellow]Warning: Landmasks directory not found: {tiles_dir}[/yellow]"
+        )
 
     # Create text-based registry files
     registry_dir = os.path.join(output_dir, "registry")
@@ -1552,7 +1643,9 @@ def scan_command(args):
 
     # Process embeddings if directory exists
     if os.path.exists(repr_dir):
-        if scan_embeddings_from_checksums(repr_dir, registry_dir, console, db_mode=False):
+        if scan_embeddings_from_checksums(
+            repr_dir, registry_dir, console, db_mode=False
+        ):
             processed_any = True
     else:
         console.print(f"[yellow]Embeddings directory not found:[/yellow] {repr_dir}")
@@ -1605,9 +1698,9 @@ def hash_command(args):
         console.print(f"[red]Directory {base_dir} does not exist[/red]")
         return 1
 
-    force = getattr(args, 'force', False)
-    dry_run = getattr(args, 'dry_run', False)
-    year_filter = getattr(args, 'year', None)
+    force = getattr(args, "force", False)
+    dry_run = getattr(args, "dry_run", False)
+    year_filter = getattr(args, "year", None)
 
     # Check if this is an embeddings directory structure
     repr_dir = os.path.join(base_dir, "global_0.1_degree_representation")
@@ -1620,7 +1713,12 @@ def hash_command(args):
         console.print(f"\n[bold]Processing embeddings directory:[/bold] {repr_dir}")
         if year_filter:
             console.print(f"[cyan]Filtering to year:[/cyan] {year_filter}")
-        if generate_embeddings_checksums(repr_dir, force=force, dry_run=dry_run, year_filter=year_filter) == 0:
+        if (
+            generate_embeddings_checksums(
+                repr_dir, force=force, dry_run=dry_run, year_filter=year_filter
+            )
+            == 0
+        ):
             processed_any = True
 
     # Process TIFF files if directory exists (no year filtering for TIFF files)
@@ -1629,7 +1727,9 @@ def hash_command(args):
         if generate_tiff_checksums(tiles_dir, force=force) == 0:
             processed_any = True
     elif os.path.exists(tiles_dir) and year_filter is not None:
-        console.print("[dim]Skipping TIFF processing (year filter only applies to embeddings)[/dim]")
+        console.print(
+            "[dim]Skipping TIFF processing (year filter only applies to embeddings)[/dim]"
+        )
 
     if not processed_any:
         console.print("[red]No data directories found. Expected:[/red]")
@@ -1645,16 +1745,13 @@ def analyze_registry_changes():
     try:
         # Get all changed registry files (staged, unstaged, and untracked)
         registry_files_changed = set()
-        
+
         # Single git status call to get all changes
         result = subprocess.run(
-            ['git', 'status', '--porcelain'],
-            capture_output=True,
-            text=True,
-            check=True
+            ["git", "status", "--porcelain"], capture_output=True, text=True, check=True
         )
-        
-        for line in result.stdout.strip().split('\n'):
+
+        for line in result.stdout.strip().split("\n"):
             if not line:
                 continue
             # Parse git status output: XY filename (where XY is 2-char status)
@@ -1662,39 +1759,39 @@ def analyze_registry_changes():
                 # Git status porcelain format: first 2 chars are status, then filename
                 # Handle both "XY filename" and "XY  filename" formats
                 filename = line[2:].lstrip()  # Skip status and any spaces
-                
+
                 if is_registry_file(filename):
                     registry_files_changed.add(filename)
-        
+
         if not registry_files_changed:
             return {}, []
-        
+
         # Analyze each changed file
-        changes_by_year = defaultdict(lambda: {'added': 0, 'modified': 0})
+        changes_by_year = defaultdict(lambda: {"added": 0, "modified": 0})
         registry_files_list = []
-        
+
         for file_path in registry_files_changed:
             if not os.path.exists(file_path):
                 continue
-                
+
             year = extract_year_from_filename(file_path)
             is_new_file = is_untracked_file(file_path)
-            
+
             if is_new_file:
                 entries = count_entries_in_registry_file(file_path)
-                changes_by_year[year]['added'] += entries
-                registry_files_list.append(('A', file_path))
+                changes_by_year[year]["added"] += entries
+                registry_files_list.append(("A", file_path))
             else:
                 added, removed = count_file_diff_entries(file_path)
                 net_change = added - removed
                 if net_change > 0:
-                    changes_by_year[year]['added'] += net_change
+                    changes_by_year[year]["added"] += net_change
                 elif net_change < 0:
-                    changes_by_year[year]['modified'] += abs(net_change)
-                registry_files_list.append(('M', file_path))
-        
+                    changes_by_year[year]["modified"] += abs(net_change)
+                registry_files_list.append(("M", file_path))
+
         return changes_by_year, registry_files_list
-        
+
     except subprocess.CalledProcessError as e:
         return None, f"Git command failed: {e}"
     except Exception as e:
@@ -1703,7 +1800,7 @@ def analyze_registry_changes():
 
 def extract_year_from_filename(file_path):
     """Extract year from registry filename.
-    
+
     Registry filenames follow these exact patterns:
     - embeddings_YYYY_lonX_latY.txt -> returns YYYY
     - landmasks_lonX_latY.txt -> returns None (no year)
@@ -1711,43 +1808,45 @@ def extract_year_from_filename(file_path):
     - registry.txt -> returns None (master registry)
     """
     filename = os.path.basename(file_path)
-    
+
     # embeddings_YYYY_lonX_latY.txt
-    if filename.startswith('embeddings_'):
-        parts = filename.split('_')
+    if filename.startswith("embeddings_"):
+        parts = filename.split("_")
         if len(parts) >= 2 and parts[1].isdigit() and len(parts[1]) == 4:
             return int(parts[1])
-    
+
     # registry_YYYY.txt
-    elif filename.startswith('registry_') and filename.endswith('.txt'):
+    elif filename.startswith("registry_") and filename.endswith(".txt"):
         year_str = filename[9:-4]  # Extract between 'registry_' and '.txt'
         if year_str.isdigit() and len(year_str) == 4:
             return int(year_str)
-    
+
     # landmasks and master registry have no year
     return None
 
 
 def is_registry_file(file_path):
     """Check if a file is a registry file we should analyze."""
-    if not file_path.endswith('.txt'):
+    if not file_path.endswith(".txt"):
         return False
-    
+
     filename = os.path.basename(file_path)
-    return any(keyword in filename for keyword in ['registry', 'embeddings', 'landmasks'])
+    return any(
+        keyword in filename for keyword in ["registry", "embeddings", "landmasks"]
+    )
 
 
 def count_entries_in_registry_file(file_path):
     """Count the number of entries in a registry file."""
     if not os.path.exists(file_path):
         return 0
-        
+
     try:
-        with open(file_path, 'r') as f:
+        with open(file_path, "r") as f:
             count = 0
             for line in f:
                 line = line.strip()
-                if line and not line.startswith('#'):
+                if line and not line.startswith("#"):
                     count += 1
             return count
     except Exception:
@@ -1758,9 +1857,9 @@ def is_untracked_file(file_path):
     """Check if a file is untracked (new)."""
     try:
         result = subprocess.run(
-            ['git', 'ls-files', '--error-unmatch', file_path],
+            ["git", "ls-files", "--error-unmatch", file_path],
             capture_output=True,
-            text=True
+            text=True,
         )
         return result.returncode != 0  # Non-zero means untracked
     except Exception:
@@ -1772,213 +1871,261 @@ def count_file_diff_entries(file_path):
     try:
         # Get the diff for this file
         result = subprocess.run(
-            ['git', 'diff', 'HEAD', file_path],
+            ["git", "diff", "HEAD", file_path],
             capture_output=True,
             text=True,
-            check=True
+            check=True,
         )
-        
+
         if not result.stdout.strip():
             return 0, 0  # No changes
-        
+
         added = 0
         removed = 0
-        
-        for line in result.stdout.split('\n'):
-            if line.startswith('+') and not line.startswith('+++'):
+
+        for line in result.stdout.split("\n"):
+            if line.startswith("+") and not line.startswith("+++"):
                 # Count non-comment, non-empty lines
                 content = line[1:].strip()  # Remove the '+' prefix
-                if content and not content.startswith('#'):
+                if content and not content.startswith("#"):
                     added += 1
-            elif line.startswith('-') and not line.startswith('---'):
+            elif line.startswith("-") and not line.startswith("---"):
                 # Count non-comment, non-empty lines
                 content = line[1:].strip()  # Remove the '-' prefix
-                if content and not content.startswith('#'):
+                if content and not content.startswith("#"):
                     removed += 1
-        
+
         return added, removed
-        
+
     except Exception:
         return 0, 0
 
 
-
-
 def create_commit_message(changes_by_year, registry_files_changed):
     """Create a concise commit message from the changes analysis."""
-    
+
     # Calculate totals
-    total_added = sum(year_data['added'] for year_data in changes_by_year.values())
-    total_modified = sum(year_data['modified'] for year_data in changes_by_year.values())
-    
+    total_added = sum(year_data["added"] for year_data in changes_by_year.values())
+    total_modified = sum(
+        year_data["modified"] for year_data in changes_by_year.values()
+    )
+
     # Create summary line
     summary_parts = []
     if total_added > 0:
         summary_parts.append(f"{total_added} tiles added")
     if total_modified > 0:
         summary_parts.append(f"{total_modified} tiles modified")
-    
-    summary = f"Update registry: {', '.join(summary_parts)}" if summary_parts else "Update registry files"
-    
+
+    summary = (
+        f"Update registry: {', '.join(summary_parts)}"
+        if summary_parts
+        else "Update registry files"
+    )
+
     # Create concise message with year breakdown
     message_parts = [summary]
-    
-    if changes_by_year and len(changes_by_year) > 1:  # Only show breakdown if multiple years
+
+    if (
+        changes_by_year and len(changes_by_year) > 1
+    ):  # Only show breakdown if multiple years
         message_parts.append("")
         for year in sorted(y for y in changes_by_year.keys() if y is not None):
             year_data = changes_by_year[year]
             changes = []
-            if year_data['added'] > 0:
+            if year_data["added"] > 0:
                 changes.append(f"+{year_data['added']}")
-            if year_data['modified'] > 0:
+            if year_data["modified"] > 0:
                 changes.append(f"~{year_data['modified']}")
             if changes:
                 message_parts.append(f"{year}: {', '.join(changes)}")
-    
+
     return "\n".join(message_parts)
 
 
 def commit_command(args):
     """Analyze registry changes and create a commit with summary."""
     console = Console()
-    
+
     # Check if we're in a git repository
     try:
-        subprocess.run(['git', 'rev-parse', '--git-dir'], 
-                      capture_output=True, check=True)
+        subprocess.run(
+            ["git", "rev-parse", "--git-dir"], capture_output=True, check=True
+        )
     except subprocess.CalledProcessError:
         console.print("[red]Error: Not in a git repository[/red]")
         console.print("[dim]Run this command from within a git repository[/dim]")
         return 1
-    
+
     console.print(Panel.fit("📊 Analyzing Registry Changes", style="cyan"))
-    
+
     # Check if git is properly configured
     try:
-        subprocess.run(['git', 'config', 'user.name'], 
-                      capture_output=True, check=True)
-        subprocess.run(['git', 'config', 'user.email'], 
-                      capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name"], capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email"], capture_output=True, check=True)
     except subprocess.CalledProcessError:
-        console.print("[red]Error: Git user.name and user.email must be configured[/red]")
-        console.print("[dim]Run: git config user.name 'Your Name' && git config user.email 'your@email.com'[/dim]")
+        console.print(
+            "[red]Error: Git user.name and user.email must be configured[/red]"
+        )
+        console.print(
+            "[dim]Run: git config user.name 'Your Name' && git config user.email 'your@email.com'[/dim]"
+        )
         return 1
-    
+
     # Analyze changes
     changes_by_year, registry_files_changed = analyze_registry_changes()
-    
+
     if changes_by_year is None:
         console.print(f"[red]Error analyzing changes: {registry_files_changed}[/red]")
         return 1
-    
+
     if not registry_files_changed:
         console.print("[yellow]No registry file changes detected[/yellow]")
-        console.print("[dim]Only .txt files with 'registry', 'embeddings', or 'landmasks' in the name are analyzed[/dim]")
+        console.print(
+            "[dim]Only .txt files with 'registry', 'embeddings', or 'landmasks' in the name are analyzed[/dim]"
+        )
         return 0
-    
+
     # Display summary
-    console.print(f"[green]Found {len(registry_files_changed)} registry files with changes[/green]")
-    
+    console.print(
+        f"[green]Found {len(registry_files_changed)} registry files with changes[/green]"
+    )
+
     # Display file-by-file breakdown
     console.print("\n[blue]Changed files:[/blue]")
     for status, file_path in registry_files_changed[:10]:  # Show first 10
-        status_str = {'A': '[green]Added[/green]', 'M': '[yellow]Modified[/yellow]', 'D': '[red]Deleted[/red]'}.get(status, status)
+        status_str = {
+            "A": "[green]Added[/green]",
+            "M": "[yellow]Modified[/yellow]",
+            "D": "[red]Deleted[/red]",
+        }.get(status, status)
         console.print(f"  {status_str}: {file_path}")
-    
+
     if len(registry_files_changed) > 10:
-        console.print(f"  [dim]... and {len(registry_files_changed) - 10} more files[/dim]")
-    
+        console.print(
+            f"  [dim]... and {len(registry_files_changed) - 10} more files[/dim]"
+        )
+
     if changes_by_year:
         console.print("\n[blue]Summary by year:[/blue]")
         total_added = 0
         total_modified = 0
-        
+
         for year in sorted(changes_by_year.keys(), key=lambda x: (x is None, x)):
             year_str = str(year) if year else "unknown"
             year_data = changes_by_year[year]
-            
+
             change_parts = []
-            if year_data['added'] > 0:
+            if year_data["added"] > 0:
                 change_parts.append(f"[green]+{year_data['added']} tiles[/green]")
-                total_added += year_data['added']
-            if year_data['modified'] > 0:
-                change_parts.append(f"[yellow]~{year_data['modified']} modified[/yellow]")
-                total_modified += year_data['modified']
-            
+                total_added += year_data["added"]
+            if year_data["modified"] > 0:
+                change_parts.append(
+                    f"[yellow]~{year_data['modified']} modified[/yellow]"
+                )
+                total_modified += year_data["modified"]
+
             if change_parts:
                 console.print(f"  {year_str}: {', '.join(change_parts)}")
-        console.print(f"\n[bold]Total: [green]+{total_added} added[/green]" + (f" / [yellow]~{total_modified} modified[/yellow]" if total_modified > 0 else "") + " tiles[/bold]")
-    
+        console.print(
+            f"\n[bold]Total: [green]+{total_added} added[/green]"
+            + (
+                f" / [yellow]~{total_modified} modified[/yellow]"
+                if total_modified > 0
+                else ""
+            )
+            + " tiles[/bold]"
+        )
+
     # Validate we have something to commit
-    if all(year_data['added'] == 0 and year_data['modified'] == 0 for year_data in changes_by_year.values()):
-        console.print("[yellow]Warning: No tile changes detected in registry files[/yellow]")
-        console.print("[dim]Files may have been reformatted without content changes[/dim]")
-    
+    if all(
+        year_data["added"] == 0 and year_data["modified"] == 0
+        for year_data in changes_by_year.values()
+    ):
+        console.print(
+            "[yellow]Warning: No tile changes detected in registry files[/yellow]"
+        )
+        console.print(
+            "[dim]Files may have been reformatted without content changes[/dim]"
+        )
+
     # Stage registry files
     console.print("\n[blue]Staging registry files...[/blue]")
     staged_files = []
     failed_files = []
-    
+
     for status, file_path in registry_files_changed:
         if os.path.exists(file_path):  # Only add files that exist
             try:
-                subprocess.run(['git', 'add', file_path], check=True, capture_output=True)
+                subprocess.run(
+                    ["git", "add", file_path], check=True, capture_output=True
+                )
                 staged_files.append(file_path)
             except subprocess.CalledProcessError as e:
                 failed_files.append((file_path, str(e)))
-    
+
     if staged_files:
         console.print(f"[green]✓ Staged {len(staged_files)} files successfully[/green]")
-    
+
     if failed_files:
         console.print(f"[yellow]⚠ Failed to stage {len(failed_files)} files:[/yellow]")
         for file_path, error in failed_files[:3]:  # Show first 3 failures
             console.print(f"  {file_path}: {error}")
         if len(failed_files) > 3:
             console.print(f"  [dim]... and {len(failed_files) - 3} more failures[/dim]")
-    
+
     # Check if there's anything staged
     try:
-        result = subprocess.run(['git', 'diff', '--staged', '--name-only'], 
-                              capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            ["git", "diff", "--staged", "--name-only"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
         if not result.stdout.strip():
             console.print("[yellow]No files staged for commit[/yellow]")
             return 1
     except subprocess.CalledProcessError:
         console.print("[red]Error checking staged files[/red]")
         return 1
-    
+
     # Create commit message
     commit_message = create_commit_message(changes_by_year, registry_files_changed)
-    
+
     console.print("\n[blue]Commit message:[/blue]")
     console.print(Panel(commit_message, style="dim"))
-    
+
     # Create the commit
     console.print("[blue]Creating commit...[/blue]")
     try:
-        result = subprocess.run([
-            'git', 'commit', '-m', commit_message
-        ], capture_output=True, text=True, check=True)
-        
+        result = subprocess.run(
+            ["git", "commit", "-m", commit_message],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
         console.print("[green]✓ Commit created successfully[/green]")
-        
+
         # Show the commit hash and stats
-        commit_result = subprocess.run(['git', 'rev-parse', 'HEAD'], 
-                                     capture_output=True, text=True, check=True)
+        commit_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+        )
         commit_hash = commit_result.stdout.strip()[:8]
         console.print(f"[cyan]Commit: {commit_hash}[/cyan]")
-        
+
         # Show commit stats
         if result.stdout.strip():
             console.print(f"[dim]{result.stdout.strip()}[/dim]")
-        
+
         return 0
-        
+
     except subprocess.CalledProcessError as e:
         console.print(f"[red]Error creating commit: {e}[/red]")
         if e.stderr:
-            console.print(f"[dim]Git error: {e.stderr.decode() if isinstance(e.stderr, bytes) else e.stderr}[/dim]")
+            console.print(
+                f"[dim]Git error: {e.stderr.decode() if isinstance(e.stderr, bytes) else e.stderr}[/dim]"
+            )
         return 1
 
 
@@ -2013,12 +2160,14 @@ def export_manifests_command(args):
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    console.print(Panel.fit(
-        f"[bold blue]📦 Converting Parquet to Text Manifests[/bold blue]\n"
-        f"📁 Input: {input_dir}\n"
-        f"📁 Output: {output_dir}",
-        style="blue"
-    ))
+    console.print(
+        Panel.fit(
+            f"[bold blue]📦 Converting Parquet to Text Manifests[/bold blue]\n"
+            f"📁 Input: {input_dir}\n"
+            f"📁 Output: {output_dir}",
+            style="blue",
+        )
+    )
 
     total_files_written = 0
 
@@ -2030,21 +2179,25 @@ def export_manifests_command(args):
         console.print(f"  Loaded [green]{len(df):,}[/green] embedding records")
 
         # Verify required columns
-        required_cols = ['lat', 'lon', 'year', 'hash', 'scales_hash']
+        required_cols = ["lat", "lon", "year", "hash", "scales_hash"]
         missing = set(required_cols) - set(df.columns)
         if missing:
-            console.print(f"[red]Error: Missing required columns in registry.parquet: {missing}[/red]")
+            console.print(
+                f"[red]Error: Missing required columns in registry.parquet: {missing}[/red]"
+            )
             console.print(f"[yellow]Available columns: {df.columns.tolist()}[/yellow]")
-            console.print("[yellow]Hint: Regenerate registry.parquet with latest geotessera-registry scan[/yellow]")
+            console.print(
+                "[yellow]Hint: Regenerate registry.parquet with latest geotessera-registry scan[/yellow]"
+            )
             return 1
 
         # Group by year and block
         files_by_year_and_block = defaultdict(lambda: defaultdict(list))
 
         for _, row in df.iterrows():
-            lon, lat, year = row['lon'], row['lat'], row['year']
-            embedding_hash = row['hash']
-            scales_hash = row['scales_hash']
+            lon, lat, year = row["lon"], row["lat"], row["year"]
+            embedding_hash = row["hash"]
+            scales_hash = row["scales_hash"]
 
             # Calculate block coordinates
             block_lon, block_lat = block_from_world(lon, lat)
@@ -2078,14 +2231,15 @@ def export_manifests_command(args):
 
                 # Write file atomically
                 import tempfile
+
                 temp_path = None
                 try:
                     with tempfile.NamedTemporaryFile(
-                        mode='w',
+                        mode="w",
                         dir=embeddings_dir,
-                        prefix=f'.{registry_filename}_tmp_',
-                        suffix='.txt',
-                        delete=False
+                        prefix=f".{registry_filename}_tmp_",
+                        suffix=".txt",
+                        delete=False,
                     ) as temp_file:
                         temp_path = temp_file.name
                         for rel_path, checksum in sorted(entries):
@@ -2100,13 +2254,18 @@ def export_manifests_command(args):
                         os.remove(temp_path)
                     raise
 
-                console.print(f"    Block ({block_lon:4d}, {block_lat:4d}): {len(entries):4d} files → {registry_filename}")
+                console.print(
+                    f"    Block ({block_lon:4d}, {block_lat:4d}): {len(entries):4d} files → {registry_filename}"
+                )
 
-        console.print(f"[green]✓ Wrote {total_files_written} embeddings registry files[/green]")
+        console.print(
+            f"[green]✓ Wrote {total_files_written} embeddings registry files[/green]"
+        )
 
     except Exception as e:
         console.print(f"[red]Error processing embeddings: {e}[/red]")
         import traceback
+
         console.print(f"[dim]{traceback.format_exc()}[/dim]")
         return 1
 
@@ -2119,17 +2278,19 @@ def export_manifests_command(args):
             console.print(f"  Loaded [green]{len(df):,}[/green] landmask records")
 
             # Verify required columns
-            required_cols = ['lat', 'lon', 'hash']
+            required_cols = ["lat", "lon", "hash"]
             missing = set(required_cols) - set(df.columns)
             if missing:
-                console.print(f"[yellow]Warning: Missing columns in landmasks.parquet: {missing}[/yellow]")
+                console.print(
+                    f"[yellow]Warning: Missing columns in landmasks.parquet: {missing}[/yellow]"
+                )
             else:
                 # Group by block
                 files_by_block = defaultdict(list)
 
                 for _, row in df.iterrows():
-                    lon, lat = row['lon'], row['lat']
-                    sha256 = row['hash']
+                    lon, lat = row["lon"], row["lat"]
+                    sha256 = row["hash"]
 
                     # Calculate block coordinates
                     block_lon, block_lat = block_from_world(lon, lat)
@@ -2156,11 +2317,11 @@ def export_manifests_command(args):
                     temp_path = None
                     try:
                         with tempfile.NamedTemporaryFile(
-                            mode='w',
+                            mode="w",
                             dir=landmasks_dir,
-                            prefix=f'.{registry_filename}_tmp_',
-                            suffix='.txt',
-                            delete=False
+                            prefix=f".{registry_filename}_tmp_",
+                            suffix=".txt",
+                            delete=False,
                         ) as temp_file:
                             temp_path = temp_file.name
                             for rel_path, checksum in sorted(entries):
@@ -2175,25 +2336,34 @@ def export_manifests_command(args):
                             os.remove(temp_path)
                         raise
 
-                    console.print(f"    Block ({block_lon:4d}, {block_lat:4d}): {len(entries):4d} files → {registry_filename}")
+                    console.print(
+                        f"    Block ({block_lon:4d}, {block_lat:4d}): {len(entries):4d} files → {registry_filename}"
+                    )
 
-                console.print(f"[green]✓ Wrote {landmask_files_written} landmask registry files[/green]")
+                console.print(
+                    f"[green]✓ Wrote {landmask_files_written} landmask registry files[/green]"
+                )
                 total_files_written += landmask_files_written
 
         except Exception as e:
             console.print(f"[yellow]Warning: Error processing landmasks: {e}[/yellow]")
             import traceback
+
             console.print(f"[dim]{traceback.format_exc()}[/dim]")
     else:
-        console.print(f"[yellow]Landmasks parquet not found, skipping: {landmasks_parquet}[/yellow]")
+        console.print(
+            f"[yellow]Landmasks parquet not found, skipping: {landmasks_parquet}[/yellow]"
+        )
 
     # Summary
-    console.print(Panel.fit(
-        f"[green]✅ Export Complete[/green]\n"
-        f"📊 Total registry files written: {total_files_written}\n"
-        f"📁 Output directory: {output_dir}",
-        style="green"
-    ))
+    console.print(
+        Panel.fit(
+            f"[green]✅ Export Complete[/green]\n"
+            f"📊 Total registry files written: {total_files_written}\n"
+            f"📁 Output directory: {output_dir}",
+            style="green",
+        )
+    )
 
     return 0
 
@@ -2206,7 +2376,13 @@ def main():
     logging.basicConfig(
         level=logging.INFO,
         format="%(message)s",
-        handlers=[RichHandler(rich_tracebacks=True, show_time=False, show_path=False, console=console)] if use_rich else [logging.StreamHandler()]
+        handlers=[
+            RichHandler(
+                rich_tracebacks=True, show_time=False, show_path=False, console=console
+            )
+        ]
+        if use_rich
+        else [logging.StreamHandler()],
     )
 
     parser = argparse.ArgumentParser(
@@ -2343,8 +2519,8 @@ Directory Structure:
 
     # Check command
     check_parser = subparsers.add_parser(
-        "check", 
-        help="Check the integrity of tessera filesystem structure and validate files"
+        "check",
+        help="Check the integrity of tessera filesystem structure and validate files",
     )
     check_parser.add_argument(
         "base_dir",
@@ -2353,7 +2529,7 @@ Directory Structure:
     check_parser.add_argument(
         "--verify-hashes",
         action="store_true",
-        help="Recalculate and verify SHA256 hashes (slower but thorough)"
+        help="Recalculate and verify SHA256 hashes (slower but thorough)",
     )
     check_parser.set_defaults(func=check_command)
 

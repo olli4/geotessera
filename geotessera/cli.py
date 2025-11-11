@@ -23,7 +23,12 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.box import ROUNDED
 from geotessera import __version__
-from geotessera.registry import EMBEDDINGS_DIR_NAME, LANDMASKS_DIR_NAME, tile_to_landmask_filename, tile_to_embedding_paths
+from geotessera.registry import (
+    EMBEDDINGS_DIR_NAME,
+    LANDMASKS_DIR_NAME,
+    tile_to_landmask_filename,
+    tile_to_embedding_paths,
+)
 from rich.progress import Progress, TaskID, BarColumn, TextColumn, TimeRemainingColumn
 from rich.table import Table
 from rich import print as rprint
@@ -52,13 +57,13 @@ def is_url(string: str) -> bool:
 
 def download_region_file(url: str) -> str:
     """Download a region file from a URL to a temporary location.
-    
+
     Args:
         url: The URL to download from
-        
+
     Returns:
         Path to the temporary downloaded file
-        
+
     Raises:
         Exception: If download fails
     """
@@ -66,27 +71,27 @@ def download_region_file(url: str) -> str:
         # Create a temporary file with appropriate extension
         parsed_url = urllib.parse.urlparse(url)
         path = parsed_url.path
-        if path.endswith('.geojson'):
-            suffix = '.geojson'
-        elif path.endswith('.json'):
-            suffix = '.json'
-        elif path.endswith('.shp'):
-            suffix = '.shp'
-        elif path.endswith('.gpkg'):
-            suffix = '.gpkg'
+        if path.endswith(".geojson"):
+            suffix = ".geojson"
+        elif path.endswith(".json"):
+            suffix = ".json"
+        elif path.endswith(".shp"):
+            suffix = ".shp"
+        elif path.endswith(".gpkg"):
+            suffix = ".gpkg"
         else:
             # Default to geojson for unknown extensions
-            suffix = '.geojson'
-            
+            suffix = ".geojson"
+
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
         temp_path = temp_file.name
         temp_file.close()
-        
+
         # Download the file
         urllib.request.urlretrieve(url, temp_path)
-        
+
         return temp_path
-        
+
     except Exception as e:
         raise Exception(f"Failed to download region file from {url}: {e}")
 
@@ -124,6 +129,7 @@ app = typer.Typer(
 # Rich Console handles terminal capability detection automatically
 console = Console()
 
+
 # Helper to conditionally add emoji based on terminal type
 def emoji(text):
     """Return emoji text for smart terminals, empty string for dumb/piped output.
@@ -157,6 +163,7 @@ def smart_print(content):
         # Dumb terminal or piped: use console.print (still renders tables but no rich markup)
         console.print(content)
 
+
 # Helper to create tables with appropriate settings for dumb terminals
 def create_table(show_header=True, header_style=None, box=None, **kwargs):
     """Create a Rich Table with appropriate settings for terminal capabilities.
@@ -175,7 +182,7 @@ def create_table(show_header=True, header_style=None, box=None, **kwargs):
     if not console.is_terminal:
         # Dumb terminal or piped output: no box, no edges, minimal padding
         # Remove padding from kwargs if present to avoid conflict
-        kwargs.pop('padding', None)
+        kwargs.pop("padding", None)
         return Table(
             show_header=show_header,
             header_style=None,  # No styling in dumb terminals
@@ -184,16 +191,13 @@ def create_table(show_header=True, header_style=None, box=None, **kwargs):
             show_edge=False,
             padding=(0, 1),  # Minimal padding: 0 vertical, 1 horizontal space
             collapse_padding=True,  # Collapse padding for cleaner output
-            **kwargs
+            **kwargs,
         )
     else:
         # Smart terminal: use rounded box if not specified
         actual_box = box if box is not None else ROUNDED
         return Table(
-            show_header=show_header,
-            header_style=header_style,
-            box=actual_box,
-            **kwargs
+            show_header=show_header, header_style=header_style, box=actual_box, **kwargs
         )
 
 
@@ -225,8 +229,8 @@ def create_progress(*args, **kwargs):
         Configured Rich Progress instance
     """
     # If console not specified, use our configured console
-    if 'console' not in kwargs:
-        kwargs['console'] = console
+    if "console" not in kwargs:
+        kwargs["console"] = console
 
     if not console.is_terminal:
         # Dumb terminal or piped output: disable progress bar, just show text updates
@@ -275,11 +279,16 @@ def create_download_progress_callback(progress: Progress, task_id: TaskID) -> Ca
 def info(
     tiles_dir: Annotated[
         Optional[Path],
-        typer.Option("--tiles", help="Analyze tile files/directory (GeoTIFF or NPY format)"),
+        typer.Option(
+            "--tiles", help="Analyze tile files/directory (GeoTIFF or NPY format)"
+        ),
     ] = None,
     geotiffs: Annotated[
         Optional[Path],
-        typer.Option("--geotiffs", help="(Deprecated: use --tiles) Analyze GeoTIFF files/directory"),
+        typer.Option(
+            "--geotiffs",
+            help="(Deprecated: use --tiles) Analyze GeoTIFF files/directory",
+        ),
     ] = None,
     dataset_version: Annotated[
         str,
@@ -311,7 +320,9 @@ def info(
             rprint(f"[red]No tiles found in\n{input_path}[/red]")
             rprint("[yellow]Supported formats:[/yellow]")
             rprint("  - GeoTIFF: *.tif/*.tiff files")
-            rprint("  - NPY: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/*.npy structure")
+            rprint(
+                "  - NPY: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/*.npy structure"
+            )
             raise typer.Exit(1)
 
         # Use the preferred format (NPY if available, otherwise first available)
@@ -345,24 +356,36 @@ def info(
         # Process each tile
         for tile in tiles:
             # Update bounds (use tile coordinates for efficiency)
-            coverage["bounds"]["min_lon"] = min(coverage["bounds"]["min_lon"], tile.lon - 0.05)
-            coverage["bounds"]["min_lat"] = min(coverage["bounds"]["min_lat"], tile.lat - 0.05)
-            coverage["bounds"]["max_lon"] = max(coverage["bounds"]["max_lon"], tile.lon + 0.05)
-            coverage["bounds"]["max_lat"] = max(coverage["bounds"]["max_lat"], tile.lat + 0.05)
+            coverage["bounds"]["min_lon"] = min(
+                coverage["bounds"]["min_lon"], tile.lon - 0.05
+            )
+            coverage["bounds"]["min_lat"] = min(
+                coverage["bounds"]["min_lat"], tile.lat - 0.05
+            )
+            coverage["bounds"]["max_lon"] = max(
+                coverage["bounds"]["max_lon"], tile.lon + 0.05
+            )
+            coverage["bounds"]["max_lat"] = max(
+                coverage["bounds"]["max_lat"], tile.lat + 0.05
+            )
 
             # Track band count (from metadata, not loading data)
             band_count = 128  # All tiles have 128 channels
-            coverage["band_counts"][band_count] = coverage["band_counts"].get(band_count, 0) + 1
+            coverage["band_counts"][band_count] = (
+                coverage["band_counts"].get(band_count, 0) + 1
+            )
 
             # Tile info for verbose output
             if verbose:
-                coverage["tiles"].append({
-                    "path": tile.grid_name,
-                    "year": str(tile.year),
-                    "tile_lat": tile.lat,
-                    "tile_lon": tile.lon,
-                    "bands": band_count,
-                })
+                coverage["tiles"].append(
+                    {
+                        "path": tile.grid_name,
+                        "year": str(tile.year),
+                        "tile_lat": tile.lat,
+                        "tile_lon": tile.lon,
+                        "bands": band_count,
+                    }
+                )
 
         # Create analysis table
         analysis_table = create_table(show_header=False, box=None)
@@ -465,7 +488,12 @@ def info(
 @app.command()
 def coverage(
     output: Annotated[
-        Path, typer.Option("--output", "-o", help="Output PNG file path (JSON and HTML will be created in same directory)")
+        Path,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Output PNG file path (JSON and HTML will be created in same directory)",
+        ),
     ] = Path("tessera_coverage.png"),
     year: Annotated[
         Optional[int],
@@ -477,17 +505,23 @@ def coverage(
     region_file: Annotated[
         Optional[str],
         typer.Option(
-            "--region-file", help="GeoJSON/Shapefile to focus coverage map on specific region (file path or URL)"
+            "--region-file",
+            help="GeoJSON/Shapefile to focus coverage map on specific region (file path or URL)",
         ),
     ] = None,
     country: Annotated[
         Optional[str],
         typer.Option(
-            "--country", help="Country name to focus coverage map on (e.g., 'United Kingdom', 'UK', 'GB')"
+            "--country",
+            help="Country name to focus coverage map on (e.g., 'United Kingdom', 'UK', 'GB')",
         ),
     ] = None,
     tile_color: Annotated[
-        str, typer.Option("--tile-color", help="Color for tile rectangles (when not using multi-year colors)")
+        str,
+        typer.Option(
+            "--tile-color",
+            help="Color for tile rectangles (when not using multi-year colors)",
+        ),
     ] = "red",
     tile_alpha: Annotated[
         float, typer.Option("--tile-alpha", help="Transparency of tiles (0.0-1.0)")
@@ -505,7 +539,8 @@ def coverage(
         bool, typer.Option("--no-countries", help="Don't show country boundaries")
     ] = False,
     no_multi_year_colors: Annotated[
-        bool, typer.Option("--no-multi-year-colors", help="Disable multi-year color coding")
+        bool,
+        typer.Option("--no-multi-year-colors", help="Disable multi-year color coding"),
     ] = False,
     dataset_version: Annotated[
         str, typer.Option("--dataset-version", help="Tessera dataset version")
@@ -514,7 +549,11 @@ def coverage(
         Optional[Path], typer.Option("--cache-dir", help="Cache directory")
     ] = None,
     registry_dir: Annotated[
-        Optional[Path], typer.Option("--registry-dir", help="Directory containing registry.parquet and landmasks.parquet files")
+        Optional[Path],
+        typer.Option(
+            "--registry-dir",
+            help="Directory containing registry.parquet and landmasks.parquet files",
+        ),
     ] = None,
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Verbose output")
@@ -554,15 +593,17 @@ def coverage(
     region_bbox = None
     country_geojson_file = None
     region_file_temp = None  # Track if we created a temporary file
-    
+
     if region_file and country:
-        rprint("[red]Error: Cannot specify both --region-file and --country. Choose one.[/red]")
+        rprint(
+            "[red]Error: Cannot specify both --region-file and --country. Choose one.[/red]"
+        )
         raise typer.Exit(1)
-    
+
     if region_file:
         try:
             from .visualization import calculate_bbox_from_file
-            
+
             # Check if region_file is a URL
             if is_url(region_file):
                 rprint(f"[blue]Downloading region file from URL: {region_file}[/blue]")
@@ -572,10 +613,12 @@ def coverage(
                 # Check if local file exists
                 region_path = Path(region_file)
                 if not region_path.exists():
-                    rprint(f"[red]Error: Region file {region_file} does not exist[/red]")
+                    rprint(
+                        f"[red]Error: Region file {region_file} does not exist[/red]"
+                    )
                     raise typer.Exit(1)
                 region_file_path = str(region_path)
-            
+
             region_bbox = calculate_bbox_from_file(region_file_path)
             rprint(f"[green]Region bounding box: {format_bbox(region_bbox)}[/green]")
         except Exception as e:
@@ -592,7 +635,9 @@ def coverage(
             TimeRemainingColumn(),
         ) as progress:
             country_task = progress.add_task(
-                f"{emoji('🌍 ')}Loading country data...", total=100, status="Checking cache..."
+                f"{emoji('🌍 ')}Loading country data...",
+                total=100,
+                status="Checking cache...",
             )
 
             def country_progress_callback(current: int, total: int, status: str = None):
@@ -604,21 +649,27 @@ def coverage(
                 )
 
             try:
-                # Get country lookup instance 
+                # Get country lookup instance
                 from .country import get_country_lookup
-                country_lookup = get_country_lookup(progress_callback=country_progress_callback)
-                
+
+                country_lookup = get_country_lookup(
+                    progress_callback=country_progress_callback
+                )
+
                 # Get both bbox and geometry
                 region_bbox = country_lookup.get_bbox(country)
                 country_gdf = country_lookup.get_geometry(country)
-                
+
                 # Create temporary GeoJSON file for the country boundary
                 import tempfile
                 import os
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.geojson', delete=False) as tmp:
-                    country_gdf.to_file(tmp.name, driver='GeoJSON')
+
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".geojson", delete=False
+                ) as tmp:
+                    country_gdf.to_file(tmp.name, driver="GeoJSON")
                     country_geojson_file = tmp.name
-                
+
                 progress.update(country_task, completed=100, status="Complete")
             except ValueError as e:
                 rprint(f"[red]Error: {e}[/red]")
@@ -629,7 +680,7 @@ def coverage(
             except Exception as e:
                 rprint(f"[red]Error fetching country data: {e}[/red]")
                 raise typer.Exit(1)
-        
+
         rprint(f"[green]Using country '{country}': {format_bbox(region_bbox)}[/green]")
 
     # Initialize GeoTessera
@@ -653,7 +704,9 @@ def coverage(
             TimeRemainingColumn(),
         ) as progress:
             task = progress.add_task(
-                f"{emoji('🔄 ')}Generating coverage map...", total=100, status="Starting..."
+                f"{emoji('🔄 ')}Generating coverage map...",
+                total=100,
+                status="Starting...",
             )
 
             if verbose:
@@ -663,14 +716,20 @@ def coverage(
 
             # When using region files or countries, default to no countries for cleaner view
             show_countries_final = not no_countries and not region_file and not country
-            
+
             # Determine which region file to use (original region file or country boundary)
             region_file_to_use = None
             if region_file:
-                region_file_to_use = region_file_path if 'region_file_path' in locals() else str(region_file)
-            elif country and 'country_geojson_file' in locals() and country_geojson_file:
+                region_file_to_use = (
+                    region_file_path
+                    if "region_file_path" in locals()
+                    else str(region_file)
+                )
+            elif (
+                country and "country_geojson_file" in locals() and country_geojson_file
+            ):
                 region_file_to_use = country_geojson_file
-            
+
             output_path = visualize_global_coverage(
                 tessera_client=gt,
                 output_path=str(output),
@@ -687,17 +746,23 @@ def coverage(
             )
 
         rprint(f"[green]{emoji('✅ ')}Coverage map saved to: {output_path}[/green]")
-        
+
         # Show next steps hint
         if region_file:
             rprint("[blue]Next step: Download data for your region:[/blue]")
-            rprint(f"[cyan]  geotessera download --region-file {region_file} --output tiles/[/cyan]")
+            rprint(
+                f"[cyan]  geotessera download --region-file {region_file} --output tiles/[/cyan]"
+            )
         elif country:
             rprint("[blue]Next step: Download data for your country:[/blue]")
-            rprint(f"[cyan]  geotessera download --country \"{country}\" --output tiles/[/cyan]")
+            rprint(
+                f'[cyan]  geotessera download --country "{country}" --output tiles/[/cyan]'
+            )
         else:
             rprint("[blue]Next step: Download data for a specific region:[/blue]")
-            rprint("[cyan]  geotessera download --bbox 'lon1,lat1,lon2,lat2' --output tiles/[/cyan]")
+            rprint(
+                "[cyan]  geotessera download --bbox 'lon1,lat1,lon2,lat2' --output tiles/[/cyan]"
+            )
 
         # Show summary statistics
         available_embeddings = gt.registry.get_available_embeddings()
@@ -733,18 +798,29 @@ def coverage(
             gt.generate_coverage_texture(coverage_data, output_file=str(texture_path))
 
             # Generate globe.html
-            with open(globe_html_path, 'w') as f:
+            with open(globe_html_path, "w") as f:
                 f.write(_get_globe_html_template())
 
-            rprint(f"[green]{emoji('✅ ')}Coverage data exported to: {json_path}[/green]")
-            rprint(f"[green]{emoji('✅ ')}Coverage texture exported to: {texture_path}[/green]")
-            rprint(f"[green]{emoji('✅ ')}Globe viewer exported to: {globe_html_path}[/green]")
-            rprint(f"[dim]   Open {globe_html_path} in a web browser for interactive visualization[/dim]")
+            rprint(
+                f"[green]{emoji('✅ ')}Coverage data exported to: {json_path}[/green]"
+            )
+            rprint(
+                f"[green]{emoji('✅ ')}Coverage texture exported to: {texture_path}[/green]"
+            )
+            rprint(
+                f"[green]{emoji('✅ ')}Globe viewer exported to: {globe_html_path}[/green]"
+            )
+            rprint(
+                f"[dim]   Open {globe_html_path} in a web browser for interactive visualization[/dim]"
+            )
 
         except Exception as e:
-            rprint(f"[yellow]Warning: Failed to generate globe visualization: {e}[/yellow]")
+            rprint(
+                f"[yellow]Warning: Failed to generate globe visualization: {e}[/yellow]"
+            )
             if verbose:
                 import traceback
+
                 traceback.print_exc()
 
     except ImportError:
@@ -760,17 +836,21 @@ def coverage(
         raise typer.Exit(1)
     finally:
         # Clean up temporary country GeoJSON file if created
-        if country_geojson_file and (not region_file or country_geojson_file != str(region_file)):
+        if country_geojson_file and (
+            not region_file or country_geojson_file != str(region_file)
+        ):
             try:
                 import os
+
                 os.unlink(country_geojson_file)
             except Exception:
                 pass  # Ignore cleanup errors
-        
+
         # Clean up temporary region file if downloaded from URL
         if region_file_temp:
             try:
                 import os
+
                 os.unlink(region_file_temp)
             except Exception:
                 pass  # Ignore cleanup errors
@@ -778,7 +858,14 @@ def coverage(
 
 @app.command()
 def download(
-    output: Annotated[Optional[Path], typer.Option("--output", "-o", help="Output directory (required for actual downloads, optional for --dry-run)")] = None,
+    output: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--output",
+            "-o",
+            help="Output directory (required for actual downloads, optional for --dry-run)",
+        ),
+    ] = None,
     bbox: Annotated[
         Optional[str],
         typer.Option("--bbox", help="Bounding box: 'min_lon,min_lat,max_lon,max_lat'"),
@@ -786,7 +873,8 @@ def download(
     region_file: Annotated[
         Optional[str],
         typer.Option(
-            "--region-file", help="GeoJSON/Shapefile to define region (file path or URL)"
+            "--region-file",
+            help="GeoJSON/Shapefile to define region (file path or URL)",
         ),
     ] = None,
     country: Annotated[
@@ -824,16 +912,26 @@ def download(
         Optional[Path], typer.Option("--cache-dir", help="Cache directory")
     ] = None,
     registry_dir: Annotated[
-        Optional[Path], typer.Option("--registry-dir", help="Directory containing registry.parquet and landmasks.parquet files")
+        Optional[Path],
+        typer.Option(
+            "--registry-dir",
+            help="Directory containing registry.parquet and landmasks.parquet files",
+        ),
     ] = None,
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Verbose output")
     ] = False,
     dry_run: Annotated[
-        bool, typer.Option("--dry-run", help="Calculate total download size without downloading")
+        bool,
+        typer.Option(
+            "--dry-run", help="Calculate total download size without downloading"
+        ),
     ] = False,
     skip_hash: Annotated[
-        bool, typer.Option("--skip-hash", help="Skip SHA256 hash verification of downloaded files")
+        bool,
+        typer.Option(
+            "--skip-hash", help="Skip SHA256 hash verification of downloaded files"
+        ),
     ] = False,
 ):
     """Download embeddings as numpy arrays or GeoTIFF files.
@@ -860,7 +958,9 @@ def download(
     # Validate output parameter
     if not dry_run and output is None:
         rprint("[red]Error: --output/-o is required for actual downloads[/red]")
-        rprint("[dim]Use --dry-run to calculate download size without specifying output directory[/dim]")
+        rprint(
+            "[dim]Use --dry-run to calculate download size without specifying output directory[/dim]"
+        )
         raise typer.Exit(1)
 
     # For dry-run, use a dummy path if not provided (won't be used for actual downloads)
@@ -872,7 +972,9 @@ def download(
         dataset_version=dataset_version,
         cache_dir=str(cache_dir) if cache_dir else None,
         registry_dir=str(registry_dir) if registry_dir else None,
-        embeddings_dir=str(output) if not dry_run else None,  # Only set for actual downloads
+        embeddings_dir=str(output)
+        if not dry_run
+        else None,  # Only set for actual downloads
         verify_hashes=not skip_hash,
     )
 
@@ -902,11 +1004,13 @@ def download(
                 # Check if local file exists
                 region_path = Path(region_file)
                 if not region_path.exists():
-                    rprint(f"[red]Error: Region file {region_file} does not exist[/red]")
+                    rprint(
+                        f"[red]Error: Region file {region_file} does not exist[/red]"
+                    )
                     raise typer.Exit(1)
                 region_file_path = str(region_path)
                 region_file_temp = None
-            
+
             bbox_coords = calculate_bbox_from_file(region_file_path)
             rprint(
                 f"[green]Calculated bbox from {region_file}:[/green] {format_bbox(bbox_coords)}"
@@ -915,9 +1019,10 @@ def download(
             rprint(f"[red]Error reading region file: {e}[/red]")
             rprint("Supported formats: GeoJSON, Shapefile, etc.")
             # Clean up temp file if we created one
-            if 'region_file_temp' in locals() and region_file_temp:
+            if "region_file_temp" in locals() and region_file_temp:
                 try:
                     import os
+
                     os.unlink(region_file_temp)
                 except Exception:
                     pass
@@ -933,7 +1038,9 @@ def download(
             TimeRemainingColumn(),
         ) as progress:
             country_task = progress.add_task(
-                f"{emoji('🌍 ')}Loading country data...", total=100, status="Checking cache..."
+                f"{emoji('🌍 ')}Loading country data...",
+                total=100,
+                status="Checking cache...",
             )
 
             def country_progress_callback(current: int, total: int, status: str = None):
@@ -960,9 +1067,7 @@ def download(
                 raise typer.Exit(1)
 
         # Print country info after progress bar completes
-        rprint(
-            f"[green]Using country '{country}':[/green] {format_bbox(bbox_coords)}"
-        )
+        rprint(f"[green]Using country '{country}':[/green] {format_bbox(bbox_coords)}")
     else:
         rprint(
             "[red]Error: Must specify either --bbox, --region-file, or --country[/red]"
@@ -1014,7 +1119,7 @@ def download(
 
     # Helper function to format bytes
     def format_bytes(b):
-        for unit in ['B', 'KB', 'MB', 'GB']:
+        for unit in ["B", "KB", "MB", "GB"]:
             if b < 1024.0:
                 return f"{b:.1f} {unit}"
             b /= 1024.0
@@ -1022,22 +1127,22 @@ def download(
 
     try:
         # Load tiles for the region first (before Progress context)
-        tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox_coords, year=year)
+        tiles_to_fetch = gt.registry.load_blocks_for_region(
+            bounds=bbox_coords, year=year
+        )
 
         if not tiles_to_fetch:
-            rprint(
-                "[yellow]⚠️  No tiles found in the specified region.[/yellow]"
-            )
-            rprint(
-                "Try expanding your bounding box or checking data availability."
-            )
+            rprint("[yellow]⚠️  No tiles found in the specified region.[/yellow]")
+            rprint("Try expanding your bounding box or checking data availability.")
             return
 
         # Handle dry-run mode: calculate and display size information (no progress bar)
         if dry_run:
             try:
-                total_bytes, total_files, _ = gt.registry.calculate_download_requirements(
-                    tiles_to_fetch, output, format, check_existing=False
+                total_bytes, total_files, _ = (
+                    gt.registry.calculate_download_requirements(
+                        tiles_to_fetch, output, format, check_existing=False
+                    )
                 )
             except ValueError as e:
                 rprint(f"[red]Error: {e}[/red]")
@@ -1046,16 +1151,22 @@ def download(
             # Display results
             result_table = create_table(show_header=False, box=None, padding=(0, 2))
             result_table.add_row("Files to download:", f"[cyan]{total_files:,}[/cyan]")
-            result_table.add_row("Total download size:", f"[cyan]{format_bytes(total_bytes)}[/cyan]")
-            result_table.add_row("Tiles in region:", f"[cyan]{len(tiles_to_fetch):,}[/cyan]")
+            result_table.add_row(
+                "Total download size:", f"[cyan]{format_bytes(total_bytes)}[/cyan]"
+            )
+            result_table.add_row(
+                "Tiles in region:", f"[cyan]{len(tiles_to_fetch):,}[/cyan]"
+            )
             result_table.add_row("Year:", f"[cyan]{year}[/cyan]")
             result_table.add_row("Format:", f"[cyan]{format.upper()}[/cyan]")
 
-            rprint(create_panel(
-                result_table,
-                title="[bold]Dry Run Results[/bold]",
-                border_style="green",
-            ))
+            rprint(
+                create_panel(
+                    result_table,
+                    title="[bold]Dry Run Results[/bold]",
+                    border_style="green",
+                )
+            )
 
             if format == "tiff":
                 rprint("[dim]Note: TIFF sizes are estimates (4x quantized size)[/dim]")
@@ -1105,11 +1216,15 @@ def download(
                 skipped_files = 0
 
                 # Calculate total download size from registry using Registry method
-                progress.update(task, completed=0, total=100, status="Calculating download size...")
+                progress.update(
+                    task, completed=0, total=100, status="Calculating download size..."
+                )
 
                 try:
-                    total_bytes, _, file_sizes = gt.registry.calculate_download_requirements(
-                        tiles_to_fetch, output, format
+                    total_bytes, _, file_sizes = (
+                        gt.registry.calculate_download_requirements(
+                            tiles_to_fetch, output, format
+                        )
                     )
                 except ValueError as e:
                     rprint(f"[red]Error: {e}[/red]")
@@ -1122,6 +1237,7 @@ def download(
                 # Create a progress callback factory that updates overall byte progress
                 def create_download_callback(file_key):
                     """Create a callback for download progress updates with overall byte tracking."""
+
                     def callback(current, total, status):
                         nonlocal bytes_downloaded
                         # Update total bytes progress
@@ -1130,8 +1246,9 @@ def download(
                             task,
                             completed=bytes_downloaded + file_bytes_so_far,
                             total=total_bytes,
-                            status=status
+                            status=status,
                         )
+
                     return callback
 
                 def mark_file_complete(file_key):
@@ -1141,15 +1258,26 @@ def download(
                         bytes_downloaded += file_sizes[file_key]
 
                 # Reset progress bar for download
-                progress.update(task, completed=0, total=total_bytes, status=f"Downloading {total_size_str}...")
+                progress.update(
+                    task,
+                    completed=0,
+                    total=total_bytes,
+                    status=f"Downloading {total_size_str}...",
+                )
 
                 # Process each tile
                 for idx, (tile_year, tile_lon, tile_lat) in enumerate(tiles_to_fetch):
                     # Set up final paths with structure mirroring remote
-                    embedding_rel, scales_rel = tile_to_embedding_paths(tile_lon, tile_lat, tile_year)
+                    embedding_rel, scales_rel = tile_to_embedding_paths(
+                        tile_lon, tile_lat, tile_year
+                    )
                     embedding_final = output / EMBEDDINGS_DIR_NAME / embedding_rel
                     scales_final = output / EMBEDDINGS_DIR_NAME / scales_rel
-                    landmask_final = output / LANDMASKS_DIR_NAME / tile_to_landmask_filename(tile_lon, tile_lat)
+                    landmask_final = (
+                        output
+                        / LANDMASKS_DIR_NAME
+                        / tile_to_landmask_filename(tile_lon, tile_lat)
+                    )
 
                     # Create cache keys for tracking
                     embedding_key = f"embedding_{tile_year}_{tile_lon}_{tile_lat}"
@@ -1167,14 +1295,18 @@ def download(
                                 lat=tile_lat,
                                 is_scales=False,
                                 progressbar=False,
-                                progress_callback=create_download_callback(embedding_key),
-                                refresh=True
+                                progress_callback=create_download_callback(
+                                    embedding_key
+                                ),
+                                refresh=True,
                             )
                             mark_file_complete(embedding_key)
                             files.append(str(embedding_final))
                             downloaded_files += 1
                         except Exception as e:
-                            rprint(f"[yellow]Warning: Failed to download embedding for ({tile_lon}, {tile_lat}, {tile_year}): {e}[/yellow]")
+                            rprint(
+                                f"[yellow]Warning: Failed to download embedding for ({tile_lon}, {tile_lat}, {tile_year}): {e}[/yellow]"
+                            )
                             continue
 
                     # Download scales file (fetch() saves directly to embeddings_dir)
@@ -1189,13 +1321,15 @@ def download(
                                 is_scales=True,
                                 progressbar=False,
                                 progress_callback=create_download_callback(scales_key),
-                                refresh=True
+                                refresh=True,
                             )
                             mark_file_complete(scales_key)
                             files.append(str(scales_final))
                             downloaded_files += 1
                         except Exception as e:
-                            rprint(f"[yellow]Warning: Failed to download scales for ({tile_lon}, {tile_lat}, {tile_year}): {e}[/yellow]")
+                            rprint(
+                                f"[yellow]Warning: Failed to download scales for ({tile_lon}, {tile_lat}, {tile_year}): {e}[/yellow]"
+                            )
 
                     # Download landmask file (fetch_landmask() saves directly to embeddings_dir)
                     if landmask_final.exists():
@@ -1206,29 +1340,41 @@ def download(
                                 lon=tile_lon,
                                 lat=tile_lat,
                                 progressbar=False,
-                                progress_callback=create_download_callback(landmask_key),
-                                refresh=True
+                                progress_callback=create_download_callback(
+                                    landmask_key
+                                ),
+                                refresh=True,
                             )
                             mark_file_complete(landmask_key)
                             files.append(str(landmask_final))
                             downloaded_files += 1
                         except Exception as e:
-                            rprint(f"[yellow]Warning: Failed to download landmask for ({tile_lon}, {tile_lat}): {e}[/yellow]")
+                            rprint(
+                                f"[yellow]Warning: Failed to download landmask for ({tile_lon}, {tile_lat}): {e}[/yellow]"
+                            )
 
                 # Final progress update
                 progress.update(task, completed=total_bytes, status="Complete")
 
-                downloaded_size_str = format_bytes(bytes_downloaded) if bytes_downloaded > 0 else "0B"
+                downloaded_size_str = (
+                    format_bytes(bytes_downloaded) if bytes_downloaded > 0 else "0B"
+                )
                 rprint(
                     f"\n[green]{emoji('✅ ')}SUCCESS: Downloaded {len(tiles_to_fetch)} tiles ({downloaded_files} files, {downloaded_size_str})[/green]"
                 )
                 if skipped_files > 0:
-                    rprint(f"   Skipped {skipped_files} existing files (resume capability)")
+                    rprint(
+                        f"   Skipped {skipped_files} existing files (resume capability)"
+                    )
                 rprint("   Format: Quantized embeddings with separate scales files")
-                rprint("   Structure: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/grid_{lon}_{lat}.npy")
+                rprint(
+                    "   Structure: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/grid_{lon}_{lat}.npy"
+                )
                 rprint("             global_0.1_degree_tiff_all/grid_{lon}_{lat}.tiff")
                 if bands_list:
-                    rprint("   [yellow]Note: Band selection not supported in NPY format (use TIFF format instead)[/yellow]")
+                    rprint(
+                        "   [yellow]Note: Band selection not supported in NPY format (use TIFF format instead)[/yellow]"
+                    )
 
         if verbose or list_files:
             rprint(f"\n[blue]{emoji('📁 ')}Created files:[/blue]")
@@ -1276,10 +1422,14 @@ def download(
         tips_table.add_row("Process tiles individually or in groups as needed")
         if format == "tiff":
             tips_table.add_row("Create PCA visualization:")
-            tips_table.add_row(f"  [cyan]geotessera visualize {output} pca_mosaic.tif[/cyan]")
+            tips_table.add_row(
+                f"  [cyan]geotessera visualize {output} pca_mosaic.tif[/cyan]"
+            )
 
         rprint(
-            create_panel(tips_table, title="[bold] Next steps[/bold]", border_style="green")
+            create_panel(
+                tips_table, title="[bold] Next steps[/bold]", border_style="green"
+            )
         )
 
     except Exception as e:
@@ -1290,9 +1440,10 @@ def download(
         raise typer.Exit(1)
     finally:
         # Clean up temporary region file if downloaded from URL
-        if 'region_file_temp' in locals() and region_file_temp:
+        if "region_file_temp" in locals() and region_file_temp:
             try:
                 import os
+
                 os.unlink(region_file_temp)
             except Exception:
                 pass  # Ignore cleanup errors
@@ -1306,16 +1457,30 @@ def visualize(
         str, typer.Option("--crs", help="Target CRS for reprojection")
     ] = "EPSG:3857",
     n_components: Annotated[
-        int, typer.Option("--n-components", help="Number of PCA components. Only first 3 used for RGB visualization - increase for analysis/research.")
+        int,
+        typer.Option(
+            "--n-components",
+            help="Number of PCA components. Only first 3 used for RGB visualization - increase for analysis/research.",
+        ),
     ] = 3,
     balance_method: Annotated[
-        str, typer.Option("--balance", help="RGB balance method: histogram (default), percentile, or adaptive")
+        str,
+        typer.Option(
+            "--balance",
+            help="RGB balance method: histogram (default), percentile, or adaptive",
+        ),
     ] = "histogram",
     percentile_low: Annotated[
-        float, typer.Option("--percentile-low", help="Lower percentile for percentile balance method")
+        float,
+        typer.Option(
+            "--percentile-low", help="Lower percentile for percentile balance method"
+        ),
     ] = 2.0,
     percentile_high: Annotated[
-        float, typer.Option("--percentile-high", help="Upper percentile for percentile balance method")
+        float,
+        typer.Option(
+            "--percentile-high", help="Upper percentile for percentile balance method"
+        ),
     ] = 98.0,
 ):
     """Create PCA visualization from GeoTIFF or NPY format embeddings.
@@ -1358,28 +1523,34 @@ def visualize(
         # Then create web visualization
         geotessera webmap pca_mosaic.tif --serve
     """
-    
+
     # Validate output file extension
     if output_file.suffix.lower() not in [".tif", ".tiff"]:
         rprint("[red]Error: Output file must have .tif or .tiff extension[/red]")
         raise typer.Exit(1)
-        
+
     # Validate n_components
     if n_components < 1:
         rprint("[red]Error: Number of components must be at least 1[/red]")
         raise typer.Exit(1)
     if n_components < 3:
-        rprint(f"[yellow]Warning: Using {n_components} component(s). RGB visualization works best with 3+ components[/yellow]")
-    
+        rprint(
+            f"[yellow]Warning: Using {n_components} component(s). RGB visualization works best with 3+ components[/yellow]"
+        )
+
     # Validate balance_method
     if balance_method not in ["percentile", "histogram", "adaptive"]:
-        rprint(f"[red]Error: Invalid balance method '{balance_method}'. Must be 'percentile', 'histogram', or 'adaptive'[/red]")
+        rprint(
+            f"[red]Error: Invalid balance method '{balance_method}'. Must be 'percentile', 'histogram', or 'adaptive'[/red]"
+        )
         raise typer.Exit(1)
-    
+
     # Validate percentile ranges
     if balance_method == "percentile":
         if not (0 <= percentile_low < percentile_high <= 100):
-            rprint(f"[red]Error: Invalid percentile range [{percentile_low}, {percentile_high}]. Must be 0 <= low < high <= 100[/red]")
+            rprint(
+                f"[red]Error: Invalid percentile range [{percentile_low}, {percentile_high}]. Must be 0 <= low < high <= 100[/red]"
+            )
             raise typer.Exit(1)
 
     # Discover tiles (handles both GeoTIFF and NPY formats automatically)
@@ -1392,7 +1563,9 @@ def visualize(
         rprint(f"[red]No tiles found in\n{input_path}[/red]")
         rprint("[yellow]Expected either:[/yellow]")
         rprint("  - GeoTIFF files: *.tif/*.tiff in the directory")
-        rprint("  - NPY format: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/*.npy structure")
+        rprint(
+            "  - NPY format: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/*.npy structure"
+        )
         raise typer.Exit(1)
 
     rprint(f"[blue]Found {len(tiles)} tiles ({tiles[0]._format} format)[/blue]")
@@ -1409,13 +1582,22 @@ def visualize(
         TimeRemainingColumn(),
     ) as progress:
         task = progress.add_task(
-            f"Creating PCA mosaic ({n_components} components)...", total=5, status="Starting..."
+            f"Creating PCA mosaic ({n_components} components)...",
+            total=5,
+            status="Starting...",
         )
 
         try:
             # Create a progress callback that maps to our 5-step progress
-            def visualization_progress_callback(current: float, total: float, status: str = None):
-                progress.update(task, completed=current, total=total, status=status or "Processing...")
+            def visualization_progress_callback(
+                current: float, total: float, status: str = None
+            ):
+                progress.update(
+                    task,
+                    completed=current,
+                    total=total,
+                    status=status or "Processing...",
+                )
 
             # Convert tiles to dict format for create_pca_mosaic
             tiles_data = [tile.to_dict() for tile in tiles]
@@ -1430,13 +1612,13 @@ def visualize(
                 balance_method=balance_method,
                 percentile_range=(percentile_low, percentile_high),
             )
-            
+
             progress.update(task, completed=5, total=5, status="Complete")
 
         except Exception as e:
             rprint(f"[red]Error creating PCA visualization: {e}[/red]")
             raise typer.Exit(1)
-    
+
     # Success output after progress bar completes
     # Force line break before filename to avoid wrapping issues in tests
     rprint(f"[green]Created PCA mosaic:\n{output_file}[/green]")
@@ -1448,10 +1630,18 @@ def visualize(
 @app.command()
 def webmap(
     rgb_mosaic: Annotated[Path, typer.Argument(help="3-band RGB mosaic GeoTIFF file")],
-    output: Annotated[Path, typer.Option("--output", "-o", help="Output directory")] = None,
-    min_zoom: Annotated[int, typer.Option("--min-zoom", help="Min zoom for web tiles")] = 8,
-    max_zoom: Annotated[int, typer.Option("--max-zoom", help="Max zoom for web tiles")] = 15,
-    initial_zoom: Annotated[int, typer.Option("--initial-zoom", help="Initial zoom level")] = 10,
+    output: Annotated[
+        Path, typer.Option("--output", "-o", help="Output directory")
+    ] = None,
+    min_zoom: Annotated[
+        int, typer.Option("--min-zoom", help="Min zoom for web tiles")
+    ] = 8,
+    max_zoom: Annotated[
+        int, typer.Option("--max-zoom", help="Max zoom for web tiles")
+    ] = 15,
+    initial_zoom: Annotated[
+        int, typer.Option("--initial-zoom", help="Initial zoom level")
+    ] = 10,
     force_regenerate: Annotated[
         bool,
         typer.Option(
@@ -1461,7 +1651,9 @@ def webmap(
     serve_immediately: Annotated[
         bool, typer.Option("--serve/--no-serve", help="Start web server immediately")
     ] = False,
-    port: Annotated[int, typer.Option("--port", "-p", help="Port for web server")] = 8000,
+    port: Annotated[
+        int, typer.Option("--port", "-p", help="Port for web server")
+    ] = 8000,
     region_file: Annotated[
         Optional[str],
         typer.Option(
@@ -1478,10 +1670,10 @@ def webmap(
     ] = False,
 ):
     """Create web tiles and viewer from a 3-band RGB mosaic.
-    
+
     This command takes an RGB GeoTIFF mosaic, reprojects it if needed for web viewing,
     generates web tiles, creates an HTML viewer, and optionally starts a web server.
-    
+
     Example workflow:
         1. geotessera download --bbox lon1,lat1,lon2,lat2 tiles/
         2. geotessera visualize tiles/ --type rgb --output mosaics/
@@ -1490,11 +1682,11 @@ def webmap(
     if not rgb_mosaic.exists():
         rprint(f"[red]Error: Mosaic file {rgb_mosaic} does not exist[/red]")
         raise typer.Exit(1)
-    
-    if rgb_mosaic.suffix.lower() not in ['.tif', '.tiff']:
+
+    if rgb_mosaic.suffix.lower() not in [".tif", ".tiff"]:
         rprint("[red]Error: Input must be a GeoTIFF file (.tif/.tiff)[/red]")
         raise typer.Exit(1)
-    
+
     # Handle region file URL download
     region_file_temp = None
     region_file_path = None
@@ -1508,7 +1700,9 @@ def webmap(
                 # Check if local file exists
                 region_path = Path(region_file)
                 if not region_path.exists():
-                    rprint(f"[red]Error: Region file {region_file} does not exist[/red]")
+                    rprint(
+                        f"[red]Error: Region file {region_file} does not exist[/red]"
+                    )
                     raise typer.Exit(1)
                 region_file_path = str(region_path)
         except Exception as e:
@@ -1517,17 +1711,18 @@ def webmap(
             if region_file_temp:
                 try:
                     import os
+
                     os.unlink(region_file_temp)
                 except Exception:
                     pass
             raise typer.Exit(1)
-    
+
     # Default output directory
     if output is None:
         output = Path(f"{rgb_mosaic.stem}_webmap")
-    
+
     output.mkdir(parents=True, exist_ok=True)
-    
+
     with create_progress(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
@@ -1536,14 +1731,13 @@ def webmap(
         TextColumn("[dim]{task.fields[status]}", justify="left"),
         TimeRemainingColumn(),
     ) as progress:
-        
         # Step 1: Prepare mosaic for web (reproject if needed)
         web_mosaic_path = output / "web_ready_mosaic.tif"
-        
+
         task1 = progress.add_task(
             "Preparing mosaic for web...", total=100, status="Starting..."
         )
-        
+
         try:
             actual_mosaic_path = prepare_mosaic_for_web(
                 input_mosaic=str(rgb_mosaic),
@@ -1551,7 +1745,7 @@ def webmap(
                 target_crs="EPSG:3857",
                 progress_callback=create_progress_callback(progress, task1),
             )
-            
+
             # If no reprojection was needed, use original file
             if actual_mosaic_path == str(rgb_mosaic):
                 actual_mosaic_path = str(rgb_mosaic)
@@ -1559,29 +1753,30 @@ def webmap(
             else:
                 # Force line break before filename to avoid wrapping issues
                 mosaic_status = f"Created web-ready mosaic:\n{web_mosaic_path}"
-                
+
         except Exception as e:
             rprint(f"[red]Error preparing mosaic: {e}[/red]")
             raise typer.Exit(1)
-        
+
         # Step 2: Generate web tiles
         tiles_dir = output / "tiles"
-        
+
         # Check if we should regenerate tiles
         if force_regenerate and tiles_dir.exists():
             import shutil
+
             shutil.rmtree(tiles_dir)
             tiles_regenerated = True
         else:
             tiles_regenerated = False
-        
+
         tiles_force_hint = None
-        
+
         if not tiles_dir.exists() or not any(tiles_dir.iterdir()):
             task2 = progress.add_task(
                 "Generating web tiles...", total=100, status="Starting..."
             )
-            
+
             try:
                 result_dir = geotiff_to_web_tiles(
                     geotiff_path=actual_mosaic_path,
@@ -1592,38 +1787,50 @@ def webmap(
                 progress.update(task2, completed=100)
                 # Force line break before filename to avoid wrapping issues
                 tiles_status = f"Created web tiles in:\n{result_dir}"
-                
+
             except Exception as e:
                 rprint(f"[red]Error generating web tiles: {e}[/red]")
                 raise typer.Exit(1)
         else:
             tiles_status = f"Using existing tiles in: {tiles_dir}"
             tiles_force_hint = "Use --force to regenerate tiles"
-        
+
         # Step 3: Create HTML viewer
         html_path = output / "viewer.html"
-        
+
         task3 = progress.add_task(
             "Creating web viewer...", total=100, status="Starting..."
         )
-        
+
         try:
             # Get mosaic bounds for centering
             import rasterio
+
             with rasterio.open(actual_mosaic_path) as src:
                 bounds = src.bounds
                 # Transform bounds to lat/lon if needed
-                if src.crs != 'EPSG:4326':
+                if src.crs != "EPSG:4326":
                     from rasterio.warp import transform_bounds
+
                     lon_min, lat_min, lon_max, lat_max = transform_bounds(
-                        src.crs, 'EPSG:4326', bounds.left, bounds.bottom, bounds.right, bounds.top
+                        src.crs,
+                        "EPSG:4326",
+                        bounds.left,
+                        bounds.bottom,
+                        bounds.right,
+                        bounds.top,
                     )
                 else:
-                    lon_min, lat_min, lon_max, lat_max = bounds.left, bounds.bottom, bounds.right, bounds.top
-                    
+                    lon_min, lat_min, lon_max, lat_max = (
+                        bounds.left,
+                        bounds.bottom,
+                        bounds.right,
+                        bounds.top,
+                    )
+
                 center_lat = (lat_min + lat_max) / 2
                 center_lon = (lon_min + lon_max) / 2
-            
+
             create_simple_web_viewer(
                 tiles_dir=str(tiles_dir),
                 output_html=str(html_path),
@@ -1637,32 +1844,34 @@ def webmap(
             progress.update(task3, completed=100)
             # Force line break before filename to avoid wrapping issues
             viewer_status = f"Created web viewer:\n{html_path}"
-            
+
         except Exception as e:
             rprint(f"[red]Error creating web viewer: {e}[/red]")
             raise typer.Exit(1)
-    
+
     # Summary
     # Force line break before filename to avoid wrapping issues
     rprint(f"\n[green]{emoji('✅ ')}Web visualization ready in:\n{output}[/green]")
-    
+
     # Print status messages from the progress context
     rprint(f"[green]{mosaic_status}[/green]")
-    
+
     if tiles_regenerated:
         rprint("[yellow]Removed existing tiles directory for regeneration[/yellow]")
-    
+
     rprint(f"[green]{tiles_status}[/green]")
     if tiles_force_hint:
         rprint(f"[blue]{tiles_force_hint}[/blue]")
-    
+
     rprint(f"[green]{viewer_status}[/green]")
-    
+
     if serve_immediately:
         rprint("[blue]Starting web server...[/blue]")
         # Call the serve function directly
         try:
-            serve(directory=output, port=port, open_browser=True, html_file="viewer.html")
+            serve(
+                directory=output, port=port, open_browser=True, html_file="viewer.html"
+            )
         except KeyboardInterrupt:
             rprint("\n[green]Web server stopped.[/green]")
         except Exception as e:
@@ -1672,11 +1881,12 @@ def webmap(
     else:
         rprint("[blue]To view the map, start a web server:[/blue]")
         rprint(f"[cyan]  geotessera serve {output} --port {port}[/cyan]")
-    
+
     # Clean up temporary region file if downloaded from URL
     if region_file_temp:
         try:
             import os
+
             os.unlink(region_file_temp)
         except Exception:
             pass  # Ignore cleanup errors
@@ -1790,7 +2000,9 @@ def serve(
         # Give server a moment to start
         time.sleep(0.5)
 
-        rprint(f"[green]{emoji('✅ ')}Web server running at: http://localhost:{port}/[/green]")
+        rprint(
+            f"[green]{emoji('✅ ')}Web server running at: http://localhost:{port}/[/green]"
+        )
 
         if open_browser:
             rprint(f"[blue]Opening browser: {browser_url}[/blue]")
@@ -2380,6 +2592,7 @@ def _get_globe_html_template() -> str:
 def version():
     """Print the geotessera library version."""
     from geotessera import __version__
+
     print(__version__)
 
 
@@ -2391,7 +2604,13 @@ def main():
     logging.basicConfig(
         level=logging.INFO,
         format="%(message)s",
-        handlers=[RichHandler(rich_tracebacks=True, show_time=False, show_path=False, console=console)] if use_rich else [logging.StreamHandler()]
+        handlers=[
+            RichHandler(
+                rich_tracebacks=True, show_time=False, show_path=False, console=console
+            )
+        ]
+        if use_rich
+        else [logging.StreamHandler()],
     )
 
     # Optionally reduce logging level for specific noisy libraries

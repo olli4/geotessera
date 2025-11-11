@@ -141,8 +141,8 @@ def visualize_global_coverage(
     This is the recommended first step before downloading data - use it to check
     what data is available in your region of interest before proceeding with downloads.
 
-    Generates a PNG map with available tiles overlaid to help users understand 
-    data availability for their regions of interest. Can focus on a specific 
+    Generates a PNG map with available tiles overlaid to help users understand
+    data availability for their regions of interest. Can focus on a specific
     region for detailed coverage analysis.
 
     Args:
@@ -155,7 +155,7 @@ def visualize_global_coverage(
         tile_alpha: Transparency of tile rectangles (0=transparent, 1=opaque)
         tile_size: Size multiplier for tile rectangles (1.0 = actual size)
         progress_callback: Optional callback function(current, total, status) for progress tracking
-        multi_year_colors: When True and year=None, uses three colors: green (all years), 
+        multi_year_colors: When True and year=None, uses three colors: green (all years),
                           blue (latest year only), orange (partial years)
         region_bbox: Optional bounding box (min_lon, min_lat, max_lon, max_lat) to focus on
         region_file: Optional path to region file (GeoJSON/Shapefile) for overlay
@@ -167,12 +167,12 @@ def visualize_global_coverage(
         >>> from geotessera import GeoTessera
         >>> gt = GeoTessera()
         >>> from geotessera.visualization import visualize_global_coverage
-        >>> 
+        >>>
         >>> # STEP 1: Check coverage for your region
-        >>> visualize_global_coverage(gt, "my_region_coverage.png", 
+        >>> visualize_global_coverage(gt, "my_region_coverage.png",
         ...                          region_file="my_study_area.geojson")
         >>> # STEP 2: Review the coverage map, then proceed to download data
-        >>> 
+        >>>
         >>> # Other examples:
         >>> visualize_global_coverage(gt, "coverage_2024.png", year=2024)
         >>> visualize_global_coverage(gt, "coverage_all.png", width_pixels=3000)  # High-res global view
@@ -196,17 +196,18 @@ def visualize_global_coverage(
         if not progress_callback:
             logger.info("Loading world map data...")
         world = gpd.read_file(geodatasets.get_path("naturalearth.land"))
-        
+
         # Clip world data to region if needed before plotting
         if region_bbox:
             from shapely.geometry import box
+
             min_lon, min_lat, max_lon, max_lat = region_bbox
             region_box = box(min_lon, min_lat, max_lon, max_lat)
             world = world.clip(region_box)
 
     # Get available embeddings (registry is already loaded at initialization)
     available_embeddings = tessera_client.registry.get_available_embeddings()
-    
+
     # Get all available years for legend use
     all_years = set(y for y, _, _ in available_embeddings)
     latest_year = max(all_years) if all_years else None
@@ -219,14 +220,20 @@ def visualize_global_coverage(
         min_lon, min_lat, max_lon, max_lat = region_bbox
         # Get tile bounds
         from .registry import tile_to_bounds
+
         west, south, east, north = tile_to_bounds(lon, lat)
         # Check for bounding box intersection
-        return not (west > max_lon or east < min_lon or south > max_lat or north < min_lat)
-    
+        return not (
+            west > max_lon or east < min_lon or south > max_lat or north < min_lat
+        )
+
     # Filter embeddings by year if specified
     if year is not None:
-        tiles = [(lon, lat) for y, lon, lat in available_embeddings 
-                if y == year and is_tile_in_region(lon, lat, region_bbox)]
+        tiles = [
+            (lon, lat)
+            for y, lon, lat in available_embeddings
+            if y == year and is_tile_in_region(lon, lat, region_bbox)
+        ]
         tile_colors = [tile_color] * len(tiles)  # Single color for specific year
         title = f"Tessera Embedding Coverage - Year {year}"
         if region_bbox:
@@ -241,31 +248,34 @@ def visualize_global_coverage(
                     if (lon, lat) not in tiles_by_location:
                         tiles_by_location[(lon, lat)] = set()
                     tiles_by_location[(lon, lat)].add(y)
-            
+
             # Categorize tiles by year coverage
             tiles = []
             tile_colors = []
-            
+
             for (lon, lat), years in tiles_by_location.items():
                 tiles.append((lon, lat))
-                
+
                 if len(years) == len(all_years):
                     # All years present - green
                     tile_colors.append("darkgreen")
                 elif latest_year in years and len(years) == 1:
-                    # Only latest year - blue  
+                    # Only latest year - blue
                     tile_colors.append("darkblue")
                 else:
                     # Partial years coverage - orange
                     tile_colors.append("darkorange")
-            
+
             title = "Tessera Embedding Coverage - Multi-Year Analysis"
             if region_bbox:
                 title += " (Region View)"
         else:
             # Get unique tile locations across all years (original behavior)
-            tile_set = set((lon, lat) for _, lon, lat in available_embeddings
-                          if is_tile_in_region(lon, lat, region_bbox))
+            tile_set = set(
+                (lon, lat)
+                for _, lon, lat in available_embeddings
+                if is_tile_in_region(lon, lat, region_bbox)
+            )
             tiles = list(tile_set)
             tile_colors = [tile_color] * len(tiles)
             title = "Tessera Embedding Coverage - All Available Years"
@@ -278,7 +288,7 @@ def visualize_global_coverage(
     # Calculate figure dimensions
     if progress_callback:
         progress_callback(0, 100, "Creating figure...")
-    
+
     # Determine aspect ratio based on region or global view
     if region_bbox:
         min_lon, min_lat, max_lon, max_lat = region_bbox
@@ -288,13 +298,13 @@ def visualize_global_coverage(
     else:
         # Global view: 180 degrees lat / 360 degrees lon = 0.5
         aspect_ratio = 0.5
-    
+
     # Calculate dimensions in inches (matplotlib still needs this internally)
     # Use a fixed DPI of 100 for simplicity
     dpi = 100
     fig_width = width_pixels / dpi
     fig_height = fig_width * aspect_ratio
-    
+
     fig, ax = plt.subplots(1, 1, figsize=(fig_width, fig_height), dpi=dpi)
 
     # Plot world map
@@ -351,7 +361,7 @@ def visualize_global_coverage(
     # Set axis properties - focus on region if specified
     if progress_callback:
         progress_callback(75, 100, "Setting up map properties...")
-    
+
     if region_bbox:
         # Zoom to region bounds with small buffer for better visualization
         min_lon, min_lat, max_lon, max_lat = region_bbox
@@ -364,7 +374,7 @@ def visualize_global_coverage(
         # Global view
         ax.set_xlim(-180, 180)
         ax.set_ylim(-90, 90)
-    
+
     ax.set_xlabel("Longitude", fontsize=12)
     ax.set_ylabel("Latitude", fontsize=12)
     ax.set_title(title, fontsize=14, fontweight="bold")
@@ -374,13 +384,19 @@ def visualize_global_coverage(
         progress_callback(77, 100, "Adding region overlay...")
     elif region_file:
         logger.info("Adding region overlay...")
-    
+
     if region_file:
         try:
             region_gdf = gpd.read_file(region_file)
             # Plot region boundary with distinctive styling
-            region_gdf.plot(ax=ax, facecolor='none', edgecolor='red', 
-                          linewidth=2, alpha=0.8, linestyle='--')
+            region_gdf.plot(
+                ax=ax,
+                facecolor="none",
+                edgecolor="red",
+                linewidth=2,
+                alpha=0.8,
+                linestyle="--",
+            )
         except Exception as e:
             if progress_callback:
                 progress_callback(77, 100, f"Warning: Could not load region file: {e}")
@@ -393,17 +409,18 @@ def visualize_global_coverage(
     # Add statistics text with timestamp and manifest info
     if progress_callback:
         progress_callback(80, 100, "Adding statistics...")
-    
+
     from datetime import datetime
+
     current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
+
     stats_text = f"Total tiles: {len(tiles):,}"
     if year is None:
         years = sorted(set(y for y, _, _ in available_embeddings))
         if years:
             stats_text += f"\nYears: {min(years)}-{max(years)}"
     stats_text += f"\nGenerated: {current_timestamp}"
-    
+
     git_hash, repo_url = tessera_client.registry.get_manifest_info()
     if repo_url and "github.com" in repo_url:
         repo_name = repo_url.split("github.com/")[-1].replace(".git", "")
@@ -424,29 +441,44 @@ def visualize_global_coverage(
     # Add legend
     if progress_callback:
         progress_callback(85, 100, "Adding legend...")
-    
+
     legend_elements = []
     if year is None and multi_year_colors:
         # Multi-year legend with three categories
         if all_years:  # Check if we have year data
-            legend_elements.extend([
-                mpatches.Patch(color="darkgreen", alpha=tile_alpha, label=f"All years ({len(all_years)} years)"),
-                mpatches.Patch(color="darkblue", alpha=tile_alpha, label=f"Latest year only ({latest_year})"),
-                mpatches.Patch(color="darkorange", alpha=tile_alpha, label="Partial years coverage"),
-            ])
+            legend_elements.extend(
+                [
+                    mpatches.Patch(
+                        color="darkgreen",
+                        alpha=tile_alpha,
+                        label=f"All years ({len(all_years)} years)",
+                    ),
+                    mpatches.Patch(
+                        color="darkblue",
+                        alpha=tile_alpha,
+                        label=f"Latest year only ({latest_year})",
+                    ),
+                    mpatches.Patch(
+                        color="darkorange",
+                        alpha=tile_alpha,
+                        label="Partial years coverage",
+                    ),
+                ]
+            )
     else:
         # Single color legend (specific year or multi_year_colors=False)
         legend_elements.append(
             mpatches.Patch(color=tile_color, alpha=tile_alpha, label="Available tiles")
         )
-    
+
     if show_countries and world is not None:
         legend_elements.append(mpatches.Patch(color="lightgray", label="Land masses"))
-    
+
     if region_file:
-        legend_elements.append(mpatches.Patch(facecolor="none", edgecolor="red", 
-                                            label="Region boundary"))
-    
+        legend_elements.append(
+            mpatches.Patch(facecolor="none", edgecolor="red", label="Region boundary")
+        )
+
     ax.legend(handles=legend_elements, loc="lower left", fontsize=10)
 
     # Save figure
@@ -471,16 +503,16 @@ def create_rgb_mosaic(
     progress_callback: Optional[Callable] = None,
 ) -> str:
     """Create an RGB visualization mosaic from multiple GeoTIFF files.
-    
+
     This function merges tiles and then extracts RGB bands.
-    
+
     Args:
         geotiff_paths: List of paths to GeoTIFF files
         output_path: Output path for RGB mosaic
         bands: Three band indices to map to RGB channels
         target_crs: Target CRS for the merged mosaic
         progress_callback: Optional callback function(current, total, status) for progress tracking
-        
+
     Returns:
         Path to created RGB mosaic file
     """
@@ -490,33 +522,34 @@ def create_rgb_mosaic(
         import tempfile
     except ImportError:
         raise ImportError("rasterio required: pip install rasterio")
-    
+
     if not geotiff_paths:
         raise ValueError("No GeoTIFF files provided")
-        
+
     if len(bands) != 3:
         raise ValueError(f"Must specify exactly 3 bands for RGB, got {len(bands)}")
-    
+
     # First merge all tiles into a single mosaic using the core function
     if progress_callback:
         progress_callback(10, 100, f"Merging {len(geotiff_paths)} tiles...")
-    
-    with tempfile.NamedTemporaryFile(suffix='.tif', delete=False) as tmp:
+
+    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
         temp_mosaic = tmp.name
-    
+
     try:
         # Use GeoTessera to merge files
         from .core import GeoTessera
+
         gt = GeoTessera()
         gt.merge_geotiffs_to_mosaic(
             geotiff_paths=geotiff_paths,
             output_path=temp_mosaic,
             target_crs=target_crs,
         )
-        
+
         if progress_callback:
             progress_callback(50, 100, f"Extracting RGB bands {bands}...")
-        
+
         # Now extract RGB bands from the merged mosaic
         with rasterio.open(temp_mosaic) as src:
             # Check we have enough bands
@@ -525,16 +558,16 @@ def create_rgb_mosaic(
                     f"Not enough bands in mosaic. Requested bands {bands}, "
                     f"but only {src.count} available"
                 )
-            
+
             # Read the selected bands
             rgb_data = np.zeros((3, src.height, src.width), dtype=np.float32)
             for i, band_idx in enumerate(bands):
                 rgb_data[i] = src.read(band_idx + 1)  # rasterio uses 1-based indexing
-            
+
             # Always normalize to 0-1 for consistent visualization
             if progress_callback:
                 progress_callback(70, 100, "Normalizing RGB bands...")
-            
+
             for i in range(3):
                 band = rgb_data[i]
                 band_min, band_max = np.nanmin(band), np.nanmax(band)
@@ -542,42 +575,47 @@ def create_rgb_mosaic(
                     rgb_data[i] = (band - band_min) / (band_max - band_min)
                 else:
                     rgb_data[i] = 0
-            
+
             if progress_callback:
                 progress_callback(80, 100, "Converting to RGB format...")
-            
+
             # Convert to uint8
             rgb_uint8 = (np.clip(rgb_data, 0, 1) * 255).astype(np.uint8)
-            
+
             if progress_callback:
-                progress_callback(90, 100, f"Writing RGB mosaic to {Path(output_path).name}...")
-            
+                progress_callback(
+                    90, 100, f"Writing RGB mosaic to {Path(output_path).name}..."
+                )
+
             # Write RGB GeoTIFF
             profile = src.profile.copy()
-            profile.update({
-                'count': 3,
-                'dtype': 'uint8',
-                'compress': 'lzw',
-                'photometric': 'RGB',
-            })
-            
-            with rasterio.open(output_path, 'w', **profile) as dst:
+            profile.update(
+                {
+                    "count": 3,
+                    "dtype": "uint8",
+                    "compress": "lzw",
+                    "photometric": "RGB",
+                }
+            )
+
+            with rasterio.open(output_path, "w", **profile) as dst:
                 dst.write(rgb_uint8)
                 dst.colorinterp = [ColorInterp.red, ColorInterp.green, ColorInterp.blue]
                 dst.update_tags(
                     TIFFTAG_ARTIST="GeoTessera",
                     TIFFTAG_IMAGEDESCRIPTION=f"RGB visualization using bands {bands}",
                 )
-    
+
     finally:
         # Clean up temp file
         import os
+
         if os.path.exists(temp_mosaic):
             os.unlink(temp_mosaic)
-    
+
     if progress_callback:
         progress_callback(100, 100, f"Completed RGB mosaic: {Path(output_path).name}")
-    
+
     return output_path
 
 
@@ -682,7 +720,7 @@ def create_pca_mosaic(
 
     for i, tile_dict in enumerate(tiles_data):
         # Data already loaded from Tile.to_dict()
-        data = tile_dict['data']
+        data = tile_dict["data"]
 
         # Flatten spatial dimensions for PCA: (height*width, bands)
         pixels = data.reshape(-1, data.shape[2])
@@ -691,39 +729,43 @@ def create_pca_mosaic(
         # Progress update
         if progress_callback:
             read_progress = 1 + (i / len(tiles_data))
-            progress_callback(read_progress, 5, f"Reading tile {i+1}/{len(tiles_data)}")
-    
+            progress_callback(
+                read_progress, 5, f"Reading tile {i + 1}/{len(tiles_data)}"
+            )
+
     # Step 2: Combine all pixel data and apply PCA
     if progress_callback:
         progress_callback(2, 5, "Applying PCA to combined data...")
-    
+
     # Combine all pixels from all tiles
     combined_pixels = np.vstack(all_pixels)
     logger.info(f"Combined data shape: {combined_pixels.shape}")
-    
+
     # Standardize the combined data
     scaler = StandardScaler()
     combined_pixels_scaled = scaler.fit_transform(combined_pixels)
-    
+
     # Apply PCA to the combined dataset
     pca = PCA(n_components=n_components)
     combined_pca = pca.fit_transform(combined_pixels_scaled)
-    
+
     explained_variance = pca.explained_variance_ratio_
     total_variance = explained_variance.sum()
-    logger.info(f"PCA explained variance: {explained_variance[:3]} (total: {total_variance:.3f})")
-    
+    logger.info(
+        f"PCA explained variance: {explained_variance[:3]} (total: {total_variance:.3f})"
+    )
+
     # Step 3: Split PCA results back into tiles and create temporary GeoTIFFs
     if progress_callback:
         progress_callback(3, 5, "Creating PCA tiles...")
-    
+
     temp_dir = tempfile.mkdtemp(prefix="pca_tiles_")
     pca_geotiff_paths = []
     pixel_idx = 0
-    
+
     # Apply selected balancing method for better color distribution
     component_scales = []
-    
+
     if balance_method == "percentile":
         # Use percentile-based scaling for better color balance
         # Each component gets independently scaled to maximize its dynamic range
@@ -733,15 +775,17 @@ def create_pca_mosaic(
             p_low = np.percentile(component_data, percentile_range[0])
             p_high = np.percentile(component_data, percentile_range[1])
             component_scales.append((p_low, p_high))
-            logger.info(f"PC{j+1} percentile scaling: [{p_low:.2f}, {p_high:.2f}]")
-    
+            logger.info(f"PC{j + 1} percentile scaling: [{p_low:.2f}, {p_high:.2f}]")
+
     elif balance_method == "histogram":
         # Apply histogram equalization to the combined PCA data first
         try:
             from skimage import exposure
         except ImportError:
-            raise ImportError("scikit-image required for histogram balance: pip install scikit-image")
-        
+            raise ImportError(
+                "scikit-image required for histogram balance: pip install scikit-image"
+            )
+
         # Apply histogram equalization globally to each component
         for j in range(min(n_components, 3)):
             component_data = combined_pca[:, j]
@@ -755,13 +799,15 @@ def create_pca_mosaic(
                 equalized = exposure.equalize_hist(normalized)
                 # Update the combined PCA data with equalized values
                 combined_pca[:, j] = equalized
-            
+
             # Store the new min/max after equalization
             new_min = combined_pca[:, j].min()
             new_max = combined_pca[:, j].max()
             component_scales.append((new_min, new_max))
-            logger.info(f"PC{j+1} histogram equalized: [{new_min:.2f}, {new_max:.2f}]")
-    
+            logger.info(
+                f"PC{j + 1} histogram equalized: [{new_min:.2f}, {new_max:.2f}]"
+            )
+
     elif balance_method == "adaptive":
         # Adaptive scaling based on variance
         for j in range(min(n_components, 3)):
@@ -772,25 +818,29 @@ def create_pca_mosaic(
             p_low = mean - 2.5 * std
             p_high = mean + 2.5 * std
             component_scales.append((p_low, p_high))
-            logger.info(f"PC{j+1} adaptive scaling (μ±2.5σ): [{p_low:.2f}, {p_high:.2f}]")
-    
+            logger.info(
+                f"PC{j + 1} adaptive scaling (μ±2.5σ): [{p_low:.2f}, {p_high:.2f}]"
+            )
+
     else:
         raise ValueError(f"Unknown balance_method: {balance_method}")
-    
+
     for i, tile_info in enumerate(tiles_data):
-        height, width = tile_info['height'], tile_info['width']
+        height, width = tile_info["height"], tile_info["width"]
         n_pixels = height * width
-        
+
         # Extract this tile's PCA results
-        tile_pca_pixels = combined_pca[pixel_idx:pixel_idx + n_pixels]
+        tile_pca_pixels = combined_pca[pixel_idx : pixel_idx + n_pixels]
         pixel_idx += n_pixels
-        
+
         # Reshape back to image: (pixels, components) -> (height, width, components)
         tile_pca_image = tile_pca_pixels.reshape(height, width, n_components)
-        
+
         # Normalize to 0-255 for visualization with per-component scaling
-        pca_normalized = np.zeros((height, width, min(n_components, 3)), dtype=np.float32)
-        
+        pca_normalized = np.zeros(
+            (height, width, min(n_components, 3)), dtype=np.float32
+        )
+
         for j in range(min(n_components, 3)):
             component = tile_pca_image[:, :, j]
             # Use per-component scaling for better balance
@@ -800,42 +850,46 @@ def create_pca_mosaic(
                 pca_normalized[:, :, j] = normalized
             else:
                 pca_normalized[:, :, j] = 0.5
-        
+
         # Convert to uint8
         output_data = (np.clip(pca_normalized, 0, 1) * 255).astype(np.uint8)
-        
+
         # Write temporary PCA tile
         temp_path = os.path.join(temp_dir, f"pca_tile_{i}.tif")
-        
+
         with rasterio.open(
-            temp_path, 'w',
-            driver='GTiff',
+            temp_path,
+            "w",
+            driver="GTiff",
             height=height,
             width=width,
             count=min(n_components, 3),
-            dtype='uint8',
-            crs=tile_info['crs'],
-            transform=tile_info['transform'],
-            compress='lzw',
+            dtype="uint8",
+            crs=tile_info["crs"],
+            transform=tile_info["transform"],
+            compress="lzw",
         ) as dst:
             for band_idx in range(min(n_components, 3)):
                 dst.write(output_data[:, :, band_idx], band_idx + 1)
                 variance_pct = explained_variance[band_idx] * 100
-                dst.set_band_description(band_idx + 1, f"PC{band_idx + 1} ({variance_pct:.1f}%)")
-        
+                dst.set_band_description(
+                    band_idx + 1, f"PC{band_idx + 1} ({variance_pct:.1f}%)"
+                )
+
         pca_geotiff_paths.append(temp_path)
-    
+
     # Step 4: Merge PCA tiles into final mosaic
     if progress_callback:
         progress_callback(4, 5, "Merging PCA mosaic...")
-    
+
     def merge_progress_callback(current: int, total: int, status: str = None):
         if progress_callback:
             step_progress = 4 + (current / max(total, 1)) * 0.9
             progress_callback(step_progress, 5, status or "Merging tiles...")
-    
+
     # Import and use GeoTessera directly
     from .core import GeoTessera
+
     gt = GeoTessera()
     gt.merge_geotiffs_to_mosaic(
         geotiff_paths=pca_geotiff_paths,
@@ -843,10 +897,12 @@ def create_pca_mosaic(
         target_crs=target_crs,
         progress_callback=merge_progress_callback,
     )
-    
+
     # Add PCA-specific metadata
-    with rasterio.open(output_path, 'r+') as dst:
-        dst.colorinterp = [ColorInterp.red, ColorInterp.green, ColorInterp.blue][:min(n_components, 3)]
+    with rasterio.open(output_path, "r+") as dst:
+        dst.colorinterp = [ColorInterp.red, ColorInterp.green, ColorInterp.blue][
+            : min(n_components, 3)
+        ]
         dst.update_tags(
             TIFFTAG_ARTIST="GeoTessera",
             TIFFTAG_IMAGEDESCRIPTION=f"Combined PCA visualization ({n_components} components, {balance_method} balanced)",
@@ -857,12 +913,12 @@ def create_pca_mosaic(
             PCA_TOTAL_VARIANCE=f"{total_variance:.3f}",
             GEOTESSERA_TARGET_CRS=target_crs,
         )
-    
+
     # Step 5: Clean up temporary files
     if progress_callback:
         progress_callback(5, 5, "Cleaning up...")
-    
+
     if os.path.exists(temp_dir):
         shutil.rmtree(temp_dir)
-    
+
     return output_path

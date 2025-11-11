@@ -26,11 +26,11 @@ class CountryLookup:
             self._cache_dir = Path(cache_dir)
         else:
             # Use platform-appropriate cache directory
-            if os.name == 'nt':
-                base = Path(os.environ.get('LOCALAPPDATA', '~')).expanduser()
+            if os.name == "nt":
+                base = Path(os.environ.get("LOCALAPPDATA", "~")).expanduser()
             else:
-                base = Path(os.environ.get('XDG_CACHE_HOME', '~/.cache')).expanduser()
-            self._cache_dir = base / 'geotessera'
+                base = Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser()
+            self._cache_dir = base / "geotessera"
 
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._countries_gdf: Optional[gpd.GeoDataFrame] = None
@@ -160,6 +160,7 @@ class CountryLookup:
         else:
             # Simple download without progress reporting
             from urllib.request import urlretrieve
+
             archive_path.parent.mkdir(parents=True, exist_ok=True)
             urlretrieve(url, str(archive_path))
 
@@ -327,7 +328,9 @@ def get_country_bbox(
     return get_country_lookup(progress_callback).get_bbox(country_name)
 
 
-def get_country_tiles(country_name: str, year: int = 2024) -> List[Tuple[int, float, float]]:
+def get_country_tiles(
+    country_name: str, year: int = 2024
+) -> List[Tuple[int, float, float]]:
     """Get list of GeoTessera tile (year, tile_lon, tile_lat) tuples that intersect with country."""
     from .core import GeoTessera
 
