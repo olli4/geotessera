@@ -2271,7 +2271,7 @@ def _get_globe_html_template() -> str:
                     if (!overlayMesh) {
                         // Create a slightly larger sphere for the overlay (close to globe surface)
                         const geometry = new THREE.SphereGeometry(
-                            100.5, // Just above globe (100) to avoid z-fighting but not stick out
+                            102, // Just above globe (100) to avoid z-fighting but not stick out
                             64,
                             64
                         );
