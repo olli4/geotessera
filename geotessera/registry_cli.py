@@ -1629,7 +1629,7 @@ def hash_command(args):
         if generate_tiff_checksums(tiles_dir, force=force) == 0:
             processed_any = True
     elif os.path.exists(tiles_dir) and year_filter is not None:
-        console.print(f"[dim]Skipping TIFF processing (year filter only applies to embeddings)[/dim]")
+        console.print("[dim]Skipping TIFF processing (year filter only applies to embeddings)[/dim]")
 
     if not processed_any:
         console.print("[red]No data directories found. Expected:[/red]")
