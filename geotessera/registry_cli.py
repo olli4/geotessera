@@ -903,17 +903,18 @@ def generate_embeddings_checksums(base_dir, force=False, dry_run=False, year_fil
     """
     from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
 
+    # Print header info before starting progress display
     if dry_run:
-        logger.info("DRY RUN MODE - no files will be modified")
-    logger.info("Generating SHA256 checksums for embeddings...")
+        console.print("[yellow]DRY RUN MODE - no files will be modified[/yellow]")
+    console.print("Generating SHA256 checksums for embeddings...")
     if force:
-        logger.info("Force mode enabled - regenerating all checksums")
+        console.print("[yellow]Force mode enabled - regenerating all checksums[/yellow]")
     else:
-        logger.info("Using smart update: only recalculating for modified files")
+        console.print("Using smart update: only recalculating for modified files")
 
     # Get number of CPU cores
     num_cores = multiprocessing.cpu_count()
-    logger.info(f"Using {num_cores} CPU cores for parallel processing")
+    console.print(f"Using [cyan]{num_cores}[/cyan] CPU cores for parallel processing")
 
     # Process each year directory
     year_dirs = []
@@ -928,9 +929,9 @@ def generate_embeddings_checksums(base_dir, force=False, dry_run=False, year_fil
 
     if not year_dirs:
         if year_filter:
-            logger.warning(f"No year directory found for {year_filter}")
+            console.print(f"[red]No year directory found for {year_filter}[/red]")
         else:
-            logger.warning("No year directories found")
+            console.print("[red]No year directories found[/red]")
         return 1
 
     total_grids = 0
@@ -948,10 +949,10 @@ def generate_embeddings_checksums(base_dir, force=False, dry_run=False, year_fil
         BarColumn(),
         TaskProgressColumn(),
         TimeRemainingColumn(),
+        console=console,
     ) as progress:
         for year in sorted(year_dirs):
             year_dir = os.path.join(base_dir, year)
-            logger.info(f"\nProcessing year: {year}")
 
             # Find all grid directories
             grid_dirs = []
@@ -999,47 +1000,45 @@ def generate_embeddings_checksums(base_dir, force=False, dry_run=False, year_fil
 
                     progress.update(task, advance=1)
 
-            if dry_run:
-                logger.info(f"  Would skip: {skipped_grids} directories (SHA256 up to date)")
-                logger.info(f"  Would update: {would_update_grids} directories (files newer than SHA256)")
-                logger.info(f"  Would create: {would_create_grids} directories (no SHA256 file)")
-                skipped_total += skipped_grids
-                would_update_total += would_update_grids
-                would_create_total += would_create_grids
-            else:
-                if skipped_grids > 0:
-                    logger.info(f"  Skipped {skipped_grids} directories with existing SHA256 files")
+            # Store counters
+            skipped_total += skipped_grids
+            would_update_total += would_update_grids
+            would_create_total += would_create_grids
 
-    # Report any errors
+    # Report any errors (after progress bars are done)
     if errors:
-        logger.error("\nErrors encountered:")
+        console.print("\n[red]Errors encountered:[/red]")
         for error in errors[:10]:  # Show first 10 errors
-            logger.error(f"  - {error}")
+            console.print(f"  [red]- {error}[/red]")
         if len(errors) > 10:
-            logger.error(f"  ... and {len(errors) - 10} more errors")
+            console.print(f"  [dim]... and {len(errors) - 10} more errors[/dim]")
 
+    # Print summary after progress bars
+    console.print()  # Blank line
     if dry_run:
-        logger.info("\n" + "="*60)
-        logger.info("DRY RUN SUMMARY")
-        logger.info("="*60)
-        logger.info(f"Total directories scanned: {total_grids}")
-        logger.info(f"  Would skip (up to date): {skipped_total}")
-        logger.info(f"  Would update (files modified): {would_update_total}")
-        logger.info(f"  Would create (no SHA256): {would_create_total}")
+        console.print("=" * 60)
+        console.print("[bold cyan]DRY RUN SUMMARY[/bold cyan]")
+        console.print("=" * 60)
+        console.print(f"Total directories scanned: [cyan]{total_grids:,}[/cyan]")
+        console.print(f"  Would skip (up to date): [green]{skipped_total:,}[/green]")
+        console.print(f"  Would update (files modified): [yellow]{would_update_total:,}[/yellow]")
+        console.print(f"  Would create (no SHA256): [yellow]{would_create_total:,}[/yellow]")
 
         if update_details:
-            logger.info("\nExample directories that would be updated:")
+            console.print("\n[bold]Example directories that would be updated:[/bold]")
             for year, grid_name, details in update_details[:10]:
                 if details == "no_sha256":
-                    logger.info(f"  {year}/{grid_name} - No SHA256 file exists")
+                    console.print(f"  [yellow]{year}/{grid_name}[/yellow] - No SHA256 file exists")
                 else:
-                    logger.info(f"  {year}/{grid_name} - {len(details)} files newer than SHA256:")
+                    console.print(f"  [yellow]{year}/{grid_name}[/yellow] - {len(details)} files newer than SHA256:")
                     for npy_file, delta in details[:3]:  # Show first 3 files
-                        logger.info(f"    - {npy_file} (+{delta:.1f}s)")
-        logger.info("\nNo files were modified (dry-run mode)")
+                        console.print(f"    - {npy_file} [dim](+{delta:.1f}s)[/dim]")
+        console.print("\n[green]No files were modified (dry-run mode)[/green]")
         return 0
     else:
-        logger.info(f"\nProcessed {processed_grids}/{total_grids} grid directories")
+        console.print(f"Processed [cyan]{processed_grids:,}[/cyan] / [cyan]{total_grids:,}[/cyan] grid directories")
+        if skipped_total > 0:
+            console.print(f"Skipped [green]{skipped_total:,}[/green] directories (SHA256 files up to date)")
         return 0 if processed_grids > 0 else 1
 
 
@@ -1603,7 +1602,7 @@ def hash_command(args):
     """Generate SHA256 checksums for embeddings and TIFF files."""
     base_dir = os.path.abspath(args.base_dir)
     if not os.path.exists(base_dir):
-        logger.error(f"Directory {base_dir} does not exist")
+        console.print(f"[red]Directory {base_dir} does not exist[/red]")
         return 1
 
     force = getattr(args, 'force', False)
@@ -1618,24 +1617,24 @@ def hash_command(args):
 
     # Process embeddings if directory exists
     if os.path.exists(repr_dir):
-        logger.info(f"Processing embeddings directory: {repr_dir}")
+        console.print(f"\n[bold]Processing embeddings directory:[/bold] {repr_dir}")
         if year_filter:
-            logger.info(f"Filtering to year: {year_filter}")
+            console.print(f"[cyan]Filtering to year:[/cyan] {year_filter}")
         if generate_embeddings_checksums(repr_dir, force=force, dry_run=dry_run, year_filter=year_filter) == 0:
             processed_any = True
 
     # Process TIFF files if directory exists (no year filtering for TIFF files)
     if os.path.exists(tiles_dir) and year_filter is None:
-        logger.info(f"Processing TIFF directory: {tiles_dir}")
+        console.print(f"\n[bold]Processing TIFF directory:[/bold] {tiles_dir}")
         if generate_tiff_checksums(tiles_dir, force=force) == 0:
             processed_any = True
     elif os.path.exists(tiles_dir) and year_filter is not None:
-        logger.info(f"Skipping TIFF processing (year filter only applies to embeddings)")
+        console.print(f"[dim]Skipping TIFF processing (year filter only applies to embeddings)[/dim]")
 
     if not processed_any:
-        logger.error("No data directories found. Expected:")
-        logger.error(f"  - {repr_dir}")
-        logger.error(f"  - {tiles_dir}")
+        console.print("[red]No data directories found. Expected:[/red]")
+        console.print(f"[red]  - {repr_dir}[/red]")
+        console.print(f"[red]  - {tiles_dir}[/red]")
         return 1
 
     return 0
