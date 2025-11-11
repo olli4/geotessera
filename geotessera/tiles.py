@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import List, Tuple, Dict
 import numpy as np
 import re
-
+import xarray as xr
+import rioxarray as rxr
 from .registry import EMBEDDINGS_DIR_NAME, LANDMASKS_DIR_NAME, tile_to_landmask_filename
 
 
@@ -34,8 +35,9 @@ class Tile:
         self.year = year
 
         # Format-specific file paths
-        self._format = None  # 'npy' or 'geotiff'
+        self._format = None  # 'npy', 'geotiff' or 'zarr'
         self._geotiff_path = None
+        self._zarr_path = None
         self._embedding_path = None
         self._scales_path = None
         self._landmask_path = None
@@ -85,6 +87,10 @@ class Tile:
             # (bands, H, W) -> (H, W, bands)
             return np.transpose(src.read(), (1, 2, 0))
 
+    def _load_from_zarr(self) -> xr.Dataset:
+        """Load dequantized data from zarr"""
+        return xr.open_dataset(self._zarr_path)
+
     def is_available(self, require_landmask: bool = True) -> bool:
         """Check if all required files exist.
 
@@ -100,6 +106,8 @@ class Tile:
                 return has_embedding
         elif self._format == 'geotiff':
             return self._geotiff_path.exists()
+        elif self._format == 'zarr':
+            return self._zarr_path.exists()
         else:
             return False
 
@@ -184,6 +192,39 @@ class Tile:
             self.height = src.height
             self.width = src.width
 
+    @classmethod
+    def from_zarr(cls, zarr_path: Path) -> 'Tile':
+        """Create from zarr file.
+
+        Args:
+            geotiff_path: Path to zarr file
+
+        Returns:
+            Tile instance backed by zarr storage
+        """
+        # Parse coordinates from filename or metadata
+        lon, lat, year = _parse_zarr_filename(zarr_path)
+        tile = cls(lon, lat, year)
+
+        # Set format and path
+        tile._format = 'zarr'
+        tile._zarr_path = Path(zarr_path)
+
+        # Load spatial metadata from GeoTIFF
+        tile._load_spatial_metadata_from_zarr()
+
+        return tile
+    
+    def _load_spatial_metadata_from_zarr(self):
+        """Load spatial metadata from zarr"""
+        
+        da = xr.open_dataset(self._zarr_path)
+        self.crs = da['spatial_ref'].crs_wkt
+        self.transform = da.rio.transform
+        self.bounds = da.rio.bounds
+        self.height = da.rio.height
+        self.width = da.rio.width
+
     # -------------------------------------------------------------------------
     # Convenience methods
     # -------------------------------------------------------------------------
@@ -261,7 +302,7 @@ class Tile:
 def discover_tiles(directory: Path) -> List[Tile]:
     """Auto-detect format and discover all tiles.
 
-    Prefers NPY format when both NPY and GeoTIFF formats are present.
+    Prefers NPY format when both NPY, GeoTIFF and zarr formats are present.
 
     Args:
         directory: Directory containing tiles
@@ -279,7 +320,12 @@ def discover_tiles(directory: Path) -> List[Tile]:
             return discover_npy_tiles(directory)
 
     # Default to GeoTIFF discovery (will search recursively)
-    return discover_geotiff_tiles(directory)
+    tiff_files = discover_geotiff_tiles(directory)
+
+    if tiff_files:
+        return tiff_files
+
+    return discover_zarr_tiles(directory)
 
 
 def discover_npy_tiles(base_dir: Path) -> List[Tile]:
@@ -345,6 +391,31 @@ def discover_geotiff_tiles(directory: Path) -> List[Tile]:
     return sorted(tiles, key=lambda t: (t.year, t.lat, t.lon))
 
 
+def discover_zarr_tiles(directory: Path) -> List[Tile]:
+    """Discover zarr tiles.
+
+    Args:
+        directory: Directory containing .zarr files
+
+    Returns:
+        List of Tile objects with spatial metadata loaded
+    """
+    import logging
+
+    tiles = []
+
+    for pattern in ["*.zarr"]:
+        for zarr_file in directory.rglob(pattern):
+            # Skip landmask files (they're in a different directory and have different naming)
+            try:
+                tile = Tile.from_zarr(zarr_file)
+                tiles.append(tile)
+            except Exception as e:
+                logging.warning(f"Failed to load tile {zarr_file}: {e}")
+
+    return sorted(tiles, key=lambda t: (t.year, t.lat, t.lon))
+
+
 def discover_formats(directory: Path) -> Dict[str, List[Tile]]:
     """Discover tiles in all available formats.
 
@@ -352,7 +423,8 @@ def discover_formats(directory: Path) -> Dict[str, List[Tile]]:
         directory: Directory containing tiles
 
     Returns:
-        Dictionary mapping format names to lists of tiles: {'npy': [...], 'geotiff': [...]}
+        Dictionary mapping format names to lists of tiles: 
+        {'npy': [...], 'geotiff': [...], 'zarr': [...]}
     """
     formats = {}
 
@@ -365,6 +437,11 @@ def discover_formats(directory: Path) -> Dict[str, List[Tile]]:
     geotiff_tiles = discover_geotiff_tiles(directory)
     if geotiff_tiles:
         formats['geotiff'] = geotiff_tiles
+
+    # Check for zarr format
+    zarr_tiles = discover_zarr_tiles(directory)
+    if geotiff_tiles:
+        formats['zarr'] = zarr_tiles
 
     return formats
 
@@ -425,3 +502,25 @@ def _parse_geotiff_filename(path: Path) -> Tuple[float, float, int]:
 
     # If no patterns match, raise an error
     raise ValueError(f"Cannot parse GeoTIFF filename: {path.name}. Expected format: grid_<lon>_<lat>_<year>.tif")
+
+def _parse_zarr_filename(path: Path) -> Tuple[float, float, int]:
+    """Parse lon, lat, year from zarr filename.
+
+    Tries multiple patterns. If parsing fails, raises ValueError.
+
+    Args:
+        path: Path to zarr file
+
+    Returns:
+        Tuple of (lon, lat, year)
+
+    Raises:
+        ValueError: If filename cannot be parsed
+    """
+    # Try pattern: grid_0.15_52.05_2024.tif
+    match = re.match(r"grid_(-?\d+\.\d+)_(-?\d+\.\d+)_(\d{4})\.zarr?", path.name)
+    if match:
+        return float(match.group(1)), float(match.group(2)), int(match.group(3))
+
+    # If no patterns match, raise an error
+    raise ValueError(f"Cannot parse zarr filename: {path.name}. Expected format: grid_<lon>_<lat>_<year>.zarr")
