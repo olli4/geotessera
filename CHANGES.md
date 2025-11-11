@@ -1,4 +1,4 @@
-## v0.7.0 (2025-11-09)
+## v0.7.0 (2025-11-11)
 
 This release moves to a Parquet-based registry for more efficient handling of
 the growing embeddings metadata for TESSERA. It no longer maintains a central
