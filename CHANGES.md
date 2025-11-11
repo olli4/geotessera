@@ -29,6 +29,11 @@ continue to evolve as we add more usecases, so please create issues on
   - Hash verification is **enabled by default** for data integrity
 - **Lazy iterators** for reducing memory usage for large ROIs.
 
+Note that the default registry hosting is now at <https://dl2.geotessera.org/v1/>
+instead of the older server, as we had to upgrade our hosting to support the large
+number of embeddings being generated for global coverage. We plan on bringing more
+diverse hosting options online before the end of 2025.
+
 ### CLI Changes
 
 - **New global options**:
