@@ -824,7 +824,7 @@ def process_grid_checksum(args):
     - force=True, OR
     - Any .npy file has mtime newer than the SHA256 file
     """
-    year_dir, grid_name, force = args
+    year_dir, grid_name, force, dry_run = args
     grid_dir = os.path.join(year_dir, grid_name)
     sha256_file = os.path.join(grid_dir, "SHA256")
 
@@ -837,15 +837,28 @@ def process_grid_checksum(args):
 
         # Check if any .npy file is newer than the SHA256 file
         needs_update = False
+        newer_files = []
         for npy_file in npy_files:
             npy_path = os.path.join(grid_dir, npy_file)
-            if os.path.getmtime(npy_path) > sha256_mtime:
+            npy_mtime = os.path.getmtime(npy_path)
+            if npy_mtime > sha256_mtime:
                 needs_update = True
-                break
+                newer_files.append((npy_file, npy_mtime - sha256_mtime))
 
         if not needs_update:
             # All files are older than SHA256 file, skip
-            return (grid_name, len(npy_files), True, "skipped")
+            return (grid_name, len(npy_files), True, "skipped", None)
+        elif dry_run:
+            # In dry-run mode, report what would be updated
+            return (grid_name, len(npy_files), True, "would_update", newer_files)
+
+    elif not os.path.exists(sha256_file) and dry_run:
+        # No SHA256 file exists - would need to create
+        return (grid_name, len(npy_files), True, "would_create", None)
+
+    if dry_run:
+        # In dry-run mode, don't actually do anything
+        return (grid_name, len(npy_files), True, "dry_run", None)
 
     if npy_files:
         try:
@@ -862,16 +875,16 @@ def process_grid_checksum(args):
             with open(sha256_file, "w") as f:
                 f.write(result.stdout)
 
-            return (grid_name, len(npy_files), True, None)
+            return (grid_name, len(npy_files), True, None, None)
         except subprocess.CalledProcessError as e:
-            return (grid_name, len(npy_files), False, f"CalledProcessError: {e}")
+            return (grid_name, len(npy_files), False, f"CalledProcessError: {e}", None)
         except Exception as e:
-            return (grid_name, len(npy_files), False, f"Exception: {e}")
+            return (grid_name, len(npy_files), False, f"Exception: {e}", None)
 
-    return (grid_name, 0, True, None)
+    return (grid_name, 0, True, None, None)
 
 
-def generate_embeddings_checksums(base_dir, force=False):
+def generate_embeddings_checksums(base_dir, force=False, dry_run=False, year_filter=None):
     """Generate SHA256 checksums for .npy files in each embeddings subdirectory.
 
     Only recalculates checksums for grid directories where:
@@ -881,9 +894,17 @@ def generate_embeddings_checksums(base_dir, force=False):
 
     This optimization makes subsequent runs much faster by only updating
     checksums when files have actually changed.
+
+    Args:
+        base_dir: Base directory containing year subdirectories
+        force: Force regeneration even if SHA256 files are up to date
+        dry_run: Don't actually update files, just report what would be done
+        year_filter: Optional year to process (e.g. 2024), or None for all years
     """
     from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
 
+    if dry_run:
+        logger.info("DRY RUN MODE - no files will be modified")
     logger.info("Generating SHA256 checksums for embeddings...")
     if force:
         logger.info("Force mode enabled - regenerating all checksums")
@@ -898,17 +919,29 @@ def generate_embeddings_checksums(base_dir, force=False):
     year_dirs = []
     for item in os.listdir(base_dir):
         if item.isdigit() and len(item) == 4:  # Year directories
+            # Apply year filter if specified
+            if year_filter is not None and int(item) != year_filter:
+                continue
             year_path = os.path.join(base_dir, item)
             if os.path.isdir(year_path):
                 year_dirs.append(item)
 
     if not year_dirs:
-        logger.warning("No year directories found")
+        if year_filter:
+            logger.warning(f"No year directory found for {year_filter}")
+        else:
+            logger.warning("No year directories found")
         return 1
 
     total_grids = 0
     processed_grids = 0
+    skipped_total = 0
+    would_update_total = 0
+    would_create_total = 0
     errors = []
+
+    # For dry-run, collect details
+    update_details = []
 
     with Progress(
         TextColumn("[progress.description]{task.description}"),
@@ -931,7 +964,7 @@ def generate_embeddings_checksums(base_dir, force=False):
             total_grids += len(grid_dirs)
 
             # Prepare arguments for parallel processing
-            grid_args = [(year_dir, grid_name, force) for grid_name in sorted(grid_dirs)]
+            grid_args = [(year_dir, grid_name, force, dry_run) for grid_name in sorted(grid_dirs)]
 
             # Process grid directories in parallel
             with ProcessPoolExecutor(max_workers=num_cores) as executor:
@@ -942,22 +975,40 @@ def generate_embeddings_checksums(base_dir, force=False):
 
                 # Process results with progress bar
                 skipped_grids = 0
+                would_update_grids = 0
+                would_create_grids = 0
                 task = progress.add_task(f"Year {year}", total=len(grid_dirs))
                 for future in as_completed(futures):
-                    grid_name, num_files, success, error_msg = future.result()
+                    grid_name, num_files, success, error_msg, details = future.result()
 
                     if success:
                         if error_msg == "skipped":
                             skipped_grids += 1
+                        elif error_msg == "would_update":
+                            would_update_grids += 1
+                            if details and len(update_details) < 20:  # Limit to first 20 examples
+                                update_details.append((year, grid_name, details))
+                        elif error_msg == "would_create":
+                            would_create_grids += 1
+                            if len(update_details) < 20:
+                                update_details.append((year, grid_name, "no_sha256"))
                         elif num_files > 0:
                             processed_grids += 1
                     else:
                         errors.append(f"{grid_name}: {error_msg}")
 
                     progress.update(task, advance=1)
-            
-            if skipped_grids > 0:
-                logger.info(f"  Skipped {skipped_grids} directories with existing SHA256 files")
+
+            if dry_run:
+                logger.info(f"  Would skip: {skipped_grids} directories (SHA256 up to date)")
+                logger.info(f"  Would update: {would_update_grids} directories (files newer than SHA256)")
+                logger.info(f"  Would create: {would_create_grids} directories (no SHA256 file)")
+                skipped_total += skipped_grids
+                would_update_total += would_update_grids
+                would_create_total += would_create_grids
+            else:
+                if skipped_grids > 0:
+                    logger.info(f"  Skipped {skipped_grids} directories with existing SHA256 files")
 
     # Report any errors
     if errors:
@@ -967,8 +1018,29 @@ def generate_embeddings_checksums(base_dir, force=False):
         if len(errors) > 10:
             logger.error(f"  ... and {len(errors) - 10} more errors")
 
-    logger.info(f"\nProcessed {processed_grids}/{total_grids} grid directories")
-    return 0 if processed_grids > 0 else 1
+    if dry_run:
+        logger.info("\n" + "="*60)
+        logger.info("DRY RUN SUMMARY")
+        logger.info("="*60)
+        logger.info(f"Total directories scanned: {total_grids}")
+        logger.info(f"  Would skip (up to date): {skipped_total}")
+        logger.info(f"  Would update (files modified): {would_update_total}")
+        logger.info(f"  Would create (no SHA256): {would_create_total}")
+
+        if update_details:
+            logger.info("\nExample directories that would be updated:")
+            for year, grid_name, details in update_details[:10]:
+                if details == "no_sha256":
+                    logger.info(f"  {year}/{grid_name} - No SHA256 file exists")
+                else:
+                    logger.info(f"  {year}/{grid_name} - {len(details)} files newer than SHA256:")
+                    for npy_file, delta in details[:3]:  # Show first 3 files
+                        logger.info(f"    - {npy_file} (+{delta:.1f}s)")
+        logger.info("\nNo files were modified (dry-run mode)")
+        return 0
+    else:
+        logger.info(f"\nProcessed {processed_grids}/{total_grids} grid directories")
+        return 0 if processed_grids > 0 else 1
 
 
 def process_tiff_chunk(args):
@@ -1535,6 +1607,8 @@ def hash_command(args):
         return 1
 
     force = getattr(args, 'force', False)
+    dry_run = getattr(args, 'dry_run', False)
+    year_filter = getattr(args, 'year', None)
 
     # Check if this is an embeddings directory structure
     repr_dir = os.path.join(base_dir, "global_0.1_degree_representation")
@@ -1545,14 +1619,18 @@ def hash_command(args):
     # Process embeddings if directory exists
     if os.path.exists(repr_dir):
         logger.info(f"Processing embeddings directory: {repr_dir}")
-        if generate_embeddings_checksums(repr_dir, force=force) == 0:
+        if year_filter:
+            logger.info(f"Filtering to year: {year_filter}")
+        if generate_embeddings_checksums(repr_dir, force=force, dry_run=dry_run, year_filter=year_filter) == 0:
             processed_any = True
 
-    # Process TIFF files if directory exists
-    if os.path.exists(tiles_dir):
+    # Process TIFF files if directory exists (no year filtering for TIFF files)
+    if os.path.exists(tiles_dir) and year_filter is None:
         logger.info(f"Processing TIFF directory: {tiles_dir}")
         if generate_tiff_checksums(tiles_dir, force=force) == 0:
             processed_any = True
+    elif os.path.exists(tiles_dir) and year_filter is not None:
+        logger.info(f"Skipping TIFF processing (year filter only applies to embeddings)")
 
     if not processed_any:
         logger.error("No data directories found. Expected:")
@@ -2142,12 +2220,18 @@ Examples:
   
   # Generate SHA256 checksums for embeddings and TIFF files
   geotessera-registry hash /path/to/v1
-  
+
   # This will:
   # - Create SHA256 files in each grid subdirectory under global_0.1_degree_representation/YYYY/
   # - Create SHA256SUM file in global_0.1_degree_tiff_all/ using chunked processing
   # - Skip directories that already have SHA256 files (use --force to regenerate)
-  
+
+  # Dry run: see what would be recalculated without modifying files
+  geotessera-registry hash /path/to/v1 --dry-run
+
+  # Check a specific year only
+  geotessera-registry hash /path/to/v1 --dry-run --year 2024
+
   # Force regeneration of all checksums
   geotessera-registry hash /path/to/v1 --force
   
@@ -2227,6 +2311,17 @@ Directory Structure:
         "--force",
         action="store_true",
         help="Force regeneration of all checksums, even if SHA256 files already exist",
+    )
+    hash_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be recalculated without actually modifying files",
+    )
+    hash_parser.add_argument(
+        "--year",
+        type=int,
+        default=None,
+        help="Only process a specific year (e.g., 2024). Applies to embeddings only.",
     )
     hash_parser.set_defaults(func=hash_command)
 
