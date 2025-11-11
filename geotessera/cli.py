@@ -14,8 +14,6 @@ import tempfile
 import urllib.request
 import urllib.parse
 import logging
-import sys
-import os
 from pathlib import Path
 from typing import Optional, Callable
 from typing_extensions import Annotated
@@ -834,6 +832,9 @@ def download(
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Calculate total download size without downloading")
     ] = False,
+    skip_hash: Annotated[
+        bool, typer.Option("--skip-hash", help="Skip SHA256 hash verification of downloaded files")
+    ] = False,
 ):
     """Download embeddings as numpy arrays or GeoTIFF files.
 
@@ -872,6 +873,7 @@ def download(
         cache_dir=str(cache_dir) if cache_dir else None,
         registry_dir=str(registry_dir) if registry_dir else None,
         embeddings_dir=str(output) if not dry_run else None,  # Only set for actual downloads
+        verify_hashes=not skip_hash,
     )
 
     # Parse bounding box
@@ -1094,7 +1096,6 @@ def download(
 
             else:  # format == 'npy'
                 # Export as quantized numpy arrays with scales
-                import shutil
 
                 # Create output directory structure
                 output.mkdir(parents=True, exist_ok=True)

@@ -551,6 +551,7 @@ class Registry:
         registry_dir: Optional[Union[str, Path]] = None,
         landmasks_registry_url: Optional[str] = None,
         landmasks_registry_path: Optional[Union[str, Path]] = None,
+        verify_hashes: bool = True,
         logger: Optional[logging.Logger] = None,
     ):
         """Initialize Registry manager with optimized Parquet registries.
@@ -567,10 +568,22 @@ class Registry:
             registry_dir: Directory containing registry.parquet and landmasks.parquet files (alternative to individual paths)
             landmasks_registry_url: URL to download landmasks Parquet registry from (default: remote)
             landmasks_registry_path: Local path to existing landmasks Parquet registry file
+            verify_hashes: If True (default), verify SHA256 hashes of downloaded files.
+                Set to False to skip hash verification. Can also be disabled via
+                GEOTESSERA_SKIP_HASH=1 environment variable.
             logger: Optional logger instance. If not provided, creates a new one
         """
         self.version = version
         self.logger = logger or logging.getLogger(__name__)
+
+        # Check environment variable for hash verification override
+        env_skip_hash = os.environ.get('GEOTESSERA_SKIP_HASH', '').lower() in ('1', 'true', 'yes')
+        self.verify_hashes = verify_hashes and not env_skip_hash
+
+        if env_skip_hash:
+            self.logger.warning("Hash verification disabled via GEOTESSERA_SKIP_HASH environment variable")
+        elif not verify_hashes:
+            self.logger.warning("Hash verification disabled via verify_hashes parameter")
 
         # Set up cache directory for Parquet registries only
         if cache_dir:
@@ -932,17 +945,26 @@ class Registry:
             return str(local_path)
 
         # Query hash from GeoDataFrame for verification if year/lon/lat provided
-        # Note: Only verify hash for embedding files, not scales files (registry stores one hash per tile)
         file_hash = None
-        if (self._registry_gdf is not None and year is not None and lon is not None and
-            lat is not None and not is_scales):
+        if (self.verify_hashes and self._registry_gdf is not None and
+            year is not None and lon is not None and lat is not None):
             matches = self._registry_gdf[
                 (self._registry_gdf['year'] == year) &
                 (self._registry_gdf['lon'] == lon) &
                 (self._registry_gdf['lat'] == lat)
             ]
             if len(matches) > 0:
-                file_hash = matches.iloc[0]['hash']
+                if is_scales:
+                    # Use scales_hash column for scales files
+                    if 'scales_hash' in matches.columns:
+                        file_hash = matches.iloc[0]['scales_hash']
+                    else:
+                        self.logger.warning(
+                            "Registry missing 'scales_hash' column, skipping hash verification for scales file"
+                        )
+                else:
+                    # Use hash column for embedding files
+                    file_hash = matches.iloc[0]['hash']
 
         # Download to embeddings_dir
         url = f"{TESSERA_BASE_URL}/{self.version}/{EMBEDDINGS_DIR_NAME}/{path}"
@@ -992,7 +1014,8 @@ class Registry:
 
         # Query hash from landmasks DataFrame for verification if lon/lat provided
         file_hash = None
-        if self._landmasks_df is not None and lon is not None and lat is not None:
+        if (self.verify_hashes and self._landmasks_df is not None and
+            lon is not None and lat is not None):
             matches = self._landmasks_df[
                 (self._landmasks_df['lon'] == lon) &
                 (self._landmasks_df['lat'] == lat)

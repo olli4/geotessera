@@ -8,7 +8,6 @@ updates, and generation of a master registry index.
 """
 
 import os
-import sys
 import hashlib
 import argparse
 import subprocess

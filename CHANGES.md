@@ -21,8 +21,12 @@ continue to evolve as we add more usecases, so please create issues on
   now directly downloaded to temporary files and only the Parquet registry is
   cached, since users were finding that embeddings storage was being duplicated
   in the old tile cache. This leads to a significant reduction in disk space.
-- **Direct embeddings downloads**: Replaced Pooch with direct downloads
-  to temporary files with SHA256 verification.
+- **Enhanced hash verification**: SHA256 verification now covers all downloaded files:
+  - Embedding files (`.npy`) verified using `hash` column from registry
+  - Scales files are also verified using the `scales_hash` column from the registry
+  - Landmask files (`.tiff`) verified using `hash` column from landmasks registry
+  - Can be disabled via `verify_hashes=False` parameter, `--skip-hash` CLI flag, or the `GEOTESSERA_SKIP_HASH=1` environment variable
+  - Hash verification is **enabled by default** for data integrity
 - **Lazy iterators** for reducing memory usage for large ROIs.
 
 ### CLI Changes
@@ -42,6 +46,12 @@ continue to evolve as we add more usecases, so please create issues on
   - For TIFF format: provides size estimates (4x quantized size due to float32 conversion)
   - Useful for planning downloads and estimating bandwidth/storage requirements
   - Usage: `geotessera download --bbox '...' --dry-run`
+
+- **New `--skip-hash` option for `download` command**: Skip SHA256 hash verification
+  - Disables hash verification for embedding, scales, and landmask files
+  - Can also be controlled via `GEOTESSERA_SKIP_HASH=1` environment variable
+  - Hash verification is **enabled by default** for security
+  - Usage: `geotessera download --bbox '...' --skip-hash`
 
 ### Registry CLI Changes
 

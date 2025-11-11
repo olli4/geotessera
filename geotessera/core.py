@@ -12,7 +12,7 @@ import logging
 import numpy as np
 import geopandas as gpd
 
-from .registry import Registry, EMBEDDINGS_DIR_NAME, LANDMASKS_DIR_NAME, tile_to_landmask_filename, tile_to_geotiff_path
+from .registry import Registry, EMBEDDINGS_DIR_NAME, tile_to_geotiff_path
 
 try:
     import importlib.metadata
@@ -91,6 +91,7 @@ class GeoTessera:
         registry_url: Optional[str] = None,
         registry_path: Optional[Union[str, Path]] = None,
         registry_dir: Optional[Union[str, Path]] = None,
+        verify_hashes: bool = True,
     ):
         """Initialize GeoTessera with Parquet registry.
 
@@ -121,6 +122,9 @@ class GeoTessera:
             registry_url: URL to download Parquet registry from (default: remote)
             registry_path: Local path to existing Parquet registry file
             registry_dir: Directory containing registry.parquet and landmasks.parquet files
+            verify_hashes: If True (default), verify SHA256 hashes of downloaded files.
+                Set to False to skip hash verification. Can also be disabled via
+                GEOTESSERA_SKIP_HASH=1 environment variable.
         """
         self.dataset_version = dataset_version
 
@@ -140,6 +144,7 @@ class GeoTessera:
             registry_url=registry_url,
             registry_path=registry_path,
             registry_dir=registry_dir,
+            verify_hashes=verify_hashes,
             logger=self.logger,
         )
 
@@ -1096,7 +1101,6 @@ class GeoTessera:
             - crs: CRS object from rasterio (coordinate reference system)
             - transform: Affine transform from rasterio
         """
-        from pathlib import Path
 
         # Fetch the files using coordinates
         embedding_file = self.registry.fetch(
