@@ -63,7 +63,7 @@ class GeoTessera:
     Core functionality:
     - Download tiles to local embeddings_dir
     - Sample embeddings at point locations from local tiles
-    - Export individual tiles as GeoTIFF files with correct metadata
+    - Export individual tiles as GeoTIFF files or zarr archives with correct metadata
     - Manage registry and data access
 
     Typical workflows:
@@ -1894,8 +1894,9 @@ class GeoTessera:
         # Get dimensions for GeoTIFF
         height, width = data.shape[:2]
 
-        da = xr.Dataset(
+        ds = xr.Dataset(
             {'embedding': (('y', 'x', 'band'), embedding)},
+            data=embedding,
             coords={
                 'y': np.arange(height),
                 'x': np.arange(width),
@@ -1914,12 +1915,12 @@ class GeoTessera:
         x_coords = [transform.c + (i+0.5) * transform.a for i in range(width)]
         y_coords = [transform.f + (j+0.5) * transform.e for j in range(height)]
 
-        da = da.assign_coords(x=('x', x_coords), y=('y', y_coords), 
+        ds = ds.assign_coords(x=('x', x_coords), y=('y', y_coords), 
                               band=('band', np.array([f"Tessera_Band_{i+1}" for i in range(band_count)],
                                                      dtype=np.dtypes.StringDType())))
-        da = da.rio.write_transform(transform).rio.write_crs(crs)
-
-        da.to_zarr(output_path, zarr_format=3)
+        ds = ds.rio.write_crs(crs).rio.set_spatial_dims(x_dim='x', y_dim='y').rio.write_coordinate_system()
+        ds = ds.rio.write_transform(transform)
+        ds.to_zarr(output_path, zarr_format=3)
         return str(output_path)
 
     def export_embedding_zarrs(
@@ -2023,7 +2024,7 @@ class GeoTessera:
 
             # Get dimensions for GeoTIFF
             height, width = data.shape[:2]
-            da = xr.Dataset(
+            ds = xr.Dataset(
                 {'embedding': (('y', 'x', 'band'), embedding)},
                 coords={
                     'y': np.arange(height),
@@ -2043,12 +2044,13 @@ class GeoTessera:
             x_coords = [transform.c + (i+0.5) * transform.a for i in range(width)]
             y_coords = [transform.f + (j+0.5) * transform.e for j in range(height)]
 
-            da = da.assign_coords(x=('x', x_coords), y=('y', y_coords), 
+            ds = ds.assign_coords(x=('x', x_coords), y=('y', y_coords), 
                                   band=('band', np.array([f"Tessera_Band_{i+1}" for i in range(band_count)], 
                                                          dtype=np.dtypes.StringDType())))
-            da = da.rio.write_transform(transform).rio.write_crs(crs)
+            ds = ds.rio.write_crs(crs).rio.set_spatial_dims(x_dim='x', y_dim='y').rio.write_coordinate_system()
+            ds = ds.rio.write_transform(transform)
 
-            da.to_zarr(output_path, zarr_format=3)
+            ds.to_zarr(output_path, zarr_format=3)
             created_files.append(str(output_path))
 
             # Update progress for zarr export phase
@@ -2066,6 +2068,7 @@ class GeoTessera:
 
         self.logger.info(f"Exported {len(created_files)} zarr files to {output_dir}")
         return created_files
+
 
     def apply_pca_to_embeddings(
         self,

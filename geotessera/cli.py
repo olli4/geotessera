@@ -1358,10 +1358,14 @@ def download(
                         if skipped_files > 0:
                             rprint(f"   Skipped {skipped_files} existing files (resume capability)")
                         rprint("   Format: Quantized embeddings with separate scales files")
-                        rprint("   Structure: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/grid_{lon}_{lat}.npy")
+                        rprint(
+                            "   Structure: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/grid_{lon}_{lat}.npy"
+                        )
                         rprint("             global_0.1_degree_tiff_all/grid_{lon}_{lat}.tiff")
                         if bands_list:
-                            rprint("   [yellow]Note: Band selection not supported in NPY format (use TIFF format instead)[/yellow]")
+                            rprint(
+                                "   [yellow]Note: Band selection not supported in NPY format (use TIFF or zarr format instead)[/yellow]"
+                            )
 
         if verbose or list_files:
             rprint(f"\n[blue]{emoji('📁 ')}Created files:[/blue]")
@@ -1391,13 +1395,24 @@ def download(
         rprint(f"\n[blue]{emoji('🗺️  ')}Spatial Information:[/blue]")
         if verbose:
             try:
-                import rasterio
+                match format:
+                    case 'tiff':
+                        import rasterio
 
-                with rasterio.open(files[0]) as src:
-                    rprint(f"   CRS: {src.crs}")
-                    rprint(f"   Transform: {src.transform}")
-                    rprint(f"   Dimensions: {src.width} x {src.height} pixels")
-                    rprint(f"   Data type: {src.dtypes[0]}")
+                        with rasterio.open(files[0]) as src:
+                            rprint(f"   CRS: {src.crs}")
+                            rprint(f"   Transform: {src.transform}")
+                            rprint(f"   Dimensions: {src.width} x {src.height} pixels")
+                            rprint(f"   Data type: {src.dtypes[0]}")
+                    case 'zarr':
+                        import xarray as xr
+                        import rioxarray as rxr
+
+                        ds = xr.open_dataset(files[0], decode_coords='all')
+                        rprint(f"   CRS: {ds.rio.crs.to_epsg()}")
+                        rprint(f"   Transform: {ds.rio.transform()}")
+                        rprint(f"   Dimensions: {ds.rio.width} x {ds.rio.height} pixels")
+                        rprint(f"   Data type: {ds.dtypes['embedding']}")
             except Exception:
                 pass
 
@@ -1439,7 +1454,7 @@ def download(
 
 @app.command()
 def visualize(
-    input_path: Annotated[Path, typer.Argument(help="Input GeoTIFF file or directory")],
+    input_path: Annotated[Path, typer.Argument(help="Input GeoTIFF or zarr file or directory")],
     output_file: Annotated[Path, typer.Argument(help="Output PCA mosaic file (.tif)")],
     target_crs: Annotated[
         str, typer.Option("--crs", help="Target CRS for reprojection")
@@ -1478,15 +1493,16 @@ def visualize(
     This ensures consistent principal components across the entire region,
     eliminating tiling artifacts.
 
-    Supports two input formats:
+    Supports three input formats:
     - GeoTIFF format: Directory containing *.tif/*.tiff files
+    - zarr format: Directory containing *.zarr archives
     - NPY format: Directory with global_0.1_degree_representation/{year}/grid_{lon}_{lat}/*.npy structure
 
     The first 3 principal components are mapped to RGB channels for visualization.
     Additional components can be computed for research/analysis purposes.
 
     Examples:
-        # Create PCA visualization from GeoTIFF tiles
+        # Create PCA visualization from GeoTIFF or zarr tiles
         geotessera visualize tiles/ pca_mosaic.tif
 
         # Create PCA visualization from NPY format tiles
@@ -1551,6 +1567,7 @@ def visualize(
         rprint(f"[red]No tiles found in\n{input_path}[/red]")
         rprint("[yellow]Expected either:[/yellow]")
         rprint("  - GeoTIFF files: *.tif/*.tiff in the directory")
+        rprint("  - zarr archives: *.zarr in the directory")
         rprint(
             "  - NPY format: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/*.npy structure"
         )

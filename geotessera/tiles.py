@@ -4,8 +4,6 @@ from pathlib import Path
 from typing import List, Tuple, Dict
 import numpy as np
 import re
-import xarray as xr
-import rioxarray as rxr
 from .registry import EMBEDDINGS_DIR_NAME, LANDMASKS_DIR_NAME, tile_to_landmask_filename
 
 
@@ -68,6 +66,8 @@ class Tile:
             return self._load_from_npy()
         elif self._format == "geotiff":
             return self._load_from_geotiff()
+        elif self._format == 'zarr':
+            return self._load_from_zarr()
         else:
             raise ValueError(f"Unknown format: {self._format}")
 
@@ -87,16 +87,19 @@ class Tile:
             # (bands, H, W) -> (H, W, bands)
             return np.transpose(src.read(), (1, 2, 0))
 
-    def _load_from_zarr(self) -> xr.Dataset:
+    def _load_from_zarr(self) -> np.ndarray:
         """Load dequantized data from zarr"""
-        return xr.open_dataset(self._zarr_path)
+        import xarray as xr
+        import rioxarray as rxr
+
+        return xr.open_dataset(self._zarr_path, decode_coords='all')['embedding'].values
 
     def is_available(self, require_landmask: bool = True) -> bool:
         """Check if all required files exist.
 
         Args:
             require_landmask: If True (default), landmask must exist for NPY format tiles.
-                             For GeoTIFF format, this parameter is ignored.
+                             For GeoTIFF and zarr formats, this parameter is ignored.
         """
         if self._format == "npy":
             has_embedding = self._embedding_path.exists() and self._scales_path.exists()
@@ -222,9 +225,9 @@ class Tile:
     def _load_spatial_metadata_from_zarr(self):
         """Load spatial metadata from zarr"""
         
-        da = xr.open_dataset(self._zarr_path)
-        self.crs = da['spatial_ref'].crs_wkt
-        self.transform = da.rio.transform
+        da = xr.open_dataset(self._zarr_path, decode_coords='all')
+        self.crs = da.rio.crs.to_epsg()
+        self.transform = da.rio.transform()
         self.bounds = da.rio.bounds
         self.height = da.rio.height
         self.width = da.rio.width
@@ -319,7 +322,7 @@ def discover_tiles(directory: Path) -> List[Tile]:
         List of Tile objects with spatial metadata loaded, sorted by (year, lat, lon)
     """
     # Check for NPY format first by looking for .npy files in embeddings directory
-    # If both NPY and GeoTIFF exist, prefer NPY (more efficient, includes scales)
+    # Preferred order is NPY, tiff, zarr, as NPY (more efficient, includes scales)
     embeddings_dir = directory / EMBEDDINGS_DIR_NAME
     if embeddings_dir.exists() and embeddings_dir.is_dir():
         # Check if there are any .npy files (not just _scales.npy)
@@ -331,12 +334,13 @@ def discover_tiles(directory: Path) -> List[Tile]:
         if npy_files:
             return discover_npy_tiles(directory)
 
-    # Default to GeoTIFF discovery (will search recursively)
+    # Then try to search GeoTIFF files (will search recursively)
     tiff_files = discover_geotiff_tiles(directory)
 
     if tiff_files:
         return tiff_files
 
+    # Finally default to zarr
     return discover_zarr_tiles(directory)
 
 
@@ -515,6 +519,7 @@ def _parse_geotiff_filename(path: Path) -> Tuple[float, float, int]:
 
     # If no patterns match, raise an error
     raise ValueError(f"Cannot parse GeoTIFF filename: {path.name}. Expected format: grid_<lon>_<lat>_<year>.tif")
+
 
 def _parse_zarr_filename(path: Path) -> Tuple[float, float, int]:
     """Parse lon, lat, year from zarr filename.
