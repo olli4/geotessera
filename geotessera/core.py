@@ -1895,8 +1895,7 @@ class GeoTessera:
         height, width = data.shape[:2]
 
         ds = xr.Dataset(
-            {'embedding': (('y', 'x', 'band'), embedding)},
-            data=embedding,
+            {'embedding': (('y', 'x', 'band'), data)},
             coords={
                 'y': np.arange(height),
                 'x': np.arange(width),
@@ -2030,7 +2029,7 @@ class GeoTessera:
             # Get dimensions for GeoTIFF
             height, width = data.shape[:2]
             ds = xr.Dataset(
-                {'embedding': (('y', 'x', 'band'), embedding)},
+                {'embedding': (('y', 'x', 'band'), data)},
                 coords={
                     'y': np.arange(height),
                     'x': np.arange(width),
