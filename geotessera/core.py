@@ -1915,9 +1915,14 @@ class GeoTessera:
         x_coords = [transform.c + (i+0.5) * transform.a for i in range(width)]
         y_coords = [transform.f + (j+0.5) * transform.e for j in range(height)]
 
+        # Add band descriptions
+        if bands is not None:
+            output_bands = [f"Tessera_Band_{band_idx}" for band_idx in bands]
+        else:
+            output_bands = [f'Tessera_Band_{j}' for j in range(128)]
+
         ds = ds.assign_coords(x=('x', x_coords), y=('y', y_coords), 
-                              band=('band', np.array([f"Tessera_Band_{i+1}" for i in range(band_count)],
-                                                     dtype=np.dtypes.StringDType())))
+                              band=('band', np.array(output_bands, dtype=np.dtypes.StringDType())))
         ds = ds.rio.write_crs(crs).rio.set_spatial_dims(x_dim='x', y_dim='y').rio.write_coordinate_system()
         ds = ds.rio.write_transform(transform)
         ds.to_zarr(output_path, zarr_format=3)
@@ -2044,9 +2049,14 @@ class GeoTessera:
             x_coords = [transform.c + (i+0.5) * transform.a for i in range(width)]
             y_coords = [transform.f + (j+0.5) * transform.e for j in range(height)]
 
+            # Add band descriptions
+            if bands is not None:
+                output_bands = [f"Tessera_Band_{band_idx}" for band_idx in bands]
+            else:
+                output_bands = [f'Tessera_Band_{j}' for j in range(128)]
+
             ds = ds.assign_coords(x=('x', x_coords), y=('y', y_coords), 
-                                  band=('band', np.array([f"Tessera_Band_{i+1}" for i in range(band_count)], 
-                                                         dtype=np.dtypes.StringDType())))
+                                  band=('band', np.array(output_bands, dtype=np.dtypes.StringDType())))
             ds = ds.rio.write_crs(crs).rio.set_spatial_dims(x_dim='x', y_dim='y').rio.write_coordinate_system()
             ds = ds.rio.write_transform(transform)
 
