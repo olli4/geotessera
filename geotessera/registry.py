@@ -27,7 +27,9 @@ except ImportError:
 try:
     import geopandas as gpd
 except ImportError:
-    raise ImportError("geopandas is required for spatial operations. Install with: pip install geopandas")
+    raise ImportError(
+        "geopandas is required for spatial operations. Install with: pip install geopandas"
+    )
 
 # Constants for block-based registry management
 BLOCK_SIZE = 5  # 5x5 degree blocks
@@ -340,7 +342,14 @@ LANDMASKS_DIR_NAME = "global_0.1_degree_tiff_all"  # Landmask TIFFs
 # Format: {TESSERA_BASE_URL}/{version}/registry.parquet
 
 
-def download_file_to_temp(url: str, expected_hash: Optional[str] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None, cache_path: Optional[Path] = None, max_retries: int = 3, timeout: int = 60) -> str:
+def download_file_to_temp(
+    url: str,
+    expected_hash: Optional[str] = None,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    cache_path: Optional[Path] = None,
+    max_retries: int = 3,
+    timeout: int = 60,
+) -> str:
     """Download a file from URL with retry logic, optional caching and If-Modified-Since support.
 
     Args:
@@ -380,7 +389,7 @@ def download_file_to_temp(url: str, expected_hash: Optional[str] = None, progres
                 last_exception = e
                 if attempt < max_retries - 1:
                     # Exponential backoff: 1s, 2s, 4s
-                    backoff_time = 2 ** attempt
+                    backoff_time = 2**attempt
                     logging.getLogger(__name__).debug(
                         f"HTTP {e.code} error, retrying in {backoff_time}s (attempt {attempt + 1}/{max_retries})"
                     )
@@ -389,7 +398,7 @@ def download_file_to_temp(url: str, expected_hash: Optional[str] = None, progres
                 # Retry on network errors
                 last_exception = e
                 if attempt < max_retries - 1:
-                    backoff_time = 2 ** attempt
+                    backoff_time = 2**attempt
                     logging.getLogger(__name__).debug(
                         f"Network error, retrying in {backoff_time}s (attempt {attempt + 1}/{max_retries})"
                     )
@@ -399,13 +408,13 @@ def download_file_to_temp(url: str, expected_hash: Optional[str] = None, progres
         raise last_exception
 
     # Handle If-Modified-Since for cached files
-    headers = {'User-Agent': 'geotessera'}
+    headers = {"User-Agent": "geotessera"}
 
     if cache_path and cache_path.exists():
         # Get the cached file's modification time
         cache_mtime = cache_path.stat().st_mtime
         if_modified_since = formatdate(cache_mtime, usegmt=True)
-        headers['If-Modified-Since'] = if_modified_since
+        headers["If-Modified-Since"] = if_modified_since
 
         # Make conditional request
         request = Request(url, headers=headers)
@@ -431,20 +440,20 @@ def download_file_to_temp(url: str, expected_hash: Optional[str] = None, progres
     if cache_path:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         temp_file = tempfile.NamedTemporaryFile(
-            mode='wb',
+            mode="wb",
             dir=cache_path.parent,
             delete=False,
-            prefix=f'.{cache_path.name}_tmp_',
-            suffix=cache_path.suffix
+            prefix=f".{cache_path.name}_tmp_",
+            suffix=cache_path.suffix,
         )
     else:
-        temp_file = tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.npy')
+        temp_file = tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".npy")
 
     temp_path = Path(temp_file.name)
 
     try:
         with response:
-            total_size = int(response.headers.get('Content-Length', 0))
+            total_size = int(response.headers.get("Content-Length", 0))
             downloaded = 0
             start_time = time.time()
             last_update_time = start_time
@@ -452,14 +461,16 @@ def download_file_to_temp(url: str, expected_hash: Optional[str] = None, progres
             # Format file size for display
             def format_bytes(bytes_val):
                 """Format bytes as human-readable string."""
-                for unit in ['B', 'KB', 'MB', 'GB']:
+                for unit in ["B", "KB", "MB", "GB"]:
                     if bytes_val < 1024.0:
                         return f"{bytes_val:.1f}{unit}"
                     bytes_val /= 1024.0
                 return f"{bytes_val:.1f}TB"
 
             if progress_callback:
-                size_str = format_bytes(total_size) if total_size > 0 else "unknown size"
+                size_str = (
+                    format_bytes(total_size) if total_size > 0 else "unknown size"
+                )
                 progress_callback(0, total_size, f"Starting ({size_str})")
 
             while True:
@@ -472,7 +483,10 @@ def download_file_to_temp(url: str, expected_hash: Optional[str] = None, progres
                 if progress_callback and total_size > 0:
                     current_time = time.time()
                     # Update progress with speed info every ~100ms or on significant progress
-                    if current_time - last_update_time > 0.1 or downloaded == total_size:
+                    if (
+                        current_time - last_update_time > 0.1
+                        or downloaded == total_size
+                    ):
                         elapsed = current_time - start_time
                         if elapsed > 0:
                             speed = downloaded / elapsed
@@ -497,10 +511,12 @@ def download_file_to_temp(url: str, expected_hash: Optional[str] = None, progres
             actual_hash = calculate_file_hash(temp_path)
             if actual_hash != expected_hash:
                 temp_path.unlink()
-                raise ValueError(f"Hash mismatch: expected {expected_hash}, got {actual_hash}")
+                raise ValueError(
+                    f"Hash mismatch: expected {expected_hash}, got {actual_hash}"
+                )
 
         # Set file mtime from Last-Modified header if available
-        last_modified_str = response.headers.get('Last-Modified')
+        last_modified_str = response.headers.get("Last-Modified")
         if last_modified_str:
             try:
                 last_modified_dt = parsedate_to_datetime(last_modified_str)
@@ -508,7 +524,9 @@ def download_file_to_temp(url: str, expected_hash: Optional[str] = None, progres
                 os.utime(temp_path, (last_modified_timestamp, last_modified_timestamp))
             except (ValueError, TypeError) as e:
                 # Parsing errors - invalid date format
-                logging.getLogger(__name__).debug(f"Could not parse Last-Modified header: {e}")
+                logging.getLogger(__name__).debug(
+                    f"Could not parse Last-Modified header: {e}"
+                )
             except OSError as e:
                 # Filesystem errors - permissions, disk full, etc.
                 logging.getLogger(__name__).warning(f"Could not set file mtime: {e}")
@@ -564,6 +582,7 @@ class Registry:
         registry_dir: Optional[Union[str, Path]] = None,
         landmasks_registry_url: Optional[str] = None,
         landmasks_registry_path: Optional[Union[str, Path]] = None,
+        verify_hashes: bool = True,
         logger: Optional[logging.Logger] = None,
     ):
         """Initialize Registry manager with optimized Parquet registries.
@@ -580,21 +599,41 @@ class Registry:
             registry_dir: Directory containing registry.parquet and landmasks.parquet files (alternative to individual paths)
             landmasks_registry_url: URL to download landmasks Parquet registry from (default: remote)
             landmasks_registry_path: Local path to existing landmasks Parquet registry file
+            verify_hashes: If True (default), verify SHA256 hashes of downloaded files.
+                Set to False to skip hash verification. Can also be disabled via
+                GEOTESSERA_SKIP_HASH=1 environment variable.
             logger: Optional logger instance. If not provided, creates a new one
         """
         self.version = version
         self.logger = logger or logging.getLogger(__name__)
+
+        # Check environment variable for hash verification override
+        env_skip_hash = os.environ.get("GEOTESSERA_SKIP_HASH", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        self.verify_hashes = verify_hashes and not env_skip_hash
+
+        if env_skip_hash:
+            self.logger.warning(
+                "Hash verification disabled via GEOTESSERA_SKIP_HASH environment variable"
+            )
+        elif not verify_hashes:
+            self.logger.warning(
+                "Hash verification disabled via verify_hashes parameter"
+            )
 
         # Set up cache directory for Parquet registries only
         if cache_dir:
             self._registry_cache_dir = Path(cache_dir)
         else:
             # Use platform-appropriate cache directory
-            if os.name == 'nt':
-                base = Path(os.environ.get('LOCALAPPDATA', '~')).expanduser()
+            if os.name == "nt":
+                base = Path(os.environ.get("LOCALAPPDATA", "~")).expanduser()
             else:
-                base = Path(os.environ.get('XDG_CACHE_HOME', '~/.cache')).expanduser()
-            self._registry_cache_dir = base / 'geotessera'
+                base = Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser()
+            self._registry_cache_dir = base / "geotessera"
 
         self._registry_cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -604,29 +643,37 @@ class Registry:
         else:
             self._embeddings_dir = Path.cwd()
             # Use debug level since this is only relevant when actually fetching tiles
-            self.logger.debug(f"embeddings_dir not specified, using current directory: {self._embeddings_dir}")
+            self.logger.debug(
+                f"embeddings_dir not specified, using current directory: {self._embeddings_dir}"
+            )
 
         # Handle registry_dir convenience parameter
         if registry_dir:
             registry_dir_path = Path(registry_dir)
             if not registry_path:
-                candidate = registry_dir_path / 'registry.parquet'
+                candidate = registry_dir_path / "registry.parquet"
                 if candidate.exists():
                     registry_path = candidate
             if not landmasks_registry_path:
-                candidate = registry_dir_path / 'landmasks.parquet'
+                candidate = registry_dir_path / "landmasks.parquet"
                 if candidate.exists():
                     landmasks_registry_path = candidate
 
         # Embeddings GeoParquet registry (GeoDataFrame with spatial index)
         self._registry_gdf: Optional[gpd.GeoDataFrame] = None
-        self._registry_url = registry_url or f"{TESSERA_BASE_URL}/{version}/registry.parquet"
+        self._registry_url = (
+            registry_url or f"{TESSERA_BASE_URL}/{version}/registry.parquet"
+        )
         self._registry_path = Path(registry_path) if registry_path else None
 
         # Landmasks Parquet registry
         self._landmasks_df: Optional[pd.DataFrame] = None
-        self._landmasks_registry_url = landmasks_registry_url or f"{TESSERA_BASE_URL}/{version}/landmasks.parquet"
-        self._landmasks_registry_path = Path(landmasks_registry_path) if landmasks_registry_path else None
+        self._landmasks_registry_url = (
+            landmasks_registry_url or f"{TESSERA_BASE_URL}/{version}/landmasks.parquet"
+        )
+        self._landmasks_registry_path = (
+            Path(landmasks_registry_path) if landmasks_registry_path else None
+        )
 
         # Load registries
         self._load_registry()
@@ -652,14 +699,20 @@ class Registry:
                 try:
                     # Quick check: try to read metadata without loading full file
                     test_gdf = gpd.read_parquet(registry_cache_path)
-                    if 'geometry' in test_gdf.columns and test_gdf.geometry is not None:
+                    if "geometry" in test_gdf.columns and test_gdf.geometry is not None:
                         is_valid_cache = True
                     else:
-                        self.logger.warning("Cached registry is in old format (missing geometry column)")
-                        self.logger.info("Forcing download of updated GeoParquet format...")
+                        self.logger.warning(
+                            "Cached registry is in old format (missing geometry column)"
+                        )
+                        self.logger.info(
+                            "Forcing download of updated GeoParquet format..."
+                        )
                 except (OSError, ValueError, KeyError, ImportError) as e:
                     # OSError: File issues, ValueError: Invalid parquet, KeyError: Missing columns, ImportError: Missing deps
-                    self.logger.warning(f"Cached registry is corrupted or in old format: {e}")
+                    self.logger.warning(
+                        f"Cached registry is corrupted or in old format: {e}"
+                    )
                     self.logger.info("Forcing download of updated registry...")
 
                 # Check for updates using If-Modified-Since (or force download if invalid)
@@ -669,8 +722,7 @@ class Registry:
                         registry_cache_path.unlink(missing_ok=True)
                         self.logger.info("Downloading updated registry...")
                         result_path = download_file_to_temp(
-                            self._registry_url,
-                            cache_path=registry_cache_path
+                            self._registry_url, cache_path=registry_cache_path
                         )
                         registry_path = Path(result_path)
                         self.logger.info("Registry downloaded successfully")
@@ -678,12 +730,13 @@ class Registry:
                         # Valid cache - check for updates normally
                         self.logger.info("Checking for registry updates...")
                         result_path = download_file_to_temp(
-                            self._registry_url,
-                            cache_path=registry_cache_path
+                            self._registry_url, cache_path=registry_cache_path
                         )
                         registry_path = Path(result_path)
                         if result_path == str(registry_cache_path):
-                            self.logger.info("Verified with server - registry is current (no download needed)")
+                            self.logger.info(
+                                "Verified with server - registry is current (no download needed)"
+                            )
                         else:
                             self.logger.info("Downloaded updated registry from server")
                 except Exception as e:
@@ -694,15 +747,16 @@ class Registry:
                         registry_path = registry_cache_path
                     else:
                         # Invalid cache and download failed - raise error
-                        raise RuntimeError(f"Failed to download registry and no valid cache available: {e}") from e
+                        raise RuntimeError(
+                            f"Failed to download registry and no valid cache available: {e}"
+                        ) from e
             else:
                 # Download the registry to cache for the first time
                 self.logger.info(f"Downloading registry from {self._registry_url}")
                 try:
                     # Download registry with caching
                     result_path = download_file_to_temp(
-                        self._registry_url,
-                        cache_path=registry_cache_path
+                        self._registry_url, cache_path=registry_cache_path
                     )
                     registry_path = Path(result_path)
                     self.logger.info("Registry downloaded successfully")
@@ -716,7 +770,10 @@ class Registry:
             raise RuntimeError(f"Failed to load registry as GeoParquet: {e}") from e
 
         # Validate it's a proper GeoParquet file
-        if 'geometry' not in self._registry_gdf.columns or self._registry_gdf.geometry is None:
+        if (
+            "geometry" not in self._registry_gdf.columns
+            or self._registry_gdf.geometry is None
+        ):
             raise ValueError(
                 f"Registry file is not a valid GeoParquet file (missing geometry column): {registry_path}\n"
                 "Please regenerate the registry using the latest geotessera-registry scan command."
@@ -725,7 +782,7 @@ class Registry:
         self.logger.info(f"Loaded GeoParquet with {len(self._registry_gdf):,} tiles")
 
         # Validate registry structure
-        required_columns = {'lat', 'lon', 'year', 'hash', 'file_size'}
+        required_columns = {"lat", "lon", "year", "hash", "file_size"}
         if not required_columns.issubset(self._registry_gdf.columns):
             missing = required_columns - set(self._registry_gdf.columns)
             raise ValueError(f"Registry is missing required columns: {missing}")
@@ -734,27 +791,34 @@ class Registry:
         """Load landmasks Parquet registry from local path or download from remote with If-Modified-Since refresh."""
         if self._landmasks_registry_path and self._landmasks_registry_path.exists():
             # Load from local file (no updates check for explicit paths)
-            self.logger.info(f"Loading landmasks registry from local file: {self._landmasks_registry_path}")
+            self.logger.info(
+                f"Loading landmasks registry from local file: {self._landmasks_registry_path}"
+            )
             self._landmasks_df = pd.read_parquet(self._landmasks_registry_path)
         else:
             # Use cached version with If-Modified-Since to check for updates
             landmasks_cache_path = self._registry_cache_dir / "landmasks.parquet"
 
             if landmasks_cache_path.exists():
-                self.logger.info(f"Using cached landmasks registry: {landmasks_cache_path}")
+                self.logger.info(
+                    f"Using cached landmasks registry: {landmasks_cache_path}"
+                )
                 # Check for updates using If-Modified-Since
                 try:
                     self.logger.info("Checking for landmasks registry updates...")
                     result_path = download_file_to_temp(
-                        self._landmasks_registry_url,
-                        cache_path=landmasks_cache_path
+                        self._landmasks_registry_url, cache_path=landmasks_cache_path
                     )
                     landmasks_path = Path(result_path)
                     self._landmasks_df = pd.read_parquet(landmasks_path)
                     if result_path == str(landmasks_cache_path):
-                        self.logger.info("Verified with server - landmasks registry is current (no download needed)")
+                        self.logger.info(
+                            "Verified with server - landmasks registry is current (no download needed)"
+                        )
                     else:
-                        self.logger.info("Downloaded updated landmasks registry from server")
+                        self.logger.info(
+                            "Downloaded updated landmasks registry from server"
+                        )
                 except Exception as e:
                     # Landmasks are optional, if update check fails use cached version
                     self.logger.warning(f"Could not check for landmasks updates: {e}")
@@ -763,17 +827,20 @@ class Registry:
                         self._landmasks_df = pd.read_parquet(landmasks_cache_path)
                     except (OSError, ValueError, ImportError) as read_error:
                         # OSError: File not readable, ValueError: Invalid parquet, ImportError: Missing deps
-                        self.logger.warning(f"Could not read cached landmasks: {read_error}")
+                        self.logger.warning(
+                            f"Could not read cached landmasks: {read_error}"
+                        )
                         self._landmasks_df = None
                         return
             else:
                 # Download the landmasks registry to cache for the first time
-                self.logger.info(f"Downloading landmasks registry from {self._landmasks_registry_url}")
+                self.logger.info(
+                    f"Downloading landmasks registry from {self._landmasks_registry_url}"
+                )
                 try:
                     # Download landmasks registry with caching
                     result_path = download_file_to_temp(
-                        self._landmasks_registry_url,
-                        cache_path=landmasks_cache_path
+                        self._landmasks_registry_url, cache_path=landmasks_cache_path
                     )
                     landmasks_path = Path(result_path)
                     self._landmasks_df = pd.read_parquet(landmasks_path)
@@ -786,17 +853,16 @@ class Registry:
 
         # Validate landmasks registry structure
         if self._landmasks_df is not None:
-            required_columns = {'lat', 'lon', 'hash', 'file_size'}
+            required_columns = {"lat", "lon", "hash", "file_size"}
             if not required_columns.issubset(self._landmasks_df.columns):
                 missing = required_columns - set(self._landmasks_df.columns)
-                self.logger.warning(f"Landmasks registry is missing required columns: {missing}")
+                self.logger.warning(
+                    f"Landmasks registry is missing required columns: {missing}"
+                )
                 self._landmasks_df = None
 
-
     def iter_tiles_in_region(
-        self,
-        bounds: Tuple[float, float, float, float],
-        year: int
+        self, bounds: Tuple[float, float, float, float], year: int
     ) -> Iterator[Tuple[int, float, float]]:
         """Lazy iterator over tiles in a region using GeoPandas spatial indexing.
 
@@ -834,14 +900,14 @@ class Registry:
         # query to include tiles whose centers are up to 0.05° outside the bounds.
         expansion = 0.05
         tiles = self._registry_gdf.cx[
-            min_lon - expansion:max_lon + expansion,
-            min_lat - expansion:max_lat + expansion
+            min_lon - expansion : max_lon + expansion,
+            min_lat - expansion : max_lat + expansion,
         ]
 
-        tiles = tiles[tiles['year'] == year]
+        tiles = tiles[tiles["year"] == year]
 
         # Drop duplicates and yield (vectorized iteration)
-        tiles_unique = tiles[['year', 'lon', 'lat']].drop_duplicates()
+        tiles_unique = tiles[["year", "lon", "lat"]].drop_duplicates()
         for year_val, lon_val, lat_val in tiles_unique.values:
             yield (int(year_val), lon_val, lat_val)
 
@@ -873,7 +939,7 @@ class Registry:
         Returns:
             List of years with available data, sorted in ascending order.
         """
-        return sorted(self._registry_gdf['year'].unique().tolist())
+        return sorted(self._registry_gdf["year"].unique().tolist())
 
     def get_tile_counts_by_year(self) -> Dict[int, int]:
         """Get count of tiles per year using efficient pandas operations.
@@ -882,9 +948,11 @@ class Registry:
             Dictionary mapping year to tile count
         """
         # Use pandas groupby to count unique (lon, lat) coordinates per year
-        counts = self._registry_gdf.groupby('year')[['lon', 'lat']].apply(
-            lambda x: len(x.drop_duplicates())
-        ).to_dict()
+        counts = (
+            self._registry_gdf.groupby("year")[["lon", "lat"]]
+            .apply(lambda x: len(x.drop_duplicates()))
+            .to_dict()
+        )
         return {int(year): int(count) for year, count in counts.items()}
 
     def get_available_embeddings(self) -> List[Tuple[int, float, float]]:
@@ -893,14 +961,16 @@ class Registry:
         Returns:
             List of (year, lon, lat) tuples for all available embedding tiles
         """
-        unique_tiles = self._registry_gdf[['year', 'lon', 'lat']].drop_duplicates()
+        unique_tiles = self._registry_gdf[["year", "lon", "lat"]].drop_duplicates()
 
         # Vectorized conversion using numpy (10-100x faster than iterrows)
-        return list(zip(
-            unique_tiles['year'].astype(int).values,
-            unique_tiles['lon'].values,
-            unique_tiles['lat'].values
-        ))
+        return list(
+            zip(
+                unique_tiles["year"].astype(int).values,
+                unique_tiles["lon"].values,
+                unique_tiles["lat"].values,
+            )
+        )
 
     def fetch(
         self,
@@ -932,7 +1002,9 @@ class Registry:
         # Calculate path from coordinates if not provided
         if path is None:
             if year is None or lon is None or lat is None:
-                raise ValueError("Must provide either 'path' or all of (year, lon, lat)")
+                raise ValueError(
+                    "Must provide either 'path' or all of (year, lon, lat)"
+                )
             embedding_path, scales_path = tile_to_embedding_paths(lon, lat, year)
             path = scales_path if is_scales else embedding_path
 
@@ -945,23 +1017,40 @@ class Registry:
             return str(local_path)
 
         # Query hash from GeoDataFrame for verification if year/lon/lat provided
-        # Note: Only verify hash for embedding files, not scales files (registry stores one hash per tile)
         file_hash = None
-        if (self._registry_gdf is not None and year is not None and lon is not None and
-            lat is not None and not is_scales):
+        if (
+            self.verify_hashes
+            and self._registry_gdf is not None
+            and year is not None
+            and lon is not None
+            and lat is not None
+        ):
             matches = self._registry_gdf[
-                (self._registry_gdf['year'] == year) &
-                (self._registry_gdf['lon'] == lon) &
-                (self._registry_gdf['lat'] == lat)
+                (self._registry_gdf["year"] == year)
+                & (self._registry_gdf["lon"] == lon)
+                & (self._registry_gdf["lat"] == lat)
             ]
             if len(matches) > 0:
-                file_hash = matches.iloc[0]['hash']
+                if is_scales:
+                    # Use scales_hash column for scales files
+                    if "scales_hash" in matches.columns:
+                        file_hash = matches.iloc[0]["scales_hash"]
+                    else:
+                        self.logger.warning(
+                            "Registry missing 'scales_hash' column, skipping hash verification for scales file"
+                        )
+                else:
+                    # Use hash column for embedding files
+                    file_hash = matches.iloc[0]["hash"]
 
         # Download to embeddings_dir
         url = f"{TESSERA_BASE_URL}/{self.version}/{EMBEDDINGS_DIR_NAME}/{path}"
-        downloaded_path = download_file_to_temp(url, expected_hash=file_hash,
-                                               progress_callback=progress_callback,
-                                               cache_path=local_path)
+        downloaded_path = download_file_to_temp(
+            url,
+            expected_hash=file_hash,
+            progress_callback=progress_callback,
+            cache_path=local_path,
+        )
 
         # Return path to saved file
         return downloaded_path
@@ -1005,19 +1094,26 @@ class Registry:
 
         # Query hash from landmasks DataFrame for verification if lon/lat provided
         file_hash = None
-        if self._landmasks_df is not None and lon is not None and lat is not None:
+        if (
+            self.verify_hashes
+            and self._landmasks_df is not None
+            and lon is not None
+            and lat is not None
+        ):
             matches = self._landmasks_df[
-                (self._landmasks_df['lon'] == lon) &
-                (self._landmasks_df['lat'] == lat)
+                (self._landmasks_df["lon"] == lon) & (self._landmasks_df["lat"] == lat)
             ]
             if len(matches) > 0:
-                file_hash = matches.iloc[0]['hash']
+                file_hash = matches.iloc[0]["hash"]
 
         # Download to embeddings_dir
         url = f"{TESSERA_BASE_URL}/{self.version}/{LANDMASKS_DIR_NAME}/{filename}"
-        downloaded_path = download_file_to_temp(url, expected_hash=file_hash,
-                                               progress_callback=progress_callback,
-                                               cache_path=local_path)
+        downloaded_path = download_file_to_temp(
+            url,
+            expected_hash=file_hash,
+            progress_callback=progress_callback,
+            cache_path=local_path,
+        )
 
         # Return path to saved file
         return downloaded_path
@@ -1035,10 +1131,10 @@ class Registry:
         """
         if self._landmasks_df is not None:
             # Count unique (lon, lat) combinations in landmasks registry
-            return len(self._landmasks_df[['lon', 'lat']].drop_duplicates())
+            return len(self._landmasks_df[["lon", "lat"]].drop_duplicates())
 
         # Fallback: count unique tiles in embeddings registry
-        return len(self._registry_gdf[['lon', 'lat']].drop_duplicates())
+        return len(self._registry_gdf[["lon", "lat"]].drop_duplicates())
 
     @property
     def available_landmasks(self) -> List[Tuple[float, float]]:
@@ -1050,14 +1146,13 @@ class Registry:
         """
         # Use landmasks registry if available
         if self._landmasks_df is not None:
-            unique_tiles = self._landmasks_df[['lon', 'lat']].drop_duplicates()
+            unique_tiles = self._landmasks_df[["lon", "lat"]].drop_duplicates()
             # Vectorized conversion (10-100x faster than iterrows)
-            return list(zip(unique_tiles['lon'].values, unique_tiles['lat'].values))
+            return list(zip(unique_tiles["lon"].values, unique_tiles["lat"].values))
 
         # Fallback: assume landmasks are available for all embedding tiles
-        unique_tiles = self._registry_gdf[['lon', 'lat']].drop_duplicates()
-        return list(zip(unique_tiles['lon'].values, unique_tiles['lat'].values))
-
+        unique_tiles = self._registry_gdf[["lon", "lat"]].drop_duplicates()
+        return list(zip(unique_tiles["lon"].values, unique_tiles["lat"].values))
 
     def get_manifest_info(self) -> Tuple[Optional[str], Optional[str]]:
         """Get manifest information (git hash and repo URL).
@@ -1084,16 +1179,16 @@ class Registry:
         Raises:
             ValueError: If tile not found in registry or file_size column missing
         """
-        if 'file_size' not in self._registry_gdf.columns:
+        if "file_size" not in self._registry_gdf.columns:
             raise ValueError(
                 "Registry is missing 'file_size' column. "
                 "Please update your registry to include file size metadata."
             )
 
         matches = self._registry_gdf[
-            (self._registry_gdf['year'] == year) &
-            (self._registry_gdf['lon'] == lon) &
-            (self._registry_gdf['lat'] == lat)
+            (self._registry_gdf["year"] == year)
+            & (self._registry_gdf["lon"] == lon)
+            & (self._registry_gdf["lat"] == lat)
         ]
 
         if len(matches) == 0:
@@ -1101,7 +1196,7 @@ class Registry:
                 f"Tile not found in registry: year={year}, lon={lon:.2f}, lat={lat:.2f}"
             )
 
-        return int(matches.iloc[0]['file_size'])
+        return int(matches.iloc[0]["file_size"])
 
     def get_scales_file_size(self, year: int, lon: float, lat: float) -> int:
         """Get the file size of a scales file from the registry.
@@ -1117,16 +1212,16 @@ class Registry:
         Raises:
             ValueError: If tile not found in registry or scales_size column missing
         """
-        if 'scales_size' not in self._registry_gdf.columns:
+        if "scales_size" not in self._registry_gdf.columns:
             raise ValueError(
                 "Registry is missing 'scales_size' column. "
                 "Please update your registry to include scales file size metadata."
             )
 
         matches = self._registry_gdf[
-            (self._registry_gdf['year'] == year) &
-            (self._registry_gdf['lon'] == lon) &
-            (self._registry_gdf['lat'] == lat)
+            (self._registry_gdf["year"] == year)
+            & (self._registry_gdf["lon"] == lon)
+            & (self._registry_gdf["lat"] == lat)
         ]
 
         if len(matches) == 0:
@@ -1134,7 +1229,7 @@ class Registry:
                 f"Tile not found in registry: year={year}, lon={lon:.2f}, lat={lat:.2f}"
             )
 
-        return int(matches.iloc[0]['scales_size'])
+        return int(matches.iloc[0]["scales_size"])
 
     def get_landmask_file_size(self, lon: float, lat: float) -> int:
         """Get the file size of a landmask tile from the registry.
@@ -1155,15 +1250,14 @@ class Registry:
                 "Please ensure landmasks.parquet is available."
             )
 
-        if 'file_size' not in self._landmasks_df.columns:
+        if "file_size" not in self._landmasks_df.columns:
             raise ValueError(
                 "Landmasks registry is missing 'file_size' column. "
                 "Please update your landmasks registry to include file size metadata."
             )
 
         matches = self._landmasks_df[
-            (self._landmasks_df['lon'] == lon) &
-            (self._landmasks_df['lat'] == lat)
+            (self._landmasks_df["lon"] == lon) & (self._landmasks_df["lat"] == lat)
         ]
 
         if len(matches) == 0:
@@ -1171,14 +1265,14 @@ class Registry:
                 f"Landmask not found in registry: lon={lon:.2f}, lat={lat:.2f}"
             )
 
-        return int(matches.iloc[0]['file_size'])
+        return int(matches.iloc[0]["file_size"])
 
     def calculate_download_requirements(
         self,
         tiles: List[Tuple[int, float, float]],
         output_dir: Path,
         format_type: str,
-        check_existing: bool = True
+        check_existing: bool = True,
     ) -> Tuple[int, int, Dict[str, int]]:
         """Calculate download requirements for a set of tiles.
 
@@ -1205,9 +1299,23 @@ class Registry:
         if format_type == "npy":
             # For NPY format: embedding + scales + landmask per tile
             for tile_year, tile_lon, tile_lat in tiles:
-                embedding_final = output_dir / EMBEDDINGS_DIR_NAME / str(tile_year) / f"grid_{tile_lon:.2f}_{tile_lat:.2f}.npy"
-                scales_final = output_dir / EMBEDDINGS_DIR_NAME / str(tile_year) / f"grid_{tile_lon:.2f}_{tile_lat:.2f}_scales.npy"
-                landmask_final = output_dir / LANDMASKS_DIR_NAME / f"landmask_{tile_lon:.2f}_{tile_lat:.2f}.tif"
+                embedding_final = (
+                    output_dir
+                    / EMBEDDINGS_DIR_NAME
+                    / str(tile_year)
+                    / f"grid_{tile_lon:.2f}_{tile_lat:.2f}.npy"
+                )
+                scales_final = (
+                    output_dir
+                    / EMBEDDINGS_DIR_NAME
+                    / str(tile_year)
+                    / f"grid_{tile_lon:.2f}_{tile_lat:.2f}_scales.npy"
+                )
+                landmask_final = (
+                    output_dir
+                    / LANDMASKS_DIR_NAME
+                    / f"landmask_{tile_lon:.2f}_{tile_lat:.2f}.tif"
+                )
 
                 # Create cache keys for tracking file sizes
                 embedding_key = f"embedding_{tile_year}_{tile_lon}_{tile_lat}"

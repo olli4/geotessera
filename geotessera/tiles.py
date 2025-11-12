@@ -64,9 +64,9 @@ class Tile:
         Returns:
             Array of shape (height, width, 128) - always dequantized
         """
-        if self._format == 'npy':
+        if self._format == "npy":
             return self._load_from_npy()
-        elif self._format == 'geotiff':
+        elif self._format == "geotiff":
             return self._load_from_geotiff()
         else:
             raise ValueError(f"Unknown format: {self._format}")
@@ -98,13 +98,13 @@ class Tile:
             require_landmask: If True (default), landmask must exist for NPY format tiles.
                              For GeoTIFF format, this parameter is ignored.
         """
-        if self._format == 'npy':
+        if self._format == "npy":
             has_embedding = self._embedding_path.exists() and self._scales_path.exists()
             if require_landmask:
                 return has_embedding and self._landmask_path.exists()
             else:
                 return has_embedding
-        elif self._format == 'geotiff':
+        elif self._format == "geotiff":
             return self._geotiff_path.exists()
         elif self._format == 'zarr':
             return self._zarr_path.exists()
@@ -116,7 +116,7 @@ class Tile:
     # -------------------------------------------------------------------------
 
     @classmethod
-    def from_npy(cls, embedding_path: Path, base_dir: Path) -> 'Tile':
+    def from_npy(cls, embedding_path: Path, base_dir: Path) -> "Tile":
         """Create from NPY format files.
 
         Args:
@@ -131,10 +131,14 @@ class Tile:
         tile = cls(lon, lat, year)
 
         # Set format and paths
-        tile._format = 'npy'
+        tile._format = "npy"
         tile._embedding_path = Path(embedding_path)
-        tile._scales_path = tile._embedding_path.parent / f"{tile._embedding_path.stem}_scales.npy"
-        tile._landmask_path = Path(base_dir) / LANDMASKS_DIR_NAME / tile_to_landmask_filename(lon, lat)
+        tile._scales_path = (
+            tile._embedding_path.parent / f"{tile._embedding_path.stem}_scales.npy"
+        )
+        tile._landmask_path = (
+            Path(base_dir) / LANDMASKS_DIR_NAME / tile_to_landmask_filename(lon, lat)
+        )
 
         # Load spatial metadata from landmask (required)
         if not tile._landmask_path.exists():
@@ -148,7 +152,7 @@ class Tile:
         return tile
 
     @classmethod
-    def from_geotiff(cls, geotiff_path: Path) -> 'Tile':
+    def from_geotiff(cls, geotiff_path: Path) -> "Tile":
         """Create from GeoTIFF file.
 
         Args:
@@ -162,7 +166,7 @@ class Tile:
         tile = cls(lon, lat, year)
 
         # Set format and path
-        tile._format = 'geotiff'
+        tile._format = "geotiff"
         tile._geotiff_path = Path(geotiff_path)
 
         # Load spatial metadata from GeoTIFF
@@ -240,8 +244,10 @@ class Tile:
             True if point is within tile bounds
         """
         half_size = 0.05
-        return (self.lon - half_size <= lon < self.lon + half_size and
-                self.lat - half_size <= lat < self.lat + half_size)
+        return (
+            self.lon - half_size <= lon < self.lon + half_size
+            and self.lat - half_size <= lat < self.lat + half_size
+        )
 
     def sample_at_point(self, lon: float, lat: float) -> np.ndarray:
         """Sample embedding at a single point.
@@ -261,6 +267,7 @@ class Tile:
 
         # Transform point to pixel coordinates
         from rasterio.transform import rowcol
+
         row, col = rowcol(self.transform, lon, lat)
 
         # Check bounds
@@ -276,13 +283,13 @@ class Tile:
             Dict with keys: path, data, crs, transform, bounds, height, width
         """
         return {
-            'path': self.grid_name,
-            'data': self.load_embedding(),
-            'crs': self.crs,
-            'transform': self.transform,
-            'bounds': self.bounds,
-            'height': self.height,
-            'width': self.width
+            "path": self.grid_name,
+            "data": self.load_embedding(),
+            "crs": self.crs,
+            "transform": self.transform,
+            "bounds": self.bounds,
+            "height": self.height,
+            "width": self.width,
         }
 
     def __repr__(self):
@@ -298,6 +305,7 @@ class Tile:
 # ============================================================================
 # Discovery functions - find tiles in a directory
 # ============================================================================
+
 
 def discover_tiles(directory: Path) -> List[Tile]:
     """Auto-detect format and discover all tiles.
@@ -315,7 +323,11 @@ def discover_tiles(directory: Path) -> List[Tile]:
     embeddings_dir = directory / EMBEDDINGS_DIR_NAME
     if embeddings_dir.exists() and embeddings_dir.is_dir():
         # Check if there are any .npy files (not just _scales.npy)
-        npy_files = [f for f in embeddings_dir.rglob("*.npy") if not f.name.endswith("_scales.npy")]
+        npy_files = [
+            f
+            for f in embeddings_dir.rglob("*.npy")
+            if not f.name.endswith("_scales.npy")
+        ]
         if npy_files:
             return discover_npy_tiles(directory)
 
@@ -431,12 +443,12 @@ def discover_formats(directory: Path) -> Dict[str, List[Tile]]:
     # Check for NPY format
     npy_tiles = discover_npy_tiles(directory)
     if npy_tiles:
-        formats['npy'] = npy_tiles
+        formats["npy"] = npy_tiles
 
     # Check for GeoTIFF format
     geotiff_tiles = discover_geotiff_tiles(directory)
     if geotiff_tiles:
-        formats['geotiff'] = geotiff_tiles
+        formats["geotiff"] = geotiff_tiles
 
     # Check for zarr format
     zarr_tiles = discover_zarr_tiles(directory)
@@ -449,6 +461,7 @@ def discover_formats(directory: Path) -> Dict[str, List[Tile]]:
 # ============================================================================
 # Helper functions
 # ============================================================================
+
 
 def _parse_npy_filename(path: Path) -> Tuple[float, float, int]:
     """Parse lon, lat, year from NPY filename.
@@ -465,7 +478,7 @@ def _parse_npy_filename(path: Path) -> Tuple[float, float, int]:
         ValueError: If filename cannot be parsed
     """
     # Extract year from path
-    year_match = re.search(r'/(\d{4})/', str(path))
+    year_match = re.search(r"/(\d{4})/", str(path))
     if not year_match:
         raise ValueError(f"Cannot extract year from path: {path}")
     year = int(year_match.group(1))

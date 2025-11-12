@@ -402,6 +402,11 @@ GeoTessera uses a Parquet-based registry system to efficiently manage and access
 - **Block-based organization**: Internal 5×5 degree geographic blocks for efficient queries
 - **Minimal storage**: Registry file is ~few MB and cached locally
 - **Integrity checking**: SHA256 checksums ensure data integrity during downloads
+  - Embedding files verified using `hash` column
+  - Scales files verified using `scales_hash` column
+  - Landmask files verified using landmasks registry `hash` column
+  - **Enabled by default** for data integrity and security
+  - Can be disabled with `verify_hashes=False`, `--skip-hash` CLI flag, or `GEOTESSERA_SKIP_HASH=1` environment variable
 
 ### Registry Sources
 
@@ -518,6 +523,36 @@ geotessera download ...
 When `cache_dir` is not specified, the registry is cached in platform-appropriate locations:
 - **Linux/macOS**: `$XDG_CACHE_HOME/geotessera` or `~/.cache/geotessera`
 - **Windows**: `%LOCALAPPDATA%/geotessera`
+
+## Hash Verification
+
+GeoTessera verifies SHA256 checksums for all downloaded files (embeddings, scales, and landmasks) by default to ensure data integrity. You can disable this verification if needed:
+
+### Python API
+
+```python
+from geotessera import GeoTessera
+
+# Disable hash verification via parameter
+gt = GeoTessera(verify_hashes=False)
+
+# Or use environment variable
+import os
+os.environ['GEOTESSERA_SKIP_HASH'] = '1'
+gt = GeoTessera()
+```
+
+### CLI
+
+```bash
+# Disable hash verification with flag
+geotessera download --bbox "0,52,0.2,52.2" --year 2024 -o ./data --skip-hash
+
+# Or use environment variable
+GEOTESSERA_SKIP_HASH=1 geotessera download --bbox "0,52,0.2,52.2" --year 2024 -o ./data
+```
+
+**Note**: Hash verification is enabled by default for security. Only disable it in trusted environments or for testing purposes.
 
 ## Contributing
 
