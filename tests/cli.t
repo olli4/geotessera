@@ -37,7 +37,7 @@ We just verify key information is present, ignoring formatting:
   $ uv run -m geotessera.cli info --dataset-version v1 | grep -E 'Available years'
   Downloading registry from https://dl2.geotessera.org/v1/registry.parquet
   Registry downloaded successfully
-  Loaded GeoParquet with 1,158,150 tiles
+  Loaded GeoParquet with * tiles (glob)
   Downloading landmasks registry from https://dl2.geotessera.org/v1/landmasks.parquet
   Landmasks registry downloaded successfully
    Available years: 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024 
@@ -128,20 +128,20 @@ Test the info command on the downloaded TIFF tiles.
 Both TIFF and NPY formats should be present (NPY files are retained for efficient reprocessing):
 
   $ uv run -m geotessera.cli info --tiles "$TESTDIR/uk_tiles_tiff"
-   Total tiles: 16                       
-   Format:      GEOTIFF, NPY (USING NPY) 
-   Years:       2024                     
-   CRS:         EPSG:32630, EPSG:32631   
+   Total tiles: 16                             
+   Format:      GEOTIFF, NPY, ZARR (USING NPY) 
+   Years:       2024                           
+   CRS:         EPSG:32630, EPSG:32631         
    Longitude: -0.200000 to 0.200000  
    Latitude:  51.200000 to 51.600000 
    Band Count Files 
    128 bands     16 
 
   $ uv run -m geotessera.cli info --tiles "$TESTDIR/uk_tiles_tiff"
-   Total tiles: 16                       
-   Format:      GEOTIFF, NPY (USING NPY) 
-   Years:       2024                     
-   CRS:         EPSG:32630, EPSG:32631   
+   Total tiles: 16                             
+   Format:      GEOTIFF, NPY, ZARR (USING NPY) 
+   Years:       2024                           
+   CRS:         EPSG:32630, EPSG:32631         
    Longitude: -0.200000 to 0.200000  
    Latitude:  51.200000 to 51.600000 
    Band Count Files 

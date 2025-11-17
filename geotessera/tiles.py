@@ -90,7 +90,6 @@ class Tile:
     def _load_from_zarr(self) -> np.ndarray:
         """Load dequantized data from zarr"""
         import xarray as xr
-        import rioxarray as rxr
 
         return xr.open_dataset(self._zarr_path, decode_coords='all')['embedding'].values
 

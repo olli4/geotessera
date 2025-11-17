@@ -1228,7 +1228,6 @@ def download(
 
                 case 'npy':
                     # Export as quantized numpy arrays with scales
-                    import shutil
 
                     # Create output directory structure
                     output.mkdir(parents=True, exist_ok=True)
@@ -1348,24 +1347,24 @@ def download(
                             except Exception as e:
                                 rprint(f"[yellow]Warning: Failed to download landmask for ({tile_lon}, {tile_lat}): {e}[/yellow]")
 
-                        # Final progress update
-                        progress.update(task, completed=total_bytes, status="Complete")
+                    # Final progress update (after all tiles processed)
+                    progress.update(task, completed=total_bytes, status="Complete")
 
-                        downloaded_size_str = format_bytes(bytes_downloaded) if bytes_downloaded > 0 else "0B"
+                    downloaded_size_str = format_bytes(bytes_downloaded) if bytes_downloaded > 0 else "0B"
+                    rprint(
+                        f"\n[green]{emoji('✅ ')}SUCCESS: Downloaded {len(tiles_to_fetch)} tiles ({downloaded_files} files, {downloaded_size_str})[/green]"
+                    )
+                    if skipped_files > 0:
+                        rprint(f"   Skipped {skipped_files} existing files (resume capability)")
+                    rprint("   Format: Quantized embeddings with separate scales files")
+                    rprint(
+                        "   Structure: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/grid_{lon}_{lat}.npy"
+                    )
+                    rprint("             global_0.1_degree_tiff_all/grid_{lon}_{lat}.tiff")
+                    if bands_list:
                         rprint(
-                            f"\n[green]{emoji('✅ ')}SUCCESS: Downloaded {len(tiles_to_fetch)} tiles ({downloaded_files} files, {downloaded_size_str})[/green]"
+                            "   [yellow]Note: Band selection not supported in NPY format (use TIFF or zarr format instead)[/yellow]"
                         )
-                        if skipped_files > 0:
-                            rprint(f"   Skipped {skipped_files} existing files (resume capability)")
-                        rprint("   Format: Quantized embeddings with separate scales files")
-                        rprint(
-                            "   Structure: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/grid_{lon}_{lat}.npy"
-                        )
-                        rprint("             global_0.1_degree_tiff_all/grid_{lon}_{lat}.tiff")
-                        if bands_list:
-                            rprint(
-                                "   [yellow]Note: Band selection not supported in NPY format (use TIFF or zarr format instead)[/yellow]"
-                            )
 
         if verbose or list_files:
             rprint(f"\n[blue]{emoji('📁 ')}Created files:[/blue]")
@@ -1406,7 +1405,6 @@ def download(
                             rprint(f"   Data type: {src.dtypes[0]}")
                     case 'zarr':
                         import xarray as xr
-                        import rioxarray as rxr
 
                         ds = xr.open_dataset(files[0], decode_coords='all')
                         rprint(f"   CRS: {ds.rio.crs.to_epsg()}")
