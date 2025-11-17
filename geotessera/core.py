@@ -12,7 +12,12 @@ import logging
 import numpy as np
 import geopandas as gpd
 
-from .registry import Registry, EMBEDDINGS_DIR_NAME, tile_to_geotiff_path, tile_to_zarr_path
+from .registry import (
+    Registry,
+    EMBEDDINGS_DIR_NAME,
+    tile_to_geotiff_path,
+    tile_to_zarr_path,
+)
 
 try:
     import importlib.metadata
@@ -1871,6 +1876,7 @@ class GeoTessera:
             import dask  # noqa: F401 - needed for chunking
 
             import warnings
+
             warnings.filterwarnings("ignore", category=UserWarning)
         except ImportError:
             raise ImportError(
@@ -1895,34 +1901,41 @@ class GeoTessera:
         height, width = data.shape[:2]
 
         ds = xr.Dataset(
-            {'embedding': (('y', 'x', 'band'), data)},
+            {"embedding": (("y", "x", "band"), data)},
             coords={
-                'y': np.arange(height),
-                'x': np.arange(width),
-                'band': np.arange(band_count)
+                "y": np.arange(height),
+                "x": np.arange(width),
+                "band": np.arange(band_count),
             },
             attrs={
-                'TESSERA_DATASET_VERSION': self.dataset_version,
-                'TESSERA_YEAR': year,
-                'TESSERA_TILE_LAT': f"{lat:.2f}",
-                'TESSERA_TILE_LON': f"{lon:.2f}",
-                'TESSERA_DESCRIPTION': 'GeoTessera satellite embedding tile',
-                'GEOTESSERA_VERSION': __version__,
-            }
+                "TESSERA_DATASET_VERSION": self.dataset_version,
+                "TESSERA_YEAR": year,
+                "TESSERA_TILE_LAT": f"{lat:.2f}",
+                "TESSERA_TILE_LON": f"{lon:.2f}",
+                "TESSERA_DESCRIPTION": "GeoTessera satellite embedding tile",
+                "GEOTESSERA_VERSION": __version__,
+            },
         )
-                
-        x_coords = [transform.c + (i+0.5) * transform.a for i in range(width)]
-        y_coords = [transform.f + (j+0.5) * transform.e for j in range(height)]
+
+        x_coords = [transform.c + (i + 0.5) * transform.a for i in range(width)]
+        y_coords = [transform.f + (j + 0.5) * transform.e for j in range(height)]
 
         # Add band descriptions
         if bands is not None:
             output_bands = [f"Tessera_Band_{band_idx}" for band_idx in bands]
         else:
-            output_bands = [f'Tessera_Band_{j}' for j in range(128)]
+            output_bands = [f"Tessera_Band_{j}" for j in range(128)]
 
-        ds = ds.assign_coords(x=('x', x_coords), y=('y', y_coords), 
-                              band=('band', np.array(output_bands, dtype=np.dtypes.StringDType())))
-        ds = ds.rio.write_crs(crs).rio.set_spatial_dims(x_dim='x', y_dim='y').rio.write_coordinate_system()
+        ds = ds.assign_coords(
+            x=("x", x_coords),
+            y=("y", y_coords),
+            band=("band", np.array(output_bands, dtype=np.dtypes.StringDType())),
+        )
+        ds = (
+            ds.rio.write_crs(crs)
+            .rio.set_spatial_dims(x_dim="x", y_dim="y")
+            .rio.write_coordinate_system()
+        )
         ds = ds.rio.write_transform(transform)
         ds.to_zarr(output_path, zarr_format=3)
         return str(output_path)
@@ -1959,6 +1972,7 @@ class GeoTessera:
             import dask  # noqa: F401 - needed for chunking
 
             import warnings
+
             warnings.filterwarnings("ignore", category=UserWarning)
         except ImportError:
             raise ImportError(
@@ -1979,8 +1993,11 @@ class GeoTessera:
         if progress_callback:
             progress_callback(0, 100, "Loading registry blocks...")
 
-
-        tiles = list(self.fetch_embeddings(tiles_to_fetch, fetch_progress_callback if progress_callback else None))
+        tiles = list(
+            self.fetch_embeddings(
+                tiles_to_fetch, fetch_progress_callback if progress_callback else None
+            )
+        )
         if progress_callback:
             total_tiles = len(tiles_to_fetch)
 
@@ -1994,9 +2011,11 @@ class GeoTessera:
             )
 
         created_files = []
-        
+
         # Sequential zarr writing
-        for i, (year, tile_lon, tile_lat, embedding, crs, transform) in enumerate(tiles):
+        for i, (year, tile_lon, tile_lat, embedding, crs, transform) in enumerate(
+            tiles
+        ):
             # Use centralized path construction from registry
             zarr_rel_path = tile_to_zarr_path(tile_lon, tile_lat, year)
             output_path = output_dir / EMBEDDINGS_DIR_NAME / zarr_rel_path
@@ -2005,7 +2024,9 @@ class GeoTessera:
             # Update progress to show we're starting this file
             if progress_callback:
                 export_progress = int(50 + (i / total_tiles) * 50)
-                progress_callback(export_progress, 100, f"Creating {output_path.name}...")
+                progress_callback(
+                    export_progress, 100, f"Creating {output_path.name}..."
+                )
 
             # Select bands
             if bands is not None:
@@ -2029,34 +2050,41 @@ class GeoTessera:
             # Get dimensions for GeoTIFF
             height, width = data.shape[:2]
             ds = xr.Dataset(
-                {'embedding': (('y', 'x', 'band'), data)},
+                {"embedding": (("y", "x", "band"), data)},
                 coords={
-                    'y': np.arange(height),
-                    'x': np.arange(width),
-                    'band': np.arange(band_count)
+                    "y": np.arange(height),
+                    "x": np.arange(width),
+                    "band": np.arange(band_count),
                 },
                 attrs={
-                    'TESSERA_DATASET_VERSION': self.dataset_version,
-                    'TESSERA_YEAR': year,
-                    'TESSERA_TILE_LAT': f"{tile_lat:.2f}",
-                    'TESSERA_TILE_LON': f"{tile_lon:.2f}",
-                    'TESSERA_DESCRIPTION': 'GeoTessera satellite embedding tile',
-                    'GEOTESSERA_VERSION': __version__,
-                }
+                    "TESSERA_DATASET_VERSION": self.dataset_version,
+                    "TESSERA_YEAR": year,
+                    "TESSERA_TILE_LAT": f"{tile_lat:.2f}",
+                    "TESSERA_TILE_LON": f"{tile_lon:.2f}",
+                    "TESSERA_DESCRIPTION": "GeoTessera satellite embedding tile",
+                    "GEOTESSERA_VERSION": __version__,
+                },
             )
 
-            x_coords = [transform.c + (i+0.5) * transform.a for i in range(width)]
-            y_coords = [transform.f + (j+0.5) * transform.e for j in range(height)]
+            x_coords = [transform.c + (i + 0.5) * transform.a for i in range(width)]
+            y_coords = [transform.f + (j + 0.5) * transform.e for j in range(height)]
 
             # Add band descriptions
             if bands is not None:
                 output_bands = [f"Tessera_Band_{band_idx}" for band_idx in bands]
             else:
-                output_bands = [f'Tessera_Band_{j}' for j in range(128)]
+                output_bands = [f"Tessera_Band_{j}" for j in range(128)]
 
-            ds = ds.assign_coords(x=('x', x_coords), y=('y', y_coords), 
-                                  band=('band', np.array(output_bands, dtype=np.dtypes.StringDType())))
-            ds = ds.rio.write_crs(crs).rio.set_spatial_dims(x_dim='x', y_dim='y').rio.write_coordinate_system()
+            ds = ds.assign_coords(
+                x=("x", x_coords),
+                y=("y", y_coords),
+                band=("band", np.array(output_bands, dtype=np.dtypes.StringDType())),
+            )
+            ds = (
+                ds.rio.write_crs(crs)
+                .rio.set_spatial_dims(x_dim="x", y_dim="y")
+                .rio.write_coordinate_system()
+            )
             ds = ds.rio.write_transform(transform)
 
             ds.to_zarr(output_path, zarr_format=3)
@@ -2067,7 +2095,9 @@ class GeoTessera:
                 # Phase 2: Exporting zarr (50-100% of total progress)
                 export_progress = int(50 + ((i + 1) / total_tiles) * 50)
                 progress_callback(
-                    export_progress, 100, f"Exported {output_path.name} ({i + 1}/{total_tiles})"
+                    export_progress,
+                    100,
+                    f"Exported {output_path.name} ({i + 1}/{total_tiles})",
                 )
 
         if progress_callback:
@@ -2077,7 +2107,6 @@ class GeoTessera:
 
         self.logger.info(f"Exported {len(created_files)} zarr files to {output_dir}")
         return created_files
-
 
     def apply_pca_to_embeddings(
         self,

@@ -951,7 +951,7 @@ def download(
 
     For zarr format, download quantized embeddings in the registry structure:
     - global_0.1_degree_representation/{year}/grid_{lon:.2f}_{lat:.2f}/grid_{lon:.2f}_{lat:.2f}_{year}.zarr
-    
+
     The NPY format supports resume - if a download is interrupted, running the command
     again will skip files that already exist and only download missing files.
 
@@ -1099,7 +1099,9 @@ def download(
 
     # Validate format
     if format not in ["tiff", "npy", "zarr"]:
-        rprint(f"[red]Error: Invalid format '{format}'. Must be 'tiff', 'npy' or 'zarr'[/red]")
+        rprint(
+            f"[red]Error: Invalid format '{format}'. Must be 'tiff', 'npy' or 'zarr'[/red]"
+        )
         raise typer.Exit(1)
 
     # Display export info
@@ -1199,7 +1201,9 @@ def download(
                         output_dir=output,
                         bands=bands_list,
                         compress=compress,
-                        progress_callback=create_download_progress_callback(progress, task),
+                        progress_callback=create_download_progress_callback(
+                            progress, task
+                        ),
                     )
 
                     rprint(
@@ -1210,12 +1214,14 @@ def download(
                     )
                     rprint("   Files can be individually inspected and processed")
 
-                case 'zarr':
+                case "zarr":
                     files = gt.export_embedding_zarrs(
                         tiles_to_fetch,
                         output_dir=output,
                         bands=bands_list,
-                        progress_callback=create_download_progress_callback(progress, task)
+                        progress_callback=create_download_progress_callback(
+                            progress, task
+                        ),
                     )
 
                     rprint(
@@ -1226,7 +1232,7 @@ def download(
                     )
                     rprint("   Files can be individually inspected and processed")
 
-                case 'npy':
+                case "npy":
                     # Export as quantized numpy arrays with scales
 
                     # Create output directory structure
@@ -1237,11 +1243,18 @@ def download(
                     skipped_files = 0
 
                     # Calculate total download size from registry using Registry method
-                    progress.update(task, completed=0, total=100, status="Calculating download size...")
+                    progress.update(
+                        task,
+                        completed=0,
+                        total=100,
+                        status="Calculating download size...",
+                    )
 
                     try:
-                        total_bytes, _, file_sizes = gt.registry.calculate_download_requirements(
-                            tiles_to_fetch, output, format
+                        total_bytes, _, file_sizes = (
+                            gt.registry.calculate_download_requirements(
+                                tiles_to_fetch, output, format
+                            )
                         )
                     except ValueError as e:
                         rprint(f"[red]Error: {e}[/red]")
@@ -1254,6 +1267,7 @@ def download(
                     # Create a progress callback factory that updates overall byte progress
                     def create_download_callback(file_key):
                         """Create a callback for download progress updates with overall byte tracking."""
+
                         def callback(current, total, status):
                             nonlocal bytes_downloaded
                             # Update total bytes progress
@@ -1262,8 +1276,9 @@ def download(
                                 task,
                                 completed=bytes_downloaded + file_bytes_so_far,
                                 total=total_bytes,
-                                status=status
+                                status=status,
                             )
+
                         return callback
 
                     def mark_file_complete(file_key):
@@ -1273,15 +1288,28 @@ def download(
                             bytes_downloaded += file_sizes[file_key]
 
                     # Reset progress bar for download
-                    progress.update(task, completed=0, total=total_bytes, status=f"Downloading {total_size_str}...")
+                    progress.update(
+                        task,
+                        completed=0,
+                        total=total_bytes,
+                        status=f"Downloading {total_size_str}...",
+                    )
 
                     # Process each tile
-                    for idx, (tile_year, tile_lon, tile_lat) in enumerate(tiles_to_fetch):
+                    for idx, (tile_year, tile_lon, tile_lat) in enumerate(
+                        tiles_to_fetch
+                    ):
                         # Set up final paths with structure mirroring remote
-                        embedding_rel, scales_rel = tile_to_embedding_paths(tile_lon, tile_lat, tile_year)
+                        embedding_rel, scales_rel = tile_to_embedding_paths(
+                            tile_lon, tile_lat, tile_year
+                        )
                         embedding_final = output / EMBEDDINGS_DIR_NAME / embedding_rel
                         scales_final = output / EMBEDDINGS_DIR_NAME / scales_rel
-                        landmask_final = output / LANDMASKS_DIR_NAME / tile_to_landmask_filename(tile_lon, tile_lat)
+                        landmask_final = (
+                            output
+                            / LANDMASKS_DIR_NAME
+                            / tile_to_landmask_filename(tile_lon, tile_lat)
+                        )
 
                         # Create cache keys for tracking
                         embedding_key = f"embedding_{tile_year}_{tile_lon}_{tile_lat}"
@@ -1299,14 +1327,18 @@ def download(
                                     lat=tile_lat,
                                     is_scales=False,
                                     progressbar=False,
-                                    progress_callback=create_download_callback(embedding_key),
-                                    refresh=True
+                                    progress_callback=create_download_callback(
+                                        embedding_key
+                                    ),
+                                    refresh=True,
                                 )
                                 mark_file_complete(embedding_key)
                                 files.append(str(embedding_final))
                                 downloaded_files += 1
                             except Exception as e:
-                                rprint(f"[yellow]Warning: Failed to download embedding for ({tile_lon}, {tile_lat}, {tile_year}): {e}[/yellow]")
+                                rprint(
+                                    f"[yellow]Warning: Failed to download embedding for ({tile_lon}, {tile_lat}, {tile_year}): {e}[/yellow]"
+                                )
                                 continue
 
                         # Download scales file (fetch() saves directly to embeddings_dir)
@@ -1320,14 +1352,18 @@ def download(
                                     lat=tile_lat,
                                     is_scales=True,
                                     progressbar=False,
-                                    progress_callback=create_download_callback(scales_key),
-                                    refresh=True
+                                    progress_callback=create_download_callback(
+                                        scales_key
+                                    ),
+                                    refresh=True,
                                 )
                                 mark_file_complete(scales_key)
                                 files.append(str(scales_final))
                                 downloaded_files += 1
                             except Exception as e:
-                                rprint(f"[yellow]Warning: Failed to download scales for ({tile_lon}, {tile_lat}, {tile_year}): {e}[/yellow]")
+                                rprint(
+                                    f"[yellow]Warning: Failed to download scales for ({tile_lon}, {tile_lat}, {tile_year}): {e}[/yellow]"
+                                )
 
                         # Download landmask file (fetch_landmask() saves directly to embeddings_dir)
                         if landmask_final.exists():
@@ -1338,29 +1374,39 @@ def download(
                                     lon=tile_lon,
                                     lat=tile_lat,
                                     progressbar=False,
-                                    progress_callback=create_download_callback(landmask_key),
-                                    refresh=True
+                                    progress_callback=create_download_callback(
+                                        landmask_key
+                                    ),
+                                    refresh=True,
                                 )
                                 mark_file_complete(landmask_key)
                                 files.append(str(landmask_final))
                                 downloaded_files += 1
                             except Exception as e:
-                                rprint(f"[yellow]Warning: Failed to download landmask for ({tile_lon}, {tile_lat}): {e}[/yellow]")
+                                rprint(
+                                    f"[yellow]Warning: Failed to download landmask for ({tile_lon}, {tile_lat}): {e}[/yellow]"
+                                )
 
                     # Final progress update (after all tiles processed)
                     progress.update(task, completed=total_bytes, status="Complete")
 
-                    downloaded_size_str = format_bytes(bytes_downloaded) if bytes_downloaded > 0 else "0B"
+                    downloaded_size_str = (
+                        format_bytes(bytes_downloaded) if bytes_downloaded > 0 else "0B"
+                    )
                     rprint(
                         f"\n[green]{emoji('✅ ')}SUCCESS: Downloaded {len(tiles_to_fetch)} tiles ({downloaded_files} files, {downloaded_size_str})[/green]"
                     )
                     if skipped_files > 0:
-                        rprint(f"   Skipped {skipped_files} existing files (resume capability)")
+                        rprint(
+                            f"   Skipped {skipped_files} existing files (resume capability)"
+                        )
                     rprint("   Format: Quantized embeddings with separate scales files")
                     rprint(
                         "   Structure: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/grid_{lon}_{lat}.npy"
                     )
-                    rprint("             global_0.1_degree_tiff_all/grid_{lon}_{lat}.tiff")
+                    rprint(
+                        "             global_0.1_degree_tiff_all/grid_{lon}_{lat}.tiff"
+                    )
                     if bands_list:
                         rprint(
                             "   [yellow]Note: Band selection not supported in NPY format (use TIFF or zarr format instead)[/yellow]"
@@ -1395,7 +1441,7 @@ def download(
         if verbose:
             try:
                 match format:
-                    case 'tiff':
+                    case "tiff":
                         import rasterio
 
                         with rasterio.open(files[0]) as src:
@@ -1403,13 +1449,15 @@ def download(
                             rprint(f"   Transform: {src.transform}")
                             rprint(f"   Dimensions: {src.width} x {src.height} pixels")
                             rprint(f"   Data type: {src.dtypes[0]}")
-                    case 'zarr':
+                    case "zarr":
                         import xarray as xr
 
-                        ds = xr.open_dataset(files[0], decode_coords='all')
+                        ds = xr.open_dataset(files[0], decode_coords="all")
                         rprint(f"   CRS: {ds.rio.crs.to_epsg()}")
                         rprint(f"   Transform: {ds.rio.transform()}")
-                        rprint(f"   Dimensions: {ds.rio.width} x {ds.rio.height} pixels")
+                        rprint(
+                            f"   Dimensions: {ds.rio.width} x {ds.rio.height} pixels"
+                        )
                         rprint(f"   Data type: {ds.dtypes['embedding']}")
             except Exception:
                 pass
@@ -1418,14 +1466,20 @@ def download(
 
         tips_table = create_table(show_header=False, box=None)
         match format:
-            case 'tiff':
-                tips_table.add_row("Inspect individual tiles with QGIS, GDAL, or rasterio")
-                tips_table.add_row("Use 'gdalinfo <filename>' to see projection details")
+            case "tiff":
+                tips_table.add_row(
+                    "Inspect individual tiles with QGIS, GDAL, or rasterio"
+                )
+                tips_table.add_row(
+                    "Use 'gdalinfo <filename>' to see projection details"
+                )
                 tips_table.add_row("Process tiles individually or in groups as needed")
                 tips_table.add_row("Create PCA visualization:")
-                tips_table.add_row(f"  [cyan]geotessera visualize {output} pca_mosaic.tif[/cyan]")
-            case 'zarr':
-                tips_table.add_row('Inspect individual tiles with xarray')
+                tips_table.add_row(
+                    f"  [cyan]geotessera visualize {output} pca_mosaic.tif[/cyan]"
+                )
+            case "zarr":
+                tips_table.add_row("Inspect individual tiles with xarray")
 
         rprint(
             create_panel(
@@ -1452,7 +1506,9 @@ def download(
 
 @app.command()
 def visualize(
-    input_path: Annotated[Path, typer.Argument(help="Input GeoTIFF or zarr file or directory")],
+    input_path: Annotated[
+        Path, typer.Argument(help="Input GeoTIFF or zarr file or directory")
+    ],
     output_file: Annotated[Path, typer.Argument(help="Output PCA mosaic file (.tif)")],
     target_crs: Annotated[
         str, typer.Option("--crs", help="Target CRS for reprojection")

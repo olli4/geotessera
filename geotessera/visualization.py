@@ -140,7 +140,7 @@ def analyze_zarr_coverage(zarr_paths: List[str]) -> Dict:
 
     if not zarr_paths:
         return {"error": "No files provided"}
-    
+
     coverage_info = {
         "total_files": len(zarr_paths),
         "tiles": [],
@@ -226,6 +226,7 @@ def analyze_zarr_coverage(zarr_paths: List[str]) -> Dict:
     coverage_info["crs"] = list(coverage_info["crs"])
 
     return coverage_info
+
 
 def visualize_global_coverage(
     tessera_client,

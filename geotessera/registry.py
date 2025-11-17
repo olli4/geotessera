@@ -275,6 +275,7 @@ def tile_to_geotiff_path(lon: float, lat: float, year: int) -> str:
     grid_name = tile_to_grid_name(lon, lat)
     return f"{year}/{grid_name}/{grid_name}_{year}.tiff"
 
+
 def tile_to_zarr_path(lon: float, lat: float, year: int) -> str:
     """Generate GeoTIFF file path for a tile.
 
@@ -288,6 +289,7 @@ def tile_to_zarr_path(lon: float, lat: float, year: int) -> str:
     """
     grid_name = tile_to_grid_name(lon, lat)
     return f"{year}/{grid_name}/{grid_name}_{year}.zarr"
+
 
 def tile_to_landmask_filename(lon: float, lat: float) -> str:
     """Generate landmask filename for a tile.
