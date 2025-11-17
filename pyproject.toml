@@ -32,7 +32,11 @@ dependencies = [
     "scikit-learn>=1.7.1",
     "scikit-image>=0.25.2",
     "pyarrow>=17.0.0",
-    "cram>=0.7"
+    "cram>=0.7",
+    "xarray",
+    "rioxarray",
+    "zarr",
+    "dask"
 ]
 
 [project.urls]

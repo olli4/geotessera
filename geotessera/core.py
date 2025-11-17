@@ -1866,9 +1866,9 @@ class GeoTessera:
         """
         try:
             import xarray as xr
-            import rioxarray as rxr
-            import zarr
-            import dask
+            import rioxarray as rxr  # noqa: F401 - needed for .rio accessor
+            import zarr  # noqa: F401 - needed for .to_zarr()
+            import dask  # noqa: F401 - needed for chunking
 
             import warnings
             warnings.filterwarnings("ignore", category=UserWarning)
@@ -1876,7 +1876,7 @@ class GeoTessera:
             raise ImportError(
                 "saving to zarr requires xarray, rioxarray, zarr and dask"
             )
-        
+
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1954,9 +1954,9 @@ class GeoTessera:
         """
         try:
             import xarray as xr
-            import rioxarray as rxr
-            import zarr
-            import dask
+            import rioxarray as rxr  # noqa: F401 - needed for .rio accessor
+            import zarr  # noqa: F401 - needed for .to_zarr()
+            import dask  # noqa: F401 - needed for chunking
 
             import warnings
             warnings.filterwarnings("ignore", category=UserWarning)
@@ -1964,7 +1964,7 @@ class GeoTessera:
             raise ImportError(
                 "saving to zarr requires xarray, rioxarray, zarr and dask"
             )
-        
+
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 

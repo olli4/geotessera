@@ -133,12 +133,10 @@ def analyze_zarr_coverage(zarr_paths: List[str]) -> Dict:
         Dictionary with coverage statistics and metadata
     """
     try:
-        import xarray as xr
-        import rioxarray as rxr
         from rasterio.warp import transform_bounds
         from geotessera.tiles import Tile
     except ImportError:
-        raise ImportError("xarray, rioxarray and geotessera.tiles required")
+        raise ImportError("rasterio and geotessera.tiles required")
 
     if not zarr_paths:
         return {"error": "No files provided"}

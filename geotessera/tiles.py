@@ -223,7 +223,9 @@ class Tile:
     
     def _load_spatial_metadata_from_zarr(self):
         """Load spatial metadata from zarr"""
-        
+        import xarray as xr
+        import rioxarray  # noqa: F401 - needed for .rio accessor
+
         da = xr.open_dataset(self._zarr_path, decode_coords='all')
         self.crs = da.rio.crs.to_epsg()
         self.transform = da.rio.transform()
