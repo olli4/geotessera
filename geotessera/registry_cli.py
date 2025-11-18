@@ -2369,11 +2369,12 @@ def export_manifests_command(args):
 
 
 def file_scan_command(args):
-    """Recursively scan directories for embedding tiles and generate a parquet inventory.
+    """Recursively scan year directories for embedding tiles and generate a parquet inventory.
 
-    This command scans an input directory tree looking for directories containing
-    embedding tiles (identified by grid*.npy and grid*_scales.npy files). It extracts
-    coordinates from filenames and records modification times for both files.
+    This command scans an input directory expecting year subdirectories (e.g., 2024/, 2023/).
+    Within each year directory, it recursively searches for embedding tiles (identified by
+    grid*.npy and grid*_scales.npy files). It extracts coordinates from filenames and records
+    modification times for both files, along with the year.
 
     Useful for finding potential duplicate embeddings across machines.
     """
@@ -2409,69 +2410,99 @@ def file_scan_command(args):
     # Collect data
     records = []
     processed_dirs = set()
+    years_found = set()
 
-    console.print("\n[cyan]Scanning directories...[/cyan]")
+    console.print("\n[cyan]Scanning for year directories...[/cyan]")
 
-    # Walk the directory tree
-    for root, dirs, files in os.walk(input_dir):
-        # Look for grid*.npy files in this directory
-        grid_files = [f for f in files if grid_pattern.match(f)]
+    # First, identify year directories (subdirectories that are numeric years)
+    year_dirs = []
+    try:
+        for item in input_dir.iterdir():
+            if item.is_dir():
+                # Check if directory name is a valid year (4 digits)
+                if re.match(r'^\d{4}$', item.name):
+                    year = int(item.name)
+                    year_dirs.append((year, item))
+                    console.print(f"  Found year directory: [green]{item.name}[/green]")
+    except Exception as e:
+        console.print(f"[red]Error scanning input directory: {e}[/red]")
+        return 1
 
-        if not grid_files:
-            continue
+    if not year_dirs:
+        console.print("[yellow]No year directories found! Expected directories like 2024/, 2023/, etc.[/yellow]")
+        return 1
 
-        # Process each grid file found
-        for grid_file in grid_files:
-            match = grid_pattern.match(grid_file)
-            if not match:
+    console.print(f"\n[cyan]Scanning {len(year_dirs)} year directories for embedding tiles...[/cyan]")
+
+    # Walk each year directory
+    for year, year_dir in sorted(year_dirs):
+        console.print(f"\n[dim]Processing year {year}...[/dim]")
+
+        for root, dirs, files in os.walk(year_dir):
+            # Look for grid*.npy files in this directory
+            grid_files = [f for f in files if grid_pattern.match(f)]
+
+            if not grid_files:
                 continue
 
-            lon = float(match.group(1))
-            lat = float(match.group(2))
+            # Process each grid file found
+            for grid_file in grid_files:
+                match = grid_pattern.match(grid_file)
+                if not match:
+                    continue
 
-            # Construct paths
-            grid_name = f"grid_{lon:.2f}_{lat:.2f}"
-            grid_path = os.path.join(root, f"{grid_name}.npy")
-            scales_path = os.path.join(root, f"{grid_name}_scales.npy")
+                lon = float(match.group(1))
+                lat = float(match.group(2))
 
-            # Check if both files exist
-            if not os.path.exists(grid_path):
-                console.print(f"[yellow]Warning: Missing {grid_path}[/yellow]")
-                continue
+                # Construct paths
+                grid_name = f"grid_{lon:.2f}_{lat:.2f}"
+                grid_path = os.path.join(root, f"{grid_name}.npy")
+                scales_path = os.path.join(root, f"{grid_name}_scales.npy")
 
-            if not os.path.exists(scales_path):
-                console.print(f"[yellow]Warning: Missing scales file for {grid_path}[/yellow]")
-                continue
+                # Check if both files exist
+                if not os.path.exists(grid_path):
+                    console.print(f"[yellow]Warning: Missing {grid_path}[/yellow]")
+                    continue
 
-            # Get modification times
-            try:
-                grid_stat = os.stat(grid_path)
-                scales_stat = os.stat(scales_path)
+                if not os.path.exists(scales_path):
+                    console.print(f"[yellow]Warning: Missing scales file for {grid_path}[/yellow]")
+                    continue
 
-                grid_mtime = datetime.fromtimestamp(grid_stat.st_mtime)
-                scales_mtime = datetime.fromtimestamp(scales_stat.st_mtime)
-                grid_size = grid_stat.st_size
-                scales_size = scales_stat.st_size
+                # Get modification times and full real paths
+                try:
+                    grid_stat = os.stat(grid_path)
+                    scales_stat = os.stat(scales_path)
 
-                # Record the information
-                records.append({
-                    'directory': root,
-                    'lon': lon,
-                    'lat': lat,
-                    'grid_path': grid_path,
-                    'scales_path': scales_path,
-                    'grid_mtime': grid_mtime,
-                    'scales_mtime': scales_mtime,
-                    'grid_size': grid_size,
-                    'scales_size': scales_size,
-                })
+                    grid_mtime = datetime.fromtimestamp(grid_stat.st_mtime)
+                    scales_mtime = datetime.fromtimestamp(scales_stat.st_mtime)
+                    grid_size = grid_stat.st_size
+                    scales_size = scales_stat.st_size
 
-                # Track unique directories processed
-                processed_dirs.add(root)
+                    # Get full real paths
+                    grid_realpath = os.path.realpath(grid_path)
+                    scales_realpath = os.path.realpath(scales_path)
 
-            except Exception as e:
-                console.print(f"[red]Error processing {grid_path}: {e}[/red]")
-                continue
+                    # Record the information
+                    records.append({
+                        'year': year,
+                        'lon': lon,
+                        'lat': lat,
+                        'directory': root,
+                        'grid_path': grid_realpath,
+                        'scales_path': scales_realpath,
+                        'grid_mtime': grid_mtime,
+                        'scales_mtime': scales_mtime,
+                        'grid_size': grid_size,
+                        'scales_size': scales_size,
+                    })
+
+                    # Track unique directories processed
+                    processed_dirs.add(root)
+                    years_found.add(year)
+
+                except Exception as e:
+                    console.print(f"[red]Error processing {grid_path}: {e}[/red]")
+                    continue
 
     if not records:
         console.print("[yellow]No embedding tiles found![/yellow]")
@@ -2481,8 +2512,8 @@ def file_scan_command(args):
     console.print(f"\n[cyan]Creating parquet file with {len(records):,} tiles...[/cyan]")
     df = pd.DataFrame(records)
 
-    # Sort by lon, lat for easier analysis
-    df = df.sort_values(['lon', 'lat'])
+    # Sort by year, lon, lat for easier analysis
+    df = df.sort_values(['year', 'lon', 'lat'])
 
     # Save to parquet
     try:
@@ -2495,6 +2526,7 @@ def file_scan_command(args):
             Panel.fit(
                 f"[green]✅ Scan Complete[/green]\n"
                 f"📊 Tiles found: {len(records):,}\n"
+                f"📅 Years: {', '.join(str(y) for y in sorted(years_found))}\n"
                 f"📁 Unique directories: {len(processed_dirs):,}\n"
                 f"📄 Output: {output_file}",
                 style="green",
@@ -2504,19 +2536,21 @@ def file_scan_command(args):
         # Show sample of data
         console.print("\n[cyan]Sample of collected data:[/cyan]")
         table = Table(show_header=True)
+        table.add_column("Year", style="magenta")
         table.add_column("Lon", style="cyan")
         table.add_column("Lat", style="cyan")
         table.add_column("Grid mtime", style="yellow")
         table.add_column("Scales mtime", style="yellow")
-        table.add_column("Directory", style="dim")
+        table.add_column("Grid path", style="dim")
 
         for _, row in df.head(5).iterrows():
             table.add_row(
+                str(row['year']),
                 f"{row['lon']:.2f}",
                 f"{row['lat']:.2f}",
                 row['grid_mtime'].strftime('%Y-%m-%d %H:%M:%S'),
                 row['scales_mtime'].strftime('%Y-%m-%d %H:%M:%S'),
-                str(row['directory'])[:50] + "..." if len(str(row['directory'])) > 50 else str(row['directory'])
+                str(row['grid_path'])[:50] + "..." if len(str(row['grid_path'])) > 50 else str(row['grid_path'])
             )
 
         console.print(table)
@@ -2531,10 +2565,10 @@ def file_scan_command(args):
 
 
 def file_check_command(args):
-    """Check multiple inventory parquet files for duplicate lon/lat coordinates.
+    """Check multiple inventory parquet files for duplicate year/lon/lat coordinates.
 
     This command loads multiple parquet files (generated by file-scan) and identifies
-    any lon/lat coordinates that appear in multiple files or multiple times within
+    any year/lon/lat coordinates that appear in multiple files or multiple times within
     the same file. This is useful for finding duplicate embeddings across machines.
     """
     from collections import defaultdict
@@ -2561,7 +2595,7 @@ def file_check_command(args):
     )
 
     # Track coordinates and their sources
-    # Key: (lon, lat), Value: list of (parquet_file, directory, grid_mtime, scales_mtime)
+    # Key: (year, lon, lat), Value: list of location info dicts
     coord_locations = defaultdict(list)
 
     # Load each parquet file
@@ -2572,7 +2606,7 @@ def file_check_command(args):
             df = pd.read_parquet(parquet_file)
 
             # Verify required columns
-            required_cols = ['lon', 'lat', 'directory']
+            required_cols = ['year', 'lon', 'lat', 'directory']
             missing = set(required_cols) - set(df.columns)
             if missing:
                 console.print(
@@ -2585,14 +2619,17 @@ def file_check_command(args):
 
             # Record each coordinate and its location
             for _, row in df.iterrows():
+                year = row['year']
                 lon, lat = row['lon'], row['lat']
                 directory = row['directory']
+                grid_path = row.get('grid_path', None)
                 grid_mtime = row.get('grid_mtime', None)
                 scales_mtime = row.get('scales_mtime', None)
 
-                coord_locations[(lon, lat)].append({
+                coord_locations[(year, lon, lat)].append({
                     'parquet_file': parquet_file.name,
                     'directory': directory,
+                    'grid_path': grid_path,
                     'grid_mtime': grid_mtime,
                     'scales_mtime': scales_mtime,
                 })
@@ -2628,13 +2665,15 @@ def file_check_command(args):
     console.print("\n[bold]Duplicate Coordinates:[/bold]\n")
 
     # Sort duplicates by coordinate for consistent output
-    for (lon, lat), locations in sorted(duplicates.items()):
-        console.print(f"[bold cyan]Coordinate: ({lon:.2f}, {lat:.2f})[/bold cyan]")
+    for (year, lon, lat), locations in sorted(duplicates.items()):
+        console.print(f"[bold cyan]Year {year}, Coordinate: ({lon:.2f}, {lat:.2f})[/bold cyan]")
         console.print(f"  Found in [yellow]{len(locations)}[/yellow] locations:")
 
         for i, loc in enumerate(locations, 1):
             console.print(f"\n  [dim]{i}.[/dim] Parquet: [green]{loc['parquet_file']}[/green]")
             console.print(f"     Directory: {loc['directory']}")
+            if loc['grid_path']:
+                console.print(f"     Grid path: {loc['grid_path']}")
             if loc['grid_mtime']:
                 console.print(f"     Grid mtime: {loc['grid_mtime']}")
             if loc['scales_mtime']:
@@ -2741,26 +2780,28 @@ Examples:
   # Export to custom output directory
   geotessera-registry export-manifests /path/to/v1 --output-dir ~/src/git/ucam-eo/tessera-manifests
 
-  # Scan directories for embedding tiles and create an inventory
+  # Scan year directories for embedding tiles and create an inventory
   geotessera-registry file-scan /path/to/embeddings
 
   # This will:
-  # - Recursively scan for directories containing grid*.npy files
+  # - Scan for year subdirectories (e.g., 2024/, 2023/) in the input directory
+  # - Recursively scan each year directory for grid*.npy files
   # - Extract lon/lat coordinates from filenames
-  # - Record modification times for both grid*.npy and *_scales.npy files
-  # - Generate a parquet file with: directory, lon, lat, grid_mtime, scales_mtime, file sizes
+  # - Record year, modification times for both grid*.npy and *_scales.npy files
+  # - Record full real paths for embedding files
+  # - Generate a parquet file with: year, lon, lat, directory, grid_path, scales_path, grid_mtime, scales_mtime, file sizes
   # - Useful for finding potential duplicate embeddings across machines
 
   # Specify custom output path
   geotessera-registry file-scan /path/to/embeddings --output /path/to/inventory.parquet
 
-  # Check multiple inventory files for duplicate coordinates
+  # Check multiple inventory files for duplicate coordinates (year/lon/lat)
   geotessera-registry file-check machine1_inventory.parquet machine2_inventory.parquet machine3_inventory.parquet
 
   # This will:
   # - Load all specified parquet files (generated by file-scan)
-  # - Find any lon/lat coordinates that appear in multiple files or multiple times
-  # - Display duplicates with their source files, directories, and modification times
+  # - Find any year/lon/lat coordinates that appear in multiple files or multiple times
+  # - Display duplicates with their year, source files, full paths, directories, and modification times
   # - Show summary statistics by parquet file
   # - Useful for identifying duplicate embeddings across generation machines
 
@@ -2876,11 +2917,11 @@ Directory Structure:
     # File-scan command
     file_scan_parser = subparsers.add_parser(
         "file-scan",
-        help="Recursively scan directories for embedding tiles and generate an inventory parquet file",
+        help="Recursively scan year directories for embedding tiles and generate an inventory parquet file",
     )
     file_scan_parser.add_argument(
         "input_dir",
-        help="Base directory to recursively scan for embedding tiles (grid*.npy files)",
+        help="Base directory containing year subdirectories (e.g., 2024/, 2023/) with embedding tiles",
     )
     file_scan_parser.add_argument(
         "--output",
@@ -2893,7 +2934,7 @@ Directory Structure:
     # File-check command
     file_check_parser = subparsers.add_parser(
         "file-check",
-        help="Check multiple inventory parquet files for duplicate lon/lat coordinates",
+        help="Check multiple inventory parquet files for duplicate year/lon/lat coordinates",
     )
     file_check_parser.add_argument(
         "parquet_files",
