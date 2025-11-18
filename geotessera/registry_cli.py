@@ -2368,6 +2368,168 @@ def export_manifests_command(args):
     return 0
 
 
+def file_scan_command(args):
+    """Recursively scan directories for embedding tiles and generate a parquet inventory.
+
+    This command scans an input directory tree looking for directories containing
+    embedding tiles (identified by grid*.npy and grid*_scales.npy files). It extracts
+    coordinates from filenames and records modification times for both files.
+
+    Useful for finding potential duplicate embeddings across machines.
+    """
+    import re
+    from datetime import datetime
+
+    console = Console()
+
+    # Resolve input directory
+    input_dir = Path(args.input_dir).resolve()
+    if not input_dir.exists():
+        console.print(f"[red]Error: Input directory does not exist: {input_dir}[/red]")
+        return 1
+
+    # Determine output file
+    if args.output:
+        output_file = Path(args.output).resolve()
+    else:
+        output_file = input_dir / "embedding_inventory.parquet"
+
+    console.print(
+        Panel.fit(
+            f"[bold blue]🔍 Scanning for Embedding Tiles[/bold blue]\n"
+            f"📁 Input: {input_dir}\n"
+            f"📄 Output: {output_file}",
+            style="blue",
+        )
+    )
+
+    # Pattern to match grid files
+    grid_pattern = re.compile(r"grid_(-?\d+\.\d+)_(-?\d+\.\d+)\.npy$")
+
+    # Collect data
+    records = []
+    processed_dirs = set()
+
+    console.print("\n[cyan]Scanning directories...[/cyan]")
+
+    # Walk the directory tree
+    for root, dirs, files in os.walk(input_dir):
+        # Look for grid*.npy files in this directory
+        grid_files = [f for f in files if grid_pattern.match(f)]
+
+        if not grid_files:
+            continue
+
+        # Process each grid file found
+        for grid_file in grid_files:
+            match = grid_pattern.match(grid_file)
+            if not match:
+                continue
+
+            lon = float(match.group(1))
+            lat = float(match.group(2))
+
+            # Construct paths
+            grid_name = f"grid_{lon:.2f}_{lat:.2f}"
+            grid_path = os.path.join(root, f"{grid_name}.npy")
+            scales_path = os.path.join(root, f"{grid_name}_scales.npy")
+
+            # Check if both files exist
+            if not os.path.exists(grid_path):
+                console.print(f"[yellow]Warning: Missing {grid_path}[/yellow]")
+                continue
+
+            if not os.path.exists(scales_path):
+                console.print(f"[yellow]Warning: Missing scales file for {grid_path}[/yellow]")
+                continue
+
+            # Get modification times
+            try:
+                grid_stat = os.stat(grid_path)
+                scales_stat = os.stat(scales_path)
+
+                grid_mtime = datetime.fromtimestamp(grid_stat.st_mtime)
+                scales_mtime = datetime.fromtimestamp(scales_stat.st_mtime)
+                grid_size = grid_stat.st_size
+                scales_size = scales_stat.st_size
+
+                # Record the information
+                records.append({
+                    'directory': root,
+                    'lon': lon,
+                    'lat': lat,
+                    'grid_path': grid_path,
+                    'scales_path': scales_path,
+                    'grid_mtime': grid_mtime,
+                    'scales_mtime': scales_mtime,
+                    'grid_size': grid_size,
+                    'scales_size': scales_size,
+                })
+
+                # Track unique directories processed
+                processed_dirs.add(root)
+
+            except Exception as e:
+                console.print(f"[red]Error processing {grid_path}: {e}[/red]")
+                continue
+
+    if not records:
+        console.print("[yellow]No embedding tiles found![/yellow]")
+        return 1
+
+    # Create DataFrame
+    console.print(f"\n[cyan]Creating parquet file with {len(records):,} tiles...[/cyan]")
+    df = pd.DataFrame(records)
+
+    # Sort by lon, lat for easier analysis
+    df = df.sort_values(['lon', 'lat'])
+
+    # Save to parquet
+    try:
+        # Create output directory if it doesn't exist
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        df.to_parquet(output_file, index=False)
+
+        console.print(
+            Panel.fit(
+                f"[green]✅ Scan Complete[/green]\n"
+                f"📊 Tiles found: {len(records):,}\n"
+                f"📁 Unique directories: {len(processed_dirs):,}\n"
+                f"📄 Output: {output_file}",
+                style="green",
+            )
+        )
+
+        # Show sample of data
+        console.print("\n[cyan]Sample of collected data:[/cyan]")
+        table = Table(show_header=True)
+        table.add_column("Lon", style="cyan")
+        table.add_column("Lat", style="cyan")
+        table.add_column("Grid mtime", style="yellow")
+        table.add_column("Scales mtime", style="yellow")
+        table.add_column("Directory", style="dim")
+
+        for _, row in df.head(5).iterrows():
+            table.add_row(
+                f"{row['lon']:.2f}",
+                f"{row['lat']:.2f}",
+                row['grid_mtime'].strftime('%Y-%m-%d %H:%M:%S'),
+                row['scales_mtime'].strftime('%Y-%m-%d %H:%M:%S'),
+                str(row['directory'])[:50] + "..." if len(str(row['directory'])) > 50 else str(row['directory'])
+            )
+
+        console.print(table)
+
+        return 0
+
+    except Exception as e:
+        console.print(f"[red]Error writing parquet file: {e}[/red]")
+        import traceback
+        console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        return 1
+
+
 def main():
     """Main entry point for the geotessera-registry CLI tool."""
     # Configure logging with rich handler
@@ -2447,6 +2609,19 @@ Examples:
 
   # Export to custom output directory
   geotessera-registry export-manifests /path/to/v1 --output-dir ~/src/git/ucam-eo/tessera-manifests
+
+  # Scan directories for embedding tiles and create an inventory
+  geotessera-registry file-scan /path/to/embeddings
+
+  # This will:
+  # - Recursively scan for directories containing grid*.npy files
+  # - Extract lon/lat coordinates from filenames
+  # - Record modification times for both grid*.npy and *_scales.npy files
+  # - Generate a parquet file with: directory, lon, lat, grid_mtime, scales_mtime, file sizes
+  # - Useful for finding potential duplicate embeddings across machines
+
+  # Specify custom output path
+  geotessera-registry file-scan /path/to/embeddings --output /path/to/inventory.parquet
 
 This tool is intended for GeoTessera data maintainers to generate the registry
 files that are distributed with the package. End users typically don't need
@@ -2556,6 +2731,23 @@ Directory Structure:
         help="Output directory for text manifest files (default: INPUT_DIR/registry)",
     )
     export_parser.set_defaults(func=export_manifests_command)
+
+    # File-scan command
+    file_scan_parser = subparsers.add_parser(
+        "file-scan",
+        help="Recursively scan directories for embedding tiles and generate an inventory parquet file",
+    )
+    file_scan_parser.add_argument(
+        "input_dir",
+        help="Base directory to recursively scan for embedding tiles (grid*.npy files)",
+    )
+    file_scan_parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Output parquet file path (default: INPUT_DIR/embedding_inventory.parquet)",
+    )
+    file_scan_parser.set_defaults(func=file_scan_command)
 
     args = parser.parse_args()
 
