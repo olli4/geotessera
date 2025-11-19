@@ -1,3 +1,25 @@
+## v0.7.1 (2025-11-19)
+
+This release adds Zarr format support for efficient cloud-native data
+access and includes improvements to registry management tools.
+
+### Zarr Format Support
+
+- **New `--format zarr` option** for `download` command: Download embeddings as Zarr archives for efficient chunked access
+  - Cloud-native format that's optimised for both local and cloud storage with built-in compression
+  - xarray integration for analysis workflows
+  - Metadata preservation includes CRS, scales, and georeferencing information
+  - Usage: `geotessera download --bbox '...' --format zarr --output embeddings.zarr`
+
+### Registry Improvements
+
+- **New `scan` command** for `geotessera-registry`: Utility to scan directories of embeddings and build registry metadata
+  - Efficiently indexes large collections of embedding files and validates file integrity and extracts metadata. Only for registry maintainers.
+
+### Bug Fixes
+
+- Fixed antimeridian handling in country point-in-polygon tests for accurate tile-country mapping, in the global coverage maps.
+
 ## v0.7.0 (2025-11-11)
 
 This release moves to a Parquet-based registry for more efficient handling of
