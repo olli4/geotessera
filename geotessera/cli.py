@@ -888,7 +888,7 @@ def download(
         typer.Option(
             "--format",
             "-f",
-            help="Output format: 'tiff' (georeferenced) or 'npy' (raw arrays)",
+            help="Output format: 'tiff' (georeferenced), 'npy' (raw arrays) or 'zarr' (zarr archive)",
         ),
     ] = "tiff",
     year: Annotated[int, typer.Option("--year", help="Year of embeddings")] = 2024,
@@ -934,11 +934,12 @@ def download(
         ),
     ] = False,
 ):
-    """Download embeddings as numpy arrays or GeoTIFF files.
+    """Download embeddings as numpy arrays, GeoTIFF files or zarr archives.
 
-    Supports two output formats:
+    Supports three output formats:
     - tiff: Georeferenced GeoTIFF files with proper CRS metadata (default)
     - npy: Quantized numpy arrays with separate scales files and landmask TIFFs
+    - zarr: Georeferenced zarr archives with proper CRS metadata
 
     For GeoTIFF format, tiles are organized in the registry structure:
     - global_0.1_degree_representation/{year}/grid_{lon:.2f}_{lat:.2f}/grid_{lon:.2f}_{lat:.2f}_{year}.tiff
@@ -948,10 +949,13 @@ def download(
     - global_0.1_degree_representation/{year}/grid_{lon:.2f}_{lat:.2f}/grid_{lon:.2f}_{lat:.2f}_scales.npy
     - global_0.1_degree_tiff_all/grid_{lon:.2f}_{lat:.2f}.tiff (landmask TIFF)
 
+    For zarr format, download quantized embeddings in the registry structure:
+    - global_0.1_degree_representation/{year}/grid_{lon:.2f}_{lat:.2f}/grid_{lon:.2f}_{lat:.2f}_{year}.zarr
+
     The NPY format supports resume - if a download is interrupted, running the command
     again will skip files that already exist and only download missing files.
 
-    Note: Band selection (--bands) is only supported for TIFF format. The NPY format
+    Note: Band selection (--bands) is only supported for TIFF and zarr formats. The NPY format
     downloads the full quantized embeddings as they exist in the registry.
     """
 
@@ -1094,8 +1098,10 @@ def download(
         rprint("[blue]Exporting all 128 bands[/blue]")
 
     # Validate format
-    if format not in ["tiff", "npy"]:
-        rprint(f"[red]Error: Invalid format '{format}'. Must be 'tiff' or 'npy'[/red]")
+    if format not in ["tiff", "npy", "zarr"]:
+        rprint(
+            f"[red]Error: Invalid format '{format}'. Must be 'tiff', 'npy' or 'zarr'[/red]"
+        )
         raise typer.Exit(1)
 
     # Display export info
@@ -1187,194 +1193,224 @@ def download(
                 f"{emoji('📥 ')}Downloading tiles...", total=100, status="Starting..."
             )
 
-            if format == "tiff":
-                # Export as GeoTIFF files
-                files = gt.export_embedding_geotiffs(
-                    tiles_to_fetch,
-                    output_dir=output,
-                    bands=bands_list,
-                    compress=compress,
-                    progress_callback=create_download_progress_callback(progress, task),
-                )
-
-                rprint(
-                    f"\n[green]{emoji('✅ ')}SUCCESS: Exported {len(files)} GeoTIFF files[/green]"
-                )
-                rprint(
-                    "   Each file preserves its native UTM projection from landmask tiles"
-                )
-                rprint("   Files can be individually inspected and processed")
-
-            else:  # format == 'npy'
-                # Export as quantized numpy arrays with scales
-
-                # Create output directory structure
-                output.mkdir(parents=True, exist_ok=True)
-
-                files = []
-                downloaded_files = 0
-                skipped_files = 0
-
-                # Calculate total download size from registry using Registry method
-                progress.update(
-                    task, completed=0, total=100, status="Calculating download size..."
-                )
-
-                try:
-                    total_bytes, _, file_sizes = (
-                        gt.registry.calculate_download_requirements(
-                            tiles_to_fetch, output, format
-                        )
+            match format:
+                case "tiff":
+                    # Export as GeoTIFF files
+                    files = gt.export_embedding_geotiffs(
+                        tiles_to_fetch,
+                        output_dir=output,
+                        bands=bands_list,
+                        compress=compress,
+                        progress_callback=create_download_progress_callback(
+                            progress, task
+                        ),
                     )
-                except ValueError as e:
-                    rprint(f"[red]Error: {e}[/red]")
-                    raise typer.Exit(1)
 
-                # Track cumulative bytes downloaded
-                bytes_downloaded = 0
-                total_size_str = format_bytes(total_bytes)
+                    rprint(
+                        f"\n[green]{emoji('✅ ')}SUCCESS: Exported {len(files)} GeoTIFF files[/green]"
+                    )
+                    rprint(
+                        "   Each file preserves its native UTM projection from landmask tiles"
+                    )
+                    rprint("   Files can be individually inspected and processed")
 
-                # Create a progress callback factory that updates overall byte progress
-                def create_download_callback(file_key):
-                    """Create a callback for download progress updates with overall byte tracking."""
+                case "zarr":
+                    files = gt.export_embedding_zarrs(
+                        tiles_to_fetch,
+                        output_dir=output,
+                        bands=bands_list,
+                        progress_callback=create_download_progress_callback(
+                            progress, task
+                        ),
+                    )
 
-                    def callback(current, total, status):
+                    rprint(
+                        f"\n[green]{emoji('✅ ')}SUCCESS: Exported {len(files)} zarr archives[/green]"
+                    )
+                    rprint(
+                        "   Each file preserves its native UTM projection from landmask tiles"
+                    )
+                    rprint("   Files can be individually inspected and processed")
+
+                case "npy":
+                    # Export as quantized numpy arrays with scales
+
+                    # Create output directory structure
+                    output.mkdir(parents=True, exist_ok=True)
+
+                    files = []
+                    downloaded_files = 0
+                    skipped_files = 0
+
+                    # Calculate total download size from registry using Registry method
+                    progress.update(
+                        task,
+                        completed=0,
+                        total=100,
+                        status="Calculating download size...",
+                    )
+
+                    try:
+                        total_bytes, _, file_sizes = (
+                            gt.registry.calculate_download_requirements(
+                                tiles_to_fetch, output, format
+                            )
+                        )
+                    except ValueError as e:
+                        rprint(f"[red]Error: {e}[/red]")
+                        raise typer.Exit(1)
+
+                    # Track cumulative bytes downloaded
+                    bytes_downloaded = 0
+                    total_size_str = format_bytes(total_bytes)
+
+                    # Create a progress callback factory that updates overall byte progress
+                    def create_download_callback(file_key):
+                        """Create a callback for download progress updates with overall byte tracking."""
+
+                        def callback(current, total, status):
+                            nonlocal bytes_downloaded
+                            # Update total bytes progress
+                            file_bytes_so_far = current
+                            progress.update(
+                                task,
+                                completed=bytes_downloaded + file_bytes_so_far,
+                                total=total_bytes,
+                                status=status,
+                            )
+
+                        return callback
+
+                    def mark_file_complete(file_key):
+                        """Mark a file as complete and update bytes_downloaded."""
                         nonlocal bytes_downloaded
-                        # Update total bytes progress
-                        file_bytes_so_far = current
-                        progress.update(
-                            task,
-                            completed=bytes_downloaded + file_bytes_so_far,
-                            total=total_bytes,
-                            status=status,
+                        if file_key in file_sizes:
+                            bytes_downloaded += file_sizes[file_key]
+
+                    # Reset progress bar for download
+                    progress.update(
+                        task,
+                        completed=0,
+                        total=total_bytes,
+                        status=f"Downloading {total_size_str}...",
+                    )
+
+                    # Process each tile
+                    for idx, (tile_year, tile_lon, tile_lat) in enumerate(
+                        tiles_to_fetch
+                    ):
+                        # Set up final paths with structure mirroring remote
+                        embedding_rel, scales_rel = tile_to_embedding_paths(
+                            tile_lon, tile_lat, tile_year
+                        )
+                        embedding_final = output / EMBEDDINGS_DIR_NAME / embedding_rel
+                        scales_final = output / EMBEDDINGS_DIR_NAME / scales_rel
+                        landmask_final = (
+                            output
+                            / LANDMASKS_DIR_NAME
+                            / tile_to_landmask_filename(tile_lon, tile_lat)
                         )
 
-                    return callback
+                        # Create cache keys for tracking
+                        embedding_key = f"embedding_{tile_year}_{tile_lon}_{tile_lat}"
+                        scales_key = f"scales_{tile_year}_{tile_lon}_{tile_lat}"
+                        landmask_key = f"landmask_{tile_lon}_{tile_lat}"
 
-                def mark_file_complete(file_key):
-                    """Mark a file as complete and update bytes_downloaded."""
-                    nonlocal bytes_downloaded
-                    if file_key in file_sizes:
-                        bytes_downloaded += file_sizes[file_key]
+                        # Download embedding file (fetch() saves directly to embeddings_dir)
+                        if embedding_final.exists():
+                            skipped_files += 1
+                        else:
+                            try:
+                                gt.registry.fetch(
+                                    year=tile_year,
+                                    lon=tile_lon,
+                                    lat=tile_lat,
+                                    is_scales=False,
+                                    progressbar=False,
+                                    progress_callback=create_download_callback(
+                                        embedding_key
+                                    ),
+                                    refresh=True,
+                                )
+                                mark_file_complete(embedding_key)
+                                files.append(str(embedding_final))
+                                downloaded_files += 1
+                            except Exception as e:
+                                rprint(
+                                    f"[yellow]Warning: Failed to download embedding for ({tile_lon}, {tile_lat}, {tile_year}): {e}[/yellow]"
+                                )
+                                continue
 
-                # Reset progress bar for download
-                progress.update(
-                    task,
-                    completed=0,
-                    total=total_bytes,
-                    status=f"Downloading {total_size_str}...",
-                )
+                        # Download scales file (fetch() saves directly to embeddings_dir)
+                        if scales_final.exists():
+                            skipped_files += 1
+                        else:
+                            try:
+                                gt.registry.fetch(
+                                    year=tile_year,
+                                    lon=tile_lon,
+                                    lat=tile_lat,
+                                    is_scales=True,
+                                    progressbar=False,
+                                    progress_callback=create_download_callback(
+                                        scales_key
+                                    ),
+                                    refresh=True,
+                                )
+                                mark_file_complete(scales_key)
+                                files.append(str(scales_final))
+                                downloaded_files += 1
+                            except Exception as e:
+                                rprint(
+                                    f"[yellow]Warning: Failed to download scales for ({tile_lon}, {tile_lat}, {tile_year}): {e}[/yellow]"
+                                )
 
-                # Process each tile
-                for idx, (tile_year, tile_lon, tile_lat) in enumerate(tiles_to_fetch):
-                    # Set up final paths with structure mirroring remote
-                    embedding_rel, scales_rel = tile_to_embedding_paths(
-                        tile_lon, tile_lat, tile_year
+                        # Download landmask file (fetch_landmask() saves directly to embeddings_dir)
+                        if landmask_final.exists():
+                            skipped_files += 1
+                        else:
+                            try:
+                                gt.registry.fetch_landmask(
+                                    lon=tile_lon,
+                                    lat=tile_lat,
+                                    progressbar=False,
+                                    progress_callback=create_download_callback(
+                                        landmask_key
+                                    ),
+                                    refresh=True,
+                                )
+                                mark_file_complete(landmask_key)
+                                files.append(str(landmask_final))
+                                downloaded_files += 1
+                            except Exception as e:
+                                rprint(
+                                    f"[yellow]Warning: Failed to download landmask for ({tile_lon}, {tile_lat}): {e}[/yellow]"
+                                )
+
+                    # Final progress update (after all tiles processed)
+                    progress.update(task, completed=total_bytes, status="Complete")
+
+                    downloaded_size_str = (
+                        format_bytes(bytes_downloaded) if bytes_downloaded > 0 else "0B"
                     )
-                    embedding_final = output / EMBEDDINGS_DIR_NAME / embedding_rel
-                    scales_final = output / EMBEDDINGS_DIR_NAME / scales_rel
-                    landmask_final = (
-                        output
-                        / LANDMASKS_DIR_NAME
-                        / tile_to_landmask_filename(tile_lon, tile_lat)
-                    )
-
-                    # Create cache keys for tracking
-                    embedding_key = f"embedding_{tile_year}_{tile_lon}_{tile_lat}"
-                    scales_key = f"scales_{tile_year}_{tile_lon}_{tile_lat}"
-                    landmask_key = f"landmask_{tile_lon}_{tile_lat}"
-
-                    # Download embedding file (fetch() saves directly to embeddings_dir)
-                    if embedding_final.exists():
-                        skipped_files += 1
-                    else:
-                        try:
-                            gt.registry.fetch(
-                                year=tile_year,
-                                lon=tile_lon,
-                                lat=tile_lat,
-                                is_scales=False,
-                                progressbar=False,
-                                progress_callback=create_download_callback(
-                                    embedding_key
-                                ),
-                                refresh=True,
-                            )
-                            mark_file_complete(embedding_key)
-                            files.append(str(embedding_final))
-                            downloaded_files += 1
-                        except Exception as e:
-                            rprint(
-                                f"[yellow]Warning: Failed to download embedding for ({tile_lon}, {tile_lat}, {tile_year}): {e}[/yellow]"
-                            )
-                            continue
-
-                    # Download scales file (fetch() saves directly to embeddings_dir)
-                    if scales_final.exists():
-                        skipped_files += 1
-                    else:
-                        try:
-                            gt.registry.fetch(
-                                year=tile_year,
-                                lon=tile_lon,
-                                lat=tile_lat,
-                                is_scales=True,
-                                progressbar=False,
-                                progress_callback=create_download_callback(scales_key),
-                                refresh=True,
-                            )
-                            mark_file_complete(scales_key)
-                            files.append(str(scales_final))
-                            downloaded_files += 1
-                        except Exception as e:
-                            rprint(
-                                f"[yellow]Warning: Failed to download scales for ({tile_lon}, {tile_lat}, {tile_year}): {e}[/yellow]"
-                            )
-
-                    # Download landmask file (fetch_landmask() saves directly to embeddings_dir)
-                    if landmask_final.exists():
-                        skipped_files += 1
-                    else:
-                        try:
-                            gt.registry.fetch_landmask(
-                                lon=tile_lon,
-                                lat=tile_lat,
-                                progressbar=False,
-                                progress_callback=create_download_callback(
-                                    landmask_key
-                                ),
-                                refresh=True,
-                            )
-                            mark_file_complete(landmask_key)
-                            files.append(str(landmask_final))
-                            downloaded_files += 1
-                        except Exception as e:
-                            rprint(
-                                f"[yellow]Warning: Failed to download landmask for ({tile_lon}, {tile_lat}): {e}[/yellow]"
-                            )
-
-                # Final progress update
-                progress.update(task, completed=total_bytes, status="Complete")
-
-                downloaded_size_str = (
-                    format_bytes(bytes_downloaded) if bytes_downloaded > 0 else "0B"
-                )
-                rprint(
-                    f"\n[green]{emoji('✅ ')}SUCCESS: Downloaded {len(tiles_to_fetch)} tiles ({downloaded_files} files, {downloaded_size_str})[/green]"
-                )
-                if skipped_files > 0:
                     rprint(
-                        f"   Skipped {skipped_files} existing files (resume capability)"
+                        f"\n[green]{emoji('✅ ')}SUCCESS: Downloaded {len(tiles_to_fetch)} tiles ({downloaded_files} files, {downloaded_size_str})[/green]"
                     )
-                rprint("   Format: Quantized embeddings with separate scales files")
-                rprint(
-                    "   Structure: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/grid_{lon}_{lat}.npy"
-                )
-                rprint("             global_0.1_degree_tiff_all/grid_{lon}_{lat}.tiff")
-                if bands_list:
+                    if skipped_files > 0:
+                        rprint(
+                            f"   Skipped {skipped_files} existing files (resume capability)"
+                        )
+                    rprint("   Format: Quantized embeddings with separate scales files")
                     rprint(
-                        "   [yellow]Note: Band selection not supported in NPY format (use TIFF format instead)[/yellow]"
+                        "   Structure: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/grid_{lon}_{lat}.npy"
                     )
+                    rprint(
+                        "             global_0.1_degree_tiff_all/grid_{lon}_{lat}.tiff"
+                    )
+                    if bands_list:
+                        rprint(
+                            "   [yellow]Note: Band selection not supported in NPY format (use TIFF or zarr format instead)[/yellow]"
+                        )
 
         if verbose or list_files:
             rprint(f"\n[blue]{emoji('📁 ')}Created files:[/blue]")
@@ -1404,27 +1440,46 @@ def download(
         rprint(f"\n[blue]{emoji('🗺️  ')}Spatial Information:[/blue]")
         if verbose:
             try:
-                import rasterio
+                match format:
+                    case "tiff":
+                        import rasterio
 
-                with rasterio.open(files[0]) as src:
-                    rprint(f"   CRS: {src.crs}")
-                    rprint(f"   Transform: {src.transform}")
-                    rprint(f"   Dimensions: {src.width} x {src.height} pixels")
-                    rprint(f"   Data type: {src.dtypes[0]}")
+                        with rasterio.open(files[0]) as src:
+                            rprint(f"   CRS: {src.crs}")
+                            rprint(f"   Transform: {src.transform}")
+                            rprint(f"   Dimensions: {src.width} x {src.height} pixels")
+                            rprint(f"   Data type: {src.dtypes[0]}")
+                    case "zarr":
+                        import xarray as xr
+
+                        ds = xr.open_dataset(files[0], decode_coords="all")
+                        rprint(f"   CRS: {ds.rio.crs.to_epsg()}")
+                        rprint(f"   Transform: {ds.rio.transform()}")
+                        rprint(
+                            f"   Dimensions: {ds.rio.width} x {ds.rio.height} pixels"
+                        )
+                        rprint(f"   Data type: {ds.dtypes['embedding']}")
             except Exception:
                 pass
 
         rprint(f"   Output directory: {Path(output).resolve()}")
 
         tips_table = create_table(show_header=False, box=None)
-        tips_table.add_row("Inspect individual tiles with QGIS, GDAL, or rasterio")
-        tips_table.add_row("Use 'gdalinfo <filename>' to see projection details")
-        tips_table.add_row("Process tiles individually or in groups as needed")
-        if format == "tiff":
-            tips_table.add_row("Create PCA visualization:")
-            tips_table.add_row(
-                f"  [cyan]geotessera visualize {output} pca_mosaic.tif[/cyan]"
-            )
+        match format:
+            case "tiff":
+                tips_table.add_row(
+                    "Inspect individual tiles with QGIS, GDAL, or rasterio"
+                )
+                tips_table.add_row(
+                    "Use 'gdalinfo <filename>' to see projection details"
+                )
+                tips_table.add_row("Process tiles individually or in groups as needed")
+                tips_table.add_row("Create PCA visualization:")
+                tips_table.add_row(
+                    f"  [cyan]geotessera visualize {output} pca_mosaic.tif[/cyan]"
+                )
+            case "zarr":
+                tips_table.add_row("Inspect individual tiles with xarray")
 
         rprint(
             create_panel(
@@ -1451,7 +1506,9 @@ def download(
 
 @app.command()
 def visualize(
-    input_path: Annotated[Path, typer.Argument(help="Input GeoTIFF file or directory")],
+    input_path: Annotated[
+        Path, typer.Argument(help="Input GeoTIFF or zarr file or directory")
+    ],
     output_file: Annotated[Path, typer.Argument(help="Output PCA mosaic file (.tif)")],
     target_crs: Annotated[
         str, typer.Option("--crs", help="Target CRS for reprojection")
@@ -1490,15 +1547,16 @@ def visualize(
     This ensures consistent principal components across the entire region,
     eliminating tiling artifacts.
 
-    Supports two input formats:
+    Supports three input formats:
     - GeoTIFF format: Directory containing *.tif/*.tiff files
+    - zarr format: Directory containing *.zarr archives
     - NPY format: Directory with global_0.1_degree_representation/{year}/grid_{lon}_{lat}/*.npy structure
 
     The first 3 principal components are mapped to RGB channels for visualization.
     Additional components can be computed for research/analysis purposes.
 
     Examples:
-        # Create PCA visualization from GeoTIFF tiles
+        # Create PCA visualization from GeoTIFF or zarr tiles
         geotessera visualize tiles/ pca_mosaic.tif
 
         # Create PCA visualization from NPY format tiles
@@ -1563,6 +1621,7 @@ def visualize(
         rprint(f"[red]No tiles found in\n{input_path}[/red]")
         rprint("[yellow]Expected either:[/yellow]")
         rprint("  - GeoTIFF files: *.tif/*.tiff in the directory")
+        rprint("  - zarr archives: *.zarr in the directory")
         rprint(
             "  - NPY format: global_0.1_degree_representation/{year}/grid_{lon}_{lat}/*.npy structure"
         )

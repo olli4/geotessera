@@ -197,7 +197,7 @@ Test that info command works on the created PCA mosaics:
 
   $ uv run -m geotessera.cli info --tiles "$TESTDIR/cb_tiles_tiff" 2>&1 | grep -E 'Total tiles|Format|Years' | sed 's/ *$//'
    Total tiles: 4
-   Format:      GEOTIFF, NPY (USING NPY)
+   Format:      GEOTIFF, NPY, ZARR (USING NPY)
    Years:       2024
 
 Test: Error Handling - Invalid Input
