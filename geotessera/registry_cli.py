@@ -2420,7 +2420,7 @@ def file_scan_command(args):
         for item in input_dir.iterdir():
             if item.is_dir():
                 # Check if directory name is a valid year (4 digits)
-                if re.match(r'^\d{4}$', item.name):
+                if re.match(r"^\d{4}$", item.name):
                     year = int(item.name)
                     year_dirs.append((year, item))
                     console.print(f"  Found year directory: [green]{item.name}[/green]")
@@ -2429,10 +2429,14 @@ def file_scan_command(args):
         return 1
 
     if not year_dirs:
-        console.print("[yellow]No year directories found! Expected directories like 2024/, 2023/, etc.[/yellow]")
+        console.print(
+            "[yellow]No year directories found! Expected directories like 2024/, 2023/, etc.[/yellow]"
+        )
         return 1
 
-    console.print(f"\n[cyan]Scanning {len(year_dirs)} year directories for embedding tiles...[/cyan]")
+    console.print(
+        f"\n[cyan]Scanning {len(year_dirs)} year directories for embedding tiles...[/cyan]"
+    )
 
     # Walk each year directory
     for year, year_dir in sorted(year_dirs):
@@ -2465,7 +2469,9 @@ def file_scan_command(args):
                     continue
 
                 if not os.path.exists(scales_path):
-                    console.print(f"[yellow]Warning: Missing scales file for {grid_path}[/yellow]")
+                    console.print(
+                        f"[yellow]Warning: Missing scales file for {grid_path}[/yellow]"
+                    )
                     continue
 
                 # Get modification times and full real paths
@@ -2483,18 +2489,20 @@ def file_scan_command(args):
                     scales_realpath = os.path.realpath(scales_path)
 
                     # Record the information
-                    records.append({
-                        'year': year,
-                        'lon': lon,
-                        'lat': lat,
-                        'directory': root,
-                        'grid_path': grid_realpath,
-                        'scales_path': scales_realpath,
-                        'grid_mtime': grid_mtime,
-                        'scales_mtime': scales_mtime,
-                        'grid_size': grid_size,
-                        'scales_size': scales_size,
-                    })
+                    records.append(
+                        {
+                            "year": year,
+                            "lon": lon,
+                            "lat": lat,
+                            "directory": root,
+                            "grid_path": grid_realpath,
+                            "scales_path": scales_realpath,
+                            "grid_mtime": grid_mtime,
+                            "scales_mtime": scales_mtime,
+                            "grid_size": grid_size,
+                            "scales_size": scales_size,
+                        }
+                    )
 
                     # Track unique directories processed
                     processed_dirs.add(root)
@@ -2509,11 +2517,13 @@ def file_scan_command(args):
         return 1
 
     # Create DataFrame
-    console.print(f"\n[cyan]Creating parquet file with {len(records):,} tiles...[/cyan]")
+    console.print(
+        f"\n[cyan]Creating parquet file with {len(records):,} tiles...[/cyan]"
+    )
     df = pd.DataFrame(records)
 
     # Sort by year, lon, lat for easier analysis
-    df = df.sort_values(['year', 'lon', 'lat'])
+    df = df.sort_values(["year", "lon", "lat"])
 
     # Save to parquet
     try:
@@ -2545,12 +2555,14 @@ def file_scan_command(args):
 
         for _, row in df.head(5).iterrows():
             table.add_row(
-                str(row['year']),
+                str(row["year"]),
                 f"{row['lon']:.2f}",
                 f"{row['lat']:.2f}",
-                row['grid_mtime'].strftime('%Y-%m-%d %H:%M:%S'),
-                row['scales_mtime'].strftime('%Y-%m-%d %H:%M:%S'),
-                str(row['grid_path'])[:50] + "..." if len(str(row['grid_path'])) > 50 else str(row['grid_path'])
+                row["grid_mtime"].strftime("%Y-%m-%d %H:%M:%S"),
+                row["scales_mtime"].strftime("%Y-%m-%d %H:%M:%S"),
+                str(row["grid_path"])[:50] + "..."
+                if len(str(row["grid_path"])) > 50
+                else str(row["grid_path"]),
             )
 
         console.print(table)
@@ -2560,6 +2572,7 @@ def file_scan_command(args):
     except Exception as e:
         console.print(f"[red]Error writing parquet file: {e}[/red]")
         import traceback
+
         console.print(f"[dim]{traceback.format_exc()}[/dim]")
         return 1
 
@@ -2606,42 +2619,51 @@ def file_check_command(args):
             df = pd.read_parquet(parquet_file)
 
             # Verify required columns
-            required_cols = ['year', 'lon', 'lat', 'directory']
+            required_cols = ["year", "lon", "lat", "directory"]
             missing = set(required_cols) - set(df.columns)
             if missing:
                 console.print(
                     f"[yellow]Warning: Missing required columns in {parquet_file.name}: {missing}[/yellow]"
                 )
-                console.print(f"[yellow]Available columns: {df.columns.tolist()}[/yellow]")
+                console.print(
+                    f"[yellow]Available columns: {df.columns.tolist()}[/yellow]"
+                )
                 continue
 
             console.print(f"  Found [green]{len(df):,}[/green] tiles")
 
             # Record each coordinate and its location
             for _, row in df.iterrows():
-                year = row['year']
-                lon, lat = row['lon'], row['lat']
-                directory = row['directory']
-                grid_path = row.get('grid_path', None)
-                grid_mtime = row.get('grid_mtime', None)
-                scales_mtime = row.get('scales_mtime', None)
+                year = row["year"]
+                lon, lat = row["lon"], row["lat"]
+                directory = row["directory"]
+                grid_path = row.get("grid_path", None)
+                grid_mtime = row.get("grid_mtime", None)
+                scales_mtime = row.get("scales_mtime", None)
 
-                coord_locations[(year, lon, lat)].append({
-                    'parquet_file': parquet_file.name,
-                    'directory': directory,
-                    'grid_path': grid_path,
-                    'grid_mtime': grid_mtime,
-                    'scales_mtime': scales_mtime,
-                })
+                coord_locations[(year, lon, lat)].append(
+                    {
+                        "parquet_file": parquet_file.name,
+                        "directory": directory,
+                        "grid_path": grid_path,
+                        "grid_mtime": grid_mtime,
+                        "scales_mtime": scales_mtime,
+                    }
+                )
 
         except Exception as e:
             console.print(f"[red]Error loading {parquet_file.name}: {e}[/red]")
             import traceback
+
             console.print(f"[dim]{traceback.format_exc()}[/dim]")
             continue
 
     # Find duplicates (coordinates that appear more than once)
-    duplicates = {coord: locations for coord, locations in coord_locations.items() if len(locations) > 1}
+    duplicates = {
+        coord: locations
+        for coord, locations in coord_locations.items()
+        if len(locations) > 1
+    }
 
     if not duplicates:
         console.print(
@@ -2666,17 +2688,21 @@ def file_check_command(args):
 
     # Sort duplicates by coordinate for consistent output
     for (year, lon, lat), locations in sorted(duplicates.items()):
-        console.print(f"[bold cyan]Year {year}, Coordinate: ({lon:.2f}, {lat:.2f})[/bold cyan]")
+        console.print(
+            f"[bold cyan]Year {year}, Coordinate: ({lon:.2f}, {lat:.2f})[/bold cyan]"
+        )
         console.print(f"  Found in [yellow]{len(locations)}[/yellow] locations:")
 
         for i, loc in enumerate(locations, 1):
-            console.print(f"\n  [dim]{i}.[/dim] Parquet: [green]{loc['parquet_file']}[/green]")
+            console.print(
+                f"\n  [dim]{i}.[/dim] Parquet: [green]{loc['parquet_file']}[/green]"
+            )
             console.print(f"     Directory: {loc['directory']}")
-            if loc['grid_path']:
+            if loc["grid_path"]:
                 console.print(f"     Grid path: {loc['grid_path']}")
-            if loc['grid_mtime']:
+            if loc["grid_mtime"]:
                 console.print(f"     Grid mtime: {loc['grid_mtime']}")
-            if loc['scales_mtime']:
+            if loc["scales_mtime"]:
                 console.print(f"     Scales mtime: {loc['scales_mtime']}")
 
         console.print()
@@ -2686,7 +2712,7 @@ def file_check_command(args):
     file_dup_counts = defaultdict(int)
     for locations in duplicates.values():
         for loc in locations:
-            file_dup_counts[loc['parquet_file']] += 1
+            file_dup_counts[loc["parquet_file"]] += 1
 
     table = Table(show_header=True)
     table.add_column("Parquet File", style="cyan")
@@ -2938,7 +2964,7 @@ Directory Structure:
     )
     file_check_parser.add_argument(
         "parquet_files",
-        nargs='+',
+        nargs="+",
         help="Parquet files to check for duplicates (output from file-scan command)",
     )
     file_check_parser.set_defaults(func=file_check_command)
