@@ -26,7 +26,7 @@ Test: Version Command
 The version command should print the version number.
 
   $ uv run -m geotessera.cli version
-  0.7.0
+  0.7.1
 
 Test: Info Command (Library Info)
 ----------------------------------
