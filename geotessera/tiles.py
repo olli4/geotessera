@@ -322,8 +322,6 @@ def discover_tiles(directory: Path) -> List[Tile]:
     Returns:
         List of Tile objects with spatial metadata loaded, sorted by (year, lat, lon)
     """
-    import re
-    
     # Check for NPY format first by looking for .npy files in embeddings directory
     # Preferred order is NPY, tiff, zarr, as NPY (more efficient, includes scales)
     embeddings_dir = directory / EMBEDDINGS_DIR_NAME
@@ -380,7 +378,7 @@ def discover_npy_tiles(base_dir: Path) -> List[Tile]:
                 logging.warning(f"Skipping incomplete tile: {npy_file}")
         except ValueError:
             # Skip files that don't match expected filename pattern
-            # (e.g., temporary files, other non-tile files)
+            # ValueError is raised by _parse_npy_filename when pattern doesn't match
             continue
         except Exception as e:
             logging.warning(f"Failed to load tile {npy_file}: {e}")
@@ -412,7 +410,7 @@ def discover_geotiff_tiles(directory: Path) -> List[Tile]:
                 tiles.append(tile)
             except ValueError:
                 # Skip files that don't match expected filename pattern
-                # (e.g., temporary files, other non-tile files)
+                # ValueError is raised by _parse_geotiff_filename when pattern doesn't match
                 continue
             except Exception as e:
                 logging.warning(f"Failed to load tile {geotiff_file}: {e}")
@@ -441,7 +439,7 @@ def discover_zarr_tiles(directory: Path) -> List[Tile]:
                 tiles.append(tile)
             except ValueError:
                 # Skip files that don't match expected filename pattern
-                # (e.g., temporary files, other non-tile files)
+                # ValueError is raised by _parse_zarr_filename when pattern doesn't match
                 continue
             except Exception as e:
                 logging.warning(f"Failed to load tile {zarr_file}: {e}")
