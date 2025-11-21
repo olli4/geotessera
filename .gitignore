@@ -28,3 +28,5 @@ geotessera_vis.png
 .venv
 build/
 repomix-*
+*.err
+.pytest_cache/
