@@ -142,9 +142,10 @@ ruff format .
 
 - GitHub Actions workflow: `.github/workflows/ci.yml`
 - Multi-platform testing: Ubuntu, macOS (Intel & Apple Silicon)
-- Python versions: 3.11, 3.12, 3.13
+- Python versions: 3.11, 3.12, 3.13 (all tested in CI)
 - Dependencies: GDAL must be installed before Python packages
 - Tests run with `uv run cram tests -v`
+- Note: Python 3.13 is tested but not yet listed in package classifiers
 
 ## Key Concepts to Remember
 
