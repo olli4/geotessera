@@ -7,22 +7,6 @@ import re
 from .registry import EMBEDDINGS_DIR_NAME, LANDMASKS_DIR_NAME, tile_to_landmask_filename
 
 
-def _is_temp_file(path: Path) -> bool:
-    """Check if a file is a temporary download file.
-    
-    Temporary files are created during download with pattern: .{filename}_tmp_{random}
-    and should be ignored during tile discovery.
-    
-    Args:
-        path: Path to check
-        
-    Returns:
-        True if the file is a temporary file, False otherwise
-    """
-    # Check if filename starts with '.' (hidden) and contains '_tmp_'
-    return path.name.startswith('.') and '_tmp_' in path.name
-
-
 class Tile:
     """A single embedding tile that abstracts storage format.
 
@@ -338,15 +322,19 @@ def discover_tiles(directory: Path) -> List[Tile]:
     Returns:
         List of Tile objects with spatial metadata loaded, sorted by (year, lat, lon)
     """
+    import re
+    
     # Check for NPY format first by looking for .npy files in embeddings directory
     # Preferred order is NPY, tiff, zarr, as NPY (more efficient, includes scales)
     embeddings_dir = directory / EMBEDDINGS_DIR_NAME
     if embeddings_dir.exists() and embeddings_dir.is_dir():
-        # Check if there are any .npy files (not just _scales.npy or temporary files)
+        # Check if there are any .npy files that match the expected pattern
+        # (not just _scales.npy and must match grid_<lon>_<lat>.npy pattern)
+        npy_pattern = re.compile(r"grid_(-?\d+\.\d+)_(-?\d+\.\d+)\.npy")
         npy_files = [
             f
             for f in embeddings_dir.rglob("*.npy")
-            if not f.name.endswith("_scales.npy") and not _is_temp_file(f)
+            if not f.name.endswith("_scales.npy") and npy_pattern.match(f.name)
         ]
         if npy_files:
             return discover_npy_tiles(directory)
@@ -383,10 +371,6 @@ def discover_npy_tiles(base_dir: Path) -> List[Tile]:
         # Skip scales files
         if npy_file.name.endswith("_scales.npy"):
             continue
-        
-        # Skip temporary download files
-        if _is_temp_file(npy_file):
-            continue
 
         try:
             tile = Tile.from_npy(npy_file, base_dir)
@@ -394,6 +378,10 @@ def discover_npy_tiles(base_dir: Path) -> List[Tile]:
                 tiles.append(tile)
             else:
                 logging.warning(f"Skipping incomplete tile: {npy_file}")
+        except ValueError:
+            # Skip files that don't match expected filename pattern
+            # (e.g., temporary files, other non-tile files)
+            continue
         except Exception as e:
             logging.warning(f"Failed to load tile {npy_file}: {e}")
 
@@ -418,14 +406,14 @@ def discover_geotiff_tiles(directory: Path) -> List[Tile]:
             # Skip landmask files (they're in a different directory and have different naming)
             if LANDMASKS_DIR_NAME in geotiff_file.parts:
                 continue
-            
-            # Skip temporary download files
-            if _is_temp_file(geotiff_file):
-                continue
 
             try:
                 tile = Tile.from_geotiff(geotiff_file)
                 tiles.append(tile)
+            except ValueError:
+                # Skip files that don't match expected filename pattern
+                # (e.g., temporary files, other non-tile files)
+                continue
             except Exception as e:
                 logging.warning(f"Failed to load tile {geotiff_file}: {e}")
 
@@ -447,14 +435,14 @@ def discover_zarr_tiles(directory: Path) -> List[Tile]:
 
     for pattern in ["*.zarr"]:
         for zarr_file in directory.rglob(pattern):
-            # Skip temporary download files
-            if _is_temp_file(zarr_file):
-                continue
-            
             # Skip landmask files (they're in a different directory and have different naming)
             try:
                 tile = Tile.from_zarr(zarr_file)
                 tiles.append(tile)
+            except ValueError:
+                # Skip files that don't match expected filename pattern
+                # (e.g., temporary files, other non-tile files)
+                continue
             except Exception as e:
                 logging.warning(f"Failed to load tile {zarr_file}: {e}")
 
