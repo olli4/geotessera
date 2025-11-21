@@ -173,7 +173,7 @@ ruff format .
 
 - Only registry.parquet is cached (~few MB)
 - Embedding/landmask tiles downloaded to temp files, cleaned up immediately
-- Cache location: `~/.cache/geotessera` (Linux/macOS) or `%LOCALAPPDATA%\geotessera` (Windows)
+- Cache location: `~/.cache/geotessera` (Linux/macOS) or `%LOCALAPPDATA%/geotessera` (Windows)
 - Override with `--cache-dir` or `cache_dir` parameter
 
 ## Common Operations
