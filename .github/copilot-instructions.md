@@ -133,7 +133,7 @@ env TERM=dumb TTY_INTERACTIVE=0 uv run cram tests -v
 uv run -m geotessera.cli --help
 python -m geotessera.cli --help
 
-# Lint code (when ruff config is added)
+# Lint code
 ruff check .
 ruff format .
 ```
