@@ -157,9 +157,9 @@ ruff format .
 
 ### Data Files
 
-1. **Embeddings**: `grid_X.XX_Y.YY.npy` - int8 quantized arrays (H×W×128)
-2. **Scales**: `grid_X.XX_Y.YY_scales.npy` - float32 scale factors
-3. **Landmasks**: `grid_X.XX_Y.YY.tiff` - UTM projection + land/water masks
+1. **Embeddings**: `grid_0.15_52.05.npy` - int8 quantized arrays (H×W×128)
+2. **Scales**: `grid_0.15_52.05_scales.npy` - float32 scale factors
+3. **Landmasks**: `grid_0.15_52.05.tiff` - UTM projection + land/water masks
 4. **Registry**: `registry.parquet` - Parquet metadata with tile locations & hashes
 
 ### Hash Verification
@@ -173,7 +173,7 @@ ruff format .
 
 - Only registry.parquet is cached (~few MB)
 - Embedding/landmask tiles downloaded to temp files, cleaned up immediately
-- Cache location: `~/.cache/geotessera` (Linux/macOS) or `%LOCALAPPDATA%/geotessera` (Windows)
+- Cache location: `~/.cache/geotessera` (Linux/macOS) or `%LOCALAPPDATA%\geotessera` (Windows)
 - Override with `--cache-dir` or `cache_dir` parameter
 
 ## Common Operations
