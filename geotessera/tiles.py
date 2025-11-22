@@ -326,13 +326,12 @@ def discover_tiles(directory: Path) -> List[Tile]:
     # Preferred order is NPY, tiff, zarr, as NPY (more efficient, includes scales)
     embeddings_dir = directory / EMBEDDINGS_DIR_NAME
     if embeddings_dir.exists() and embeddings_dir.is_dir():
-        # Check if there are any .npy files that match the expected pattern
-        # (not just _scales.npy and must match grid_<lon>_<lat>.npy pattern)
-        npy_pattern = re.compile(r"grid_(-?\d+\.\d+)_(-?\d+\.\d+)\.npy")
+        # Check if there are any .npy files (not just _scales.npy)
+        # The actual pattern validation happens in discover_npy_tiles()
         npy_files = [
             f
             for f in embeddings_dir.rglob("*.npy")
-            if not f.name.endswith("_scales.npy") and npy_pattern.match(f.name)
+            if not f.name.endswith("_scales.npy")
         ]
         if npy_files:
             return discover_npy_tiles(directory)
