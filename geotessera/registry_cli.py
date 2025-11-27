@@ -47,6 +47,31 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 
+def emoji(text):
+    """Return emoji text for smart terminals, empty string for dumb/piped output.
+
+    Uses Rich Console's built-in terminal detection plus additional checks
+    for dumb terminals and Windows legacy console encoding issues.
+    """
+    import os
+    import sys
+
+    # Check for dumb terminal
+    if os.environ.get("TERM", "").lower() == "dumb":
+        return ""
+
+    # Check for Windows legacy console with cp1252 encoding
+    if sys.platform == "win32":
+        try:
+            encoding = sys.stdout.encoding or ""
+            if encoding.lower() in ("cp1252", "ascii", ""):
+                return ""
+        except Exception:
+            return ""
+
+    return text if console.is_terminal else ""
+
+
 @dataclass
 class TileInfo:
     """Complete information about a single tessera tile."""
@@ -785,7 +810,7 @@ def check_command(args):
             progress.update(check_task, completed=100, status="Complete")
 
         except Exception as e:
-            console.print(f"[red]❌ Validation failed: {e}[/red]")
+            console.print(f"[red]{emoji('❌ ')}Validation failed: {e}[/red]")
             return 1
 
     # Show results
@@ -1464,7 +1489,7 @@ def scan_embeddings_from_checksums(base_dir, registry_dir, console, db_mode=Fals
     # Summary
     if all_registry_files:
         console.print(
-            f"[green]✓ Created {len(all_registry_files)} registry files[/green]"
+            f"[green]{emoji('✓ ')}Created {len(all_registry_files)} registry files[/green]"
         )
 
     return len(all_registry_files) > 0
@@ -1576,10 +1601,10 @@ def scan_tiffs_from_checksums(base_dir, registry_dir, console):
 
     if all_registry_files:
         console.print(
-            f"[green]✓ Created {len(all_registry_files)} landmasks registry files[/green]"
+            f"[green]{emoji('✓ ')}Created {len(all_registry_files)} landmasks registry files[/green]"
         )
 
-    console.print("[green]✓ Landmasks registry written[/green]")
+    console.print(f"[green]{emoji('✓ ')}Landmasks registry written[/green]")
 
     return True
 
@@ -1666,7 +1691,7 @@ def scan_command(args):
                 f"  (with SHA256 files in grid subdirectories)\n"
                 f"• {tiles_dir}\n"
                 f"  (with SHA256SUM file)\n\n"
-                f"[yellow]💡 Run 'geotessera-registry hash' first to generate checksum files.[/yellow]",
+                f"[yellow]{emoji('💡 ')}Run 'geotessera-registry hash' first to generate checksum files.[/yellow]",
                 style="red",
             )
         )
@@ -2065,10 +2090,10 @@ def commit_command(args):
                 failed_files.append((file_path, str(e)))
 
     if staged_files:
-        console.print(f"[green]✓ Staged {len(staged_files)} files successfully[/green]")
+        console.print(f"[green]{emoji('✓ ')}Staged {len(staged_files)} files successfully[/green]")
 
     if failed_files:
-        console.print(f"[yellow]⚠ Failed to stage {len(failed_files)} files:[/yellow]")
+        console.print(f"[yellow]{emoji('⚠ ')}Failed to stage {len(failed_files)} files:[/yellow]")
         for file_path, error in failed_files[:3]:  # Show first 3 failures
             console.print(f"  {file_path}: {error}")
         if len(failed_files) > 3:
@@ -2105,7 +2130,7 @@ def commit_command(args):
             check=True,
         )
 
-        console.print("[green]✓ Commit created successfully[/green]")
+        console.print(f"[green]{emoji('✓ ')}Commit created successfully[/green]")
 
         # Show the commit hash and stats
         commit_result = subprocess.run(
@@ -2259,7 +2284,7 @@ def export_manifests_command(args):
                 )
 
         console.print(
-            f"[green]✓ Wrote {total_files_written} embeddings registry files[/green]"
+            f"[green]{emoji('✓ ')}Wrote {total_files_written} embeddings registry files[/green]"
         )
 
     except Exception as e:
@@ -2341,7 +2366,7 @@ def export_manifests_command(args):
                     )
 
                 console.print(
-                    f"[green]✓ Wrote {landmask_files_written} landmask registry files[/green]"
+                    f"[green]{emoji('✓ ')}Wrote {landmask_files_written} landmask registry files[/green]"
                 )
                 total_files_written += landmask_files_written
 
@@ -2678,8 +2703,8 @@ def file_check_command(args):
     # Display duplicates
     console.print(
         Panel.fit(
-            f"[yellow]⚠️  Found {len(duplicates):,} duplicate coordinates[/yellow]\n"
-            f"📊 Total unique coordinates: {len(coord_locations):,}",
+            f"[yellow]{emoji('⚠️  ')}Found {len(duplicates):,} duplicate coordinates[/yellow]\n"
+            f"{emoji('📊 ')}Total unique coordinates: {len(coord_locations):,}",
             style="yellow",
         )
     )
