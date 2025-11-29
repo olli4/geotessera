@@ -43,6 +43,8 @@ function Invoke-Geotessera {
     param(
         [string[]]$Arguments
     )
+    $cmdLine = "geotessera $($Arguments -join ' ')"
+    Write-Host "Executing: $cmdLine" -ForegroundColor DarkGray
     $output = & geotessera @Arguments 2>&1
     return $output
 }
@@ -50,7 +52,8 @@ function Invoke-Geotessera {
 function Show-DirectoryTree {
     param(
         [string]$Path,
-        [string]$Indent = ""
+        [string]$Indent = "",
+        [int]$Depth = 0
     )
 
     if (-not (Test-Path $Path)) {
@@ -59,7 +62,9 @@ function Show-DirectoryTree {
     }
 
     $item = Get-Item $Path
-    Write-Host "${Indent}$($item.Name)/" -ForegroundColor Cyan
+    if ($Depth -eq 0) {
+        Write-Host "$($item.Name)/" -ForegroundColor Cyan
+    }
 
     $children = Get-ChildItem -Path $Path -ErrorAction SilentlyContinue | Sort-Object { -not $_.PSIsContainer }, Name
     $childCount = $children.Count
@@ -73,29 +78,8 @@ function Show-DirectoryTree {
 
         if ($child.PSIsContainer) {
             Write-Host "${Indent}${prefix}$($child.Name)/" -ForegroundColor Blue
-            # Recurse into subdirectory
-            $subChildren = Get-ChildItem -Path $child.FullName -ErrorAction SilentlyContinue | Sort-Object { -not $_.PSIsContainer }, Name
-            $subCount = $subChildren.Count
-            $subIndex = 0
-            foreach ($subChild in $subChildren) {
-                $subIndex++
-                $subIsLast = ($subIndex -eq $subCount)
-                $subPrefix = if ($subIsLast) { "└── " } else { "├── " }
-                $subNextIndent = $nextIndent + $(if ($subIsLast) { "    " } else { "│   " })
-
-                if ($subChild.PSIsContainer) {
-                    Write-Host "${nextIndent}${subPrefix}$($subChild.Name)/" -ForegroundColor Blue
-                    # Show file count for deeper directories
-                    $fileCount = (Get-ChildItem -Path $subChild.FullName -File -Recurse -ErrorAction SilentlyContinue).Count
-                    $dirCount = (Get-ChildItem -Path $subChild.FullName -Directory -Recurse -ErrorAction SilentlyContinue).Count
-                    if ($fileCount -gt 0 -or $dirCount -gt 0) {
-                        Write-Host "${subNextIndent}[$fileCount files, $dirCount subdirs]" -ForegroundColor DarkGray
-                    }
-                } else {
-                    $size = "{0:N0}" -f $subChild.Length
-                    Write-Host "${nextIndent}${subPrefix}$($subChild.Name) ($size bytes)" -ForegroundColor White
-                }
-            }
+            # Recurse into subdirectory (full depth)
+            Show-DirectoryTree -Path $child.FullName -Indent $nextIndent -Depth ($Depth + 1)
         } else {
             $size = "{0:N0}" -f $child.Length
             Write-Host "${Indent}${prefix}$($child.Name) ($size bytes)" -ForegroundColor White

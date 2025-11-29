@@ -15,6 +15,7 @@ import logging
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from collections import defaultdict
 import multiprocessing
+import numpy as np
 import pandas as pd
 import geopandas as gpd
 from pathlib import Path
@@ -525,6 +526,10 @@ def create_landmasks_parquet_database(base_dir, output_path, console):
         df = pd.DataFrame(records)
         df = df.sort_values(["lat", "lon"])
 
+        # Add integer grid indices for robust cross-platform lookups
+        df["lon_i"] = (df["lon"] * 100).round().astype(np.int32)
+        df["lat_i"] = (df["lat"] * 100).round().astype(np.int32)
+
         progress.update(parquet_task, completed=50, status="Creating geometries...")
         # Convert to GeoDataFrame with Point geometries
         geometry = gpd.points_from_xy(df["lon"], df["lat"])
@@ -673,6 +678,10 @@ def create_parquet_database_from_filesystem(base_dir, output_path, console):
 
         progress.update(parquet_task, completed=40, status="Converting timestamps...")
         df["mtime"] = pd.to_datetime(df["mtime"], unit="s")
+
+        # Add integer grid indices for robust cross-platform lookups
+        df["lon_i"] = (df["lon"] * 100).round().astype(np.int32)
+        df["lat_i"] = (df["lat"] * 100).round().astype(np.int32)
 
         progress.update(parquet_task, completed=55, status="Creating geometries...")
         # Convert to GeoDataFrame with Point geometries
@@ -2549,6 +2558,10 @@ def file_scan_command(args):
 
     # Sort by year, lon, lat for easier analysis
     df = df.sort_values(["year", "lon", "lat"])
+
+    # Add integer grid indices for robust cross-platform lookups
+    df["lon_i"] = (df["lon"] * 100).round().astype(np.int32)
+    df["lat_i"] = (df["lat"] * 100).round().astype(np.int32)
 
     # Save to parquet
     try:

@@ -231,6 +231,21 @@ def parse_grid_name(filename: str) -> Tuple[Optional[float], Optional[float]]:
     return None, None
 
 
+def coord_to_grid_int(coord: float) -> np.int32:
+    """Convert a float coordinate to an integer grid index.
+
+    Multiplies by 100 and rounds to get an integer index.
+    This is the inverse of grid_int_to_coord().
+
+    Args:
+        coord: Longitude or latitude coordinate (e.g., -0.15, 51.55)
+
+    Returns:
+        Integer grid index (e.g., -15, 5155) as numpy.int32
+    """
+    return np.int32(np.round(coord * 100))
+
+
 def tile_to_grid_name(lon: float, lat: float) -> str:
     """Generate grid name for a tile.
 
@@ -244,7 +259,7 @@ def tile_to_grid_name(lon: float, lat: float) -> str:
     return f"grid_{lon:.2f}_{lat:.2f}"
 
 
-def tile_to_embedding_paths(lon: float, lat: float, year: int) -> Tuple[str, str]:
+def tile_to_embedding_paths(lon: float, lat: float, year: int) -> Tuple[Path, Path]:
     """Generate embedding and scales file paths for a tile.
 
     Args:
@@ -253,15 +268,15 @@ def tile_to_embedding_paths(lon: float, lat: float, year: int) -> Tuple[str, str
         year: Year of embeddings
 
     Returns:
-        Tuple of (embedding_path, scales_path)
+        Tuple of (embedding_path, scales_path) as Path objects
     """
     grid_name = tile_to_grid_name(lon, lat)
-    embedding_path = f"{year}/{grid_name}/{grid_name}.npy"
-    scales_path = f"{year}/{grid_name}/{grid_name}_scales.npy"
+    embedding_path = Path(str(year)) / grid_name / f"{grid_name}.npy"
+    scales_path = Path(str(year)) / grid_name / f"{grid_name}_scales.npy"
     return embedding_path, scales_path
 
 
-def tile_to_geotiff_path(lon: float, lat: float, year: int) -> str:
+def tile_to_geotiff_path(lon: float, lat: float, year: int) -> Path:
     """Generate GeoTIFF file path for a tile.
 
     Args:
@@ -270,14 +285,14 @@ def tile_to_geotiff_path(lon: float, lat: float, year: int) -> str:
         year: Year of embeddings
 
     Returns:
-        str: Relative path like "{year}/grid_{lon}_{lat}/grid_{lon}_{lat}_{year}.tiff"
+        Path: Relative path like "{year}/grid_{lon}_{lat}/grid_{lon}_{lat}_{year}.tiff"
     """
     grid_name = tile_to_grid_name(lon, lat)
-    return f"{year}/{grid_name}/{grid_name}_{year}.tiff"
+    return Path(str(year)) / grid_name / f"{grid_name}_{year}.tiff"
 
 
-def tile_to_zarr_path(lon: float, lat: float, year: int) -> str:
-    """Generate GeoTIFF file path for a tile.
+def tile_to_zarr_path(lon: float, lat: float, year: int) -> Path:
+    """Generate zarr archive path for a tile.
 
     Args:
         lon: Tile center longitude
@@ -285,10 +300,10 @@ def tile_to_zarr_path(lon: float, lat: float, year: int) -> str:
         year: Year of embeddings
 
     Returns:
-        str: Relative path like "{year}/grid_{lon}_{lat}/grid_{lon}_{lat}_{year}.zarr"
+        Path: Relative path like "{year}/grid_{lon}_{lat}/grid_{lon}_{lat}_{year}.zarr"
     """
     grid_name = tile_to_grid_name(lon, lat)
-    return f"{year}/{grid_name}/{grid_name}_{year}.zarr"
+    return Path(str(year)) / grid_name / f"{grid_name}_{year}.zarr"
 
 
 def tile_to_landmask_filename(lon: float, lat: float) -> str:
@@ -783,11 +798,25 @@ class Registry:
 
         self.logger.info(f"Loaded GeoParquet with {len(self._registry_gdf):,} tiles")
 
+        # Ensure integer grid indices exist for robust cross-platform lookups
+        # New registries have these columns; older ones need conversion
+        if "lon_i" not in self._registry_gdf.columns:
+            self._registry_gdf["lon_i"] = (self._registry_gdf["lon"] * 100).round().astype(np.int32)
+        if "lat_i" not in self._registry_gdf.columns:
+            self._registry_gdf["lat_i"] = (self._registry_gdf["lat"] * 100).round().astype(np.int32)
+
         # Validate registry structure
         required_columns = {"lat", "lon", "year", "hash", "file_size"}
         if not required_columns.issubset(self._registry_gdf.columns):
             missing = required_columns - set(self._registry_gdf.columns)
             raise ValueError(f"Registry is missing required columns: {missing}")
+
+        # Build dictionary index for O(1) lookups - avoids non-deterministic
+        # pandas DataFrame filtering issues on some platforms (Windows CI)
+        self._tile_index: Dict[Tuple[int, int, int], int] = {}
+        for idx, row in enumerate(self._registry_gdf.itertuples()):
+            key = (int(row.year), int(row.lon_i), int(row.lat_i))
+            self._tile_index[key] = idx
 
     def _load_landmasks_registry(self):
         """Load landmasks Parquet registry from local path or download from remote with If-Modified-Since refresh."""
@@ -862,6 +891,20 @@ class Registry:
                     f"Landmasks registry is missing required columns: {missing}"
                 )
                 self._landmasks_df = None
+            else:
+                # Ensure integer grid indices exist for robust cross-platform lookups
+                # New registries have these columns; older ones need conversion
+                if "lon_i" not in self._landmasks_df.columns:
+                    self._landmasks_df["lon_i"] = (self._landmasks_df["lon"] * 100).round().astype(np.int32)
+                if "lat_i" not in self._landmasks_df.columns:
+                    self._landmasks_df["lat_i"] = (self._landmasks_df["lat"] * 100).round().astype(np.int32)
+
+                # Build dictionary index for O(1) lookups - avoids non-deterministic
+                # pandas DataFrame filtering issues on some platforms (Windows CI)
+                self._landmask_index: Dict[Tuple[int, int], int] = {}
+                for idx, row in enumerate(self._landmasks_df.itertuples()):
+                    key = (int(row.lon_i), int(row.lat_i))
+                    self._landmask_index[key] = idx
 
     def iter_tiles_in_region(
         self, bounds: Tuple[float, float, float, float], year: int
@@ -909,9 +952,15 @@ class Registry:
         tiles = tiles[tiles["year"] == year]
 
         # Drop duplicates and yield (vectorized iteration)
-        tiles_unique = tiles[["year", "lon", "lat"]].drop_duplicates()
-        for year_val, lon_val, lat_val in tiles_unique.values:
-            yield (int(year_val), lon_val, lat_val)
+        # Use the pre-computed grid indices to ensure consistency with lookups
+        tiles_unique = tiles[["year", "lon", "lat", "lon_i", "lat_i"]].drop_duplicates()
+        for year_val, lon_val, lat_val, lon_i, lat_i in tiles_unique.values:
+            # Store grid indices on the float values so lookups use consistent values
+            # We yield the original floats for compatibility but convert them to exact grid centers
+            # This ensures the yielded coordinates exactly match what's in the registry
+            lon_exact = lon_i / 100.0
+            lat_exact = lat_i / 100.0
+            yield (int(year_val), lon_exact, lat_exact)
 
     def load_blocks_for_region(
         self, bounds: Tuple[float, float, float, float], year: int
@@ -963,14 +1012,15 @@ class Registry:
         Returns:
             List of (year, lon, lat) tuples for all available embedding tiles
         """
-        unique_tiles = self._registry_gdf[["year", "lon", "lat"]].drop_duplicates()
+        unique_tiles = self._registry_gdf[["year", "lon_i", "lat_i"]].drop_duplicates()
 
-        # Vectorized conversion using numpy (10-100x faster than iterrows)
+        # Use grid indices to compute exact grid center coordinates
+        # This ensures coordinates round-trip correctly for lookups
         return list(
             zip(
                 unique_tiles["year"].astype(int).values,
-                unique_tiles["lon"].values,
-                unique_tiles["lat"].values,
+                (unique_tiles["lon_i"].values / 100.0),
+                (unique_tiles["lat_i"].values / 100.0),
             )
         )
 
@@ -1027,10 +1077,13 @@ class Registry:
             and lon is not None
             and lat is not None
         ):
+            # Use pre-computed integer grid indices for robust comparison
+            lon_i = coord_to_grid_int(lon)
+            lat_i = coord_to_grid_int(lat)
             matches = self._registry_gdf[
                 (self._registry_gdf["year"] == year)
-                & (self._registry_gdf["lon"] == lon)
-                & (self._registry_gdf["lat"] == lat)
+                & (self._registry_gdf["lon_i"] == lon_i)
+                & (self._registry_gdf["lat_i"] == lat_i)
             ]
             if len(matches) > 0:
                 if is_scales:
@@ -1046,7 +1099,9 @@ class Registry:
                     file_hash = matches.iloc[0]["hash"]
 
         # Download to embeddings_dir
-        url = f"{TESSERA_BASE_URL}/{self.version}/{EMBEDDINGS_DIR_NAME}/{path}"
+        # Use as_posix() to ensure forward slashes in URL even on Windows
+        path_str = path.as_posix() if isinstance(path, Path) else path
+        url = f"{TESSERA_BASE_URL}/{self.version}/{EMBEDDINGS_DIR_NAME}/{path_str}"
         downloaded_path = download_file_to_temp(
             url,
             expected_hash=file_hash,
@@ -1094,7 +1149,7 @@ class Registry:
             # Use existing local file
             return str(local_path)
 
-        # Query hash from landmasks DataFrame for verification if lon/lat provided
+        # Query hash from landmasks index for verification if lon/lat provided
         file_hash = None
         if (
             self.verify_hashes
@@ -1102,11 +1157,12 @@ class Registry:
             and lon is not None
             and lat is not None
         ):
-            matches = self._landmasks_df[
-                (self._landmasks_df["lon"] == lon) & (self._landmasks_df["lat"] == lat)
-            ]
-            if len(matches) > 0:
-                file_hash = matches.iloc[0]["hash"]
+            lon_i = coord_to_grid_int(lon)
+            lat_i = coord_to_grid_int(lat)
+            key = (int(lon_i), int(lat_i))
+            if key in self._landmask_index:
+                idx = self._landmask_index[key]
+                file_hash = self._landmasks_df.iloc[idx]["hash"]
 
         # Download to embeddings_dir
         url = f"{TESSERA_BASE_URL}/{self.version}/{LANDMASKS_DIR_NAME}/{filename}"
@@ -1148,13 +1204,19 @@ class Registry:
         """
         # Use landmasks registry if available
         if self._landmasks_df is not None:
-            unique_tiles = self._landmasks_df[["lon", "lat"]].drop_duplicates()
-            # Vectorized conversion (10-100x faster than iterrows)
-            return list(zip(unique_tiles["lon"].values, unique_tiles["lat"].values))
+            unique_tiles = self._landmasks_df[["lon_i", "lat_i"]].drop_duplicates()
+            # Use grid indices to compute exact grid center coordinates
+            return list(zip(
+                unique_tiles["lon_i"].values / 100.0,
+                unique_tiles["lat_i"].values / 100.0
+            ))
 
         # Fallback: assume landmasks are available for all embedding tiles
-        unique_tiles = self._registry_gdf[["lon", "lat"]].drop_duplicates()
-        return list(zip(unique_tiles["lon"].values, unique_tiles["lat"].values))
+        unique_tiles = self._registry_gdf[["lon_i", "lat_i"]].drop_duplicates()
+        return list(zip(
+            unique_tiles["lon_i"].values / 100.0,
+            unique_tiles["lat_i"].values / 100.0
+        ))
 
     def get_manifest_info(self) -> Tuple[Optional[str], Optional[str]]:
         """Get manifest information (git hash and repo URL).
@@ -1187,18 +1249,18 @@ class Registry:
                 "Please update your registry to include file size metadata."
             )
 
-        matches = self._registry_gdf[
-            (self._registry_gdf["year"] == year)
-            & (self._registry_gdf["lon"] == lon)
-            & (self._registry_gdf["lat"] == lat)
-        ]
+        # Use dictionary index for O(1) lookup
+        lon_i = coord_to_grid_int(lon)
+        lat_i = coord_to_grid_int(lat)
+        key = (int(year), int(lon_i), int(lat_i))
 
-        if len(matches) == 0:
+        if key not in self._tile_index:
             raise ValueError(
                 f"Tile not found in registry: year={year}, lon={lon:.2f}, lat={lat:.2f}"
             )
 
-        return int(matches.iloc[0]["file_size"])
+        idx = self._tile_index[key]
+        return int(self._registry_gdf.iloc[idx]["file_size"])
 
     def get_scales_file_size(self, year: int, lon: float, lat: float) -> int:
         """Get the file size of a scales file from the registry.
@@ -1220,18 +1282,18 @@ class Registry:
                 "Please update your registry to include scales file size metadata."
             )
 
-        matches = self._registry_gdf[
-            (self._registry_gdf["year"] == year)
-            & (self._registry_gdf["lon"] == lon)
-            & (self._registry_gdf["lat"] == lat)
-        ]
+        # Use dictionary index for O(1) lookup
+        lon_i = coord_to_grid_int(lon)
+        lat_i = coord_to_grid_int(lat)
+        key = (int(year), int(lon_i), int(lat_i))
 
-        if len(matches) == 0:
+        if key not in self._tile_index:
             raise ValueError(
                 f"Tile not found in registry: year={year}, lon={lon:.2f}, lat={lat:.2f}"
             )
 
-        return int(matches.iloc[0]["scales_size"])
+        idx = self._tile_index[key]
+        return int(self._registry_gdf.iloc[idx]["scales_size"])
 
     def get_landmask_file_size(self, lon: float, lat: float) -> int:
         """Get the file size of a landmask tile from the registry.
@@ -1258,16 +1320,18 @@ class Registry:
                 "Please update your landmasks registry to include file size metadata."
             )
 
-        matches = self._landmasks_df[
-            (self._landmasks_df["lon"] == lon) & (self._landmasks_df["lat"] == lat)
-        ]
+        # Use dictionary index for O(1) lookup
+        lon_i = coord_to_grid_int(lon)
+        lat_i = coord_to_grid_int(lat)
+        key = (int(lon_i), int(lat_i))
 
-        if len(matches) == 0:
+        if key not in self._landmask_index:
             raise ValueError(
                 f"Landmask not found in registry: lon={lon:.2f}, lat={lat:.2f}"
             )
 
-        return int(matches.iloc[0]["file_size"])
+        idx = self._landmask_index[key]
+        return int(self._landmasks_df.iloc[idx]["file_size"])
 
     def calculate_download_requirements(
         self,
@@ -1301,22 +1365,16 @@ class Registry:
         if format_type == "npy":
             # For NPY format: embedding + scales + landmask per tile
             for tile_year, tile_lon, tile_lat in tiles:
-                embedding_final = (
-                    output_dir
-                    / EMBEDDINGS_DIR_NAME
-                    / str(tile_year)
-                    / f"grid_{tile_lon:.2f}_{tile_lat:.2f}.npy"
+                # Use tile_to_embedding_paths for correct directory structure
+                embedding_rel, scales_rel = tile_to_embedding_paths(
+                    tile_lon, tile_lat, tile_year
                 )
-                scales_final = (
-                    output_dir
-                    / EMBEDDINGS_DIR_NAME
-                    / str(tile_year)
-                    / f"grid_{tile_lon:.2f}_{tile_lat:.2f}_scales.npy"
-                )
+                embedding_final = output_dir / EMBEDDINGS_DIR_NAME / embedding_rel
+                scales_final = output_dir / EMBEDDINGS_DIR_NAME / scales_rel
                 landmask_final = (
                     output_dir
                     / LANDMASKS_DIR_NAME
-                    / f"landmask_{tile_lon:.2f}_{tile_lat:.2f}.tif"
+                    / tile_to_landmask_filename(tile_lon, tile_lat)
                 )
 
                 # Create cache keys for tracking file sizes
