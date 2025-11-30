@@ -798,13 +798,6 @@ class Registry:
 
         self.logger.info(f"Loaded GeoParquet with {len(self._registry_gdf):,} tiles")
 
-        # Ensure integer grid indices exist for robust cross-platform lookups
-        # New registries have these columns; older ones need conversion
-        if "lon_i" not in self._registry_gdf.columns:
-            self._registry_gdf["lon_i"] = (self._registry_gdf["lon"] * 100).round().astype(np.int32)
-        if "lat_i" not in self._registry_gdf.columns:
-            self._registry_gdf["lat_i"] = (self._registry_gdf["lat"] * 100).round().astype(np.int32)
-
         # Validate registry structure
         required_columns = {"lat", "lon", "year", "hash", "file_size"}
         if not required_columns.issubset(self._registry_gdf.columns):
@@ -815,7 +808,9 @@ class Registry:
         # pandas DataFrame filtering issues on some platforms (Windows CI)
         self._tile_index: Dict[Tuple[int, int, int], int] = {}
         for idx, row in enumerate(self._registry_gdf.itertuples()):
-            key = (int(row.year), int(row.lon_i), int(row.lat_i))
+            lon_i = int(coord_to_grid_int(row.lon))
+            lat_i = int(coord_to_grid_int(row.lat))
+            key = (int(row.year), lon_i, lat_i)
             self._tile_index[key] = idx
 
     def _load_landmasks_registry(self):
@@ -892,18 +887,13 @@ class Registry:
                 )
                 self._landmasks_df = None
             else:
-                # Ensure integer grid indices exist for robust cross-platform lookups
-                # New registries have these columns; older ones need conversion
-                if "lon_i" not in self._landmasks_df.columns:
-                    self._landmasks_df["lon_i"] = (self._landmasks_df["lon"] * 100).round().astype(np.int32)
-                if "lat_i" not in self._landmasks_df.columns:
-                    self._landmasks_df["lat_i"] = (self._landmasks_df["lat"] * 100).round().astype(np.int32)
-
                 # Build dictionary index for O(1) lookups - avoids non-deterministic
                 # pandas DataFrame filtering issues on some platforms (Windows CI)
                 self._landmask_index: Dict[Tuple[int, int], int] = {}
                 for idx, row in enumerate(self._landmasks_df.itertuples()):
-                    key = (int(row.lon_i), int(row.lat_i))
+                    lon_i = int(coord_to_grid_int(row.lon))
+                    lat_i = int(coord_to_grid_int(row.lat))
+                    key = (lon_i, lat_i)
                     self._landmask_index[key] = idx
 
     def iter_tiles_in_region(
@@ -951,16 +941,14 @@ class Registry:
 
         tiles = tiles[tiles["year"] == year]
 
-        # Drop duplicates and yield (vectorized iteration)
-        # Use the pre-computed grid indices to ensure consistency with lookups
-        tiles_unique = tiles[["year", "lon", "lat", "lon_i", "lat_i"]].drop_duplicates()
-        for year_val, lon_val, lat_val, lon_i, lat_i in tiles_unique.values:
-            # Store grid indices on the float values so lookups use consistent values
-            # We yield the original floats for compatibility but convert them to exact grid centers
-            # This ensures the yielded coordinates exactly match what's in the registry
-            lon_exact = lon_i / 100.0
-            lat_exact = lat_i / 100.0
-            yield (int(year_val), lon_exact, lat_exact)
+        # Drop duplicates and yield - compute exact grid centers to ensure
+        # coordinates match what the dictionary index expects
+        tiles_unique = tiles[["year", "lon", "lat"]].drop_duplicates()
+        for year_val, lon_val, lat_val in tiles_unique.values:
+            # Convert to grid indices and back to get exact grid centers
+            lon_i = coord_to_grid_int(lon_val)
+            lat_i = coord_to_grid_int(lat_val)
+            yield (int(year_val), lon_i / 100.0, lat_i / 100.0)
 
     def load_blocks_for_region(
         self, bounds: Tuple[float, float, float, float], year: int
@@ -1012,15 +1000,16 @@ class Registry:
         Returns:
             List of (year, lon, lat) tuples for all available embedding tiles
         """
-        unique_tiles = self._registry_gdf[["year", "lon_i", "lat_i"]].drop_duplicates()
+        unique_tiles = self._registry_gdf[["year", "lon", "lat"]].drop_duplicates()
 
-        # Use grid indices to compute exact grid center coordinates
-        # This ensures coordinates round-trip correctly for lookups
+        # Compute exact grid center coordinates to ensure round-trip consistency
+        lon_i = np.round(unique_tiles["lon"].values * 100).astype(np.int32)
+        lat_i = np.round(unique_tiles["lat"].values * 100).astype(np.int32)
         return list(
             zip(
                 unique_tiles["year"].astype(int).values,
-                (unique_tiles["lon_i"].values / 100.0),
-                (unique_tiles["lat_i"].values / 100.0),
+                lon_i / 100.0,
+                lat_i / 100.0,
             )
         )
 
@@ -1077,26 +1066,23 @@ class Registry:
             and lon is not None
             and lat is not None
         ):
-            # Use pre-computed integer grid indices for robust comparison
             lon_i = coord_to_grid_int(lon)
             lat_i = coord_to_grid_int(lat)
-            matches = self._registry_gdf[
-                (self._registry_gdf["year"] == year)
-                & (self._registry_gdf["lon_i"] == lon_i)
-                & (self._registry_gdf["lat_i"] == lat_i)
-            ]
-            if len(matches) > 0:
+            key = (int(year), int(lon_i), int(lat_i))
+            if key in self._tile_index:
+                idx = self._tile_index[key]
+                row = self._registry_gdf.iloc[idx]
                 if is_scales:
                     # Use scales_hash column for scales files
-                    if "scales_hash" in matches.columns:
-                        file_hash = matches.iloc[0]["scales_hash"]
+                    if "scales_hash" in row.index:
+                        file_hash = row["scales_hash"]
                     else:
                         self.logger.warning(
                             "Registry missing 'scales_hash' column, skipping hash verification for scales file"
                         )
                 else:
                     # Use hash column for embedding files
-                    file_hash = matches.iloc[0]["hash"]
+                    file_hash = row["hash"]
 
         # Download to embeddings_dir
         # Use as_posix() to ensure forward slashes in URL even on Windows
@@ -1204,19 +1190,16 @@ class Registry:
         """
         # Use landmasks registry if available
         if self._landmasks_df is not None:
-            unique_tiles = self._landmasks_df[["lon_i", "lat_i"]].drop_duplicates()
-            # Use grid indices to compute exact grid center coordinates
-            return list(zip(
-                unique_tiles["lon_i"].values / 100.0,
-                unique_tiles["lat_i"].values / 100.0
-            ))
+            unique_tiles = self._landmasks_df[["lon", "lat"]].drop_duplicates()
+            lon_i = np.round(unique_tiles["lon"].values * 100).astype(np.int32)
+            lat_i = np.round(unique_tiles["lat"].values * 100).astype(np.int32)
+            return list(zip(lon_i / 100.0, lat_i / 100.0))
 
         # Fallback: assume landmasks are available for all embedding tiles
-        unique_tiles = self._registry_gdf[["lon_i", "lat_i"]].drop_duplicates()
-        return list(zip(
-            unique_tiles["lon_i"].values / 100.0,
-            unique_tiles["lat_i"].values / 100.0
-        ))
+        unique_tiles = self._registry_gdf[["lon", "lat"]].drop_duplicates()
+        lon_i = np.round(unique_tiles["lon"].values * 100).astype(np.int32)
+        lat_i = np.round(unique_tiles["lat"].values * 100).astype(np.int32)
+        return list(zip(lon_i / 100.0, lat_i / 100.0))
 
     def get_manifest_info(self) -> Tuple[Optional[str], Optional[str]]:
         """Get manifest information (git hash and repo URL).
