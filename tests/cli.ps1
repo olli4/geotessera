@@ -348,6 +348,44 @@ try {
         Write-Host $resumeString
     }
 
+    # Test: Coverage Command
+    Write-TestHeader "Test: Coverage Command"
+
+    $coverageOutputDir = Join-Path $TestDir "coverage_output"
+    New-Item -ItemType Directory -Force -Path $coverageOutputDir | Out-Null
+    $coveragePng = Join-Path $coverageOutputDir "uk_coverage.png"
+
+    $coverageOutput = Invoke-Geotessera -Arguments @(
+        "coverage",
+        "--country", "United Kingdom",
+        "--output", $coveragePng,
+        "--dataset-version", "v1"
+    )
+    $coverageString = $coverageOutput | Out-String
+
+    # Check if PNG file was created
+    $pngCreated = Test-Path $coveragePng
+    Write-TestResult -TestName "Coverage PNG file created" -Passed $pngCreated
+
+    # Check if JSON file was created (same directory, coverage.json)
+    $coverageJson = Join-Path $coverageOutputDir "coverage.json"
+    $jsonCreated = Test-Path $coverageJson
+    Write-TestResult -TestName "Coverage JSON file created" -Passed $jsonCreated
+
+    # Check if globe HTML was created
+    $globeHtml = Join-Path $coverageOutputDir "globe.html"
+    $htmlCreated = Test-Path $globeHtml
+    Write-TestResult -TestName "Coverage globe.html created" -Passed $htmlCreated
+
+    if ($Verbose) {
+        Write-Host "Output:"
+        Write-Host $coverageString
+        if ($pngCreated) {
+            $pngSize = (Get-Item $coveragePng).Length
+            Write-Host "PNG size: $pngSize bytes"
+        }
+    }
+
 } catch {
     Write-Host ""
     Write-Host "ERROR: Test execution failed" -ForegroundColor Red
