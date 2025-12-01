@@ -292,7 +292,7 @@ def tile_to_geotiff_path(lon: float, lat: float, year: int) -> Path:
 
 
 def tile_to_zarr_path(lon: float, lat: float, year: int) -> Path:
-    """Generate zarr archive path for a tile.
+    """Generate zarr file path for a tile.
 
     Args:
         lon: Tile center longitude
