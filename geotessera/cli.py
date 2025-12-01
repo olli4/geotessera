@@ -789,15 +789,15 @@ def coverage(
                 tile_count = len(
                     [(y, lon, lat) for y, lon, lat in available_embeddings if y == year]
                 )
-                rprint(f"[cyan]📊 Tiles shown: {tile_count:,} (year {year})[/cyan]")
+                rprint(f"[cyan]{emoji('📊 ')}Tiles shown: {tile_count:,} (year {year})[/cyan]")
             else:
                 unique_tiles = len(
                     set((lon, lat) for _, lon, lat in available_embeddings)
                 )
                 years = sorted(set(y for y, _, _ in available_embeddings))
-                rprint(f"[cyan]📊 Unique tile locations: {unique_tiles:,}[/cyan]")
+                rprint(f"[cyan]{emoji('📊 ')}Unique tile locations: {unique_tiles:,}[/cyan]")
                 if years:
-                    rprint(f"[cyan]📅 Years covered: {min(years)}-{max(years)}[/cyan]")
+                    rprint(f"[cyan]{emoji('📅 ')}Years covered: {min(years)}-{max(years)}[/cyan]")
 
         # Also generate JSON + HTML globe visualization
         rprint("\n[blue]Generating interactive globe visualization...[/blue]")
