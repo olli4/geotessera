@@ -2099,10 +2099,14 @@ def commit_command(args):
                 failed_files.append((file_path, str(e)))
 
     if staged_files:
-        console.print(f"[green]{emoji('✓ ')}Staged {len(staged_files)} files successfully[/green]")
+        console.print(
+            f"[green]{emoji('✓ ')}Staged {len(staged_files)} files successfully[/green]"
+        )
 
     if failed_files:
-        console.print(f"[yellow]{emoji('⚠ ')}Failed to stage {len(failed_files)} files:[/yellow]")
+        console.print(
+            f"[yellow]{emoji('⚠ ')}Failed to stage {len(failed_files)} files:[/yellow]"
+        )
         for file_path, error in failed_files[:3]:  # Show first 3 failures
             console.print(f"  {file_path}: {error}")
         if len(failed_files) > 3:
