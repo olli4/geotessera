@@ -327,6 +327,7 @@ def discover_tiles(directory: Path) -> List[Tile]:
     embeddings_dir = directory / EMBEDDINGS_DIR_NAME
     if embeddings_dir.exists() and embeddings_dir.is_dir():
         # Check if there are any .npy files (not just _scales.npy)
+        # The actual pattern validation happens in discover_npy_tiles()
         npy_files = [
             f
             for f in embeddings_dir.rglob("*.npy")
@@ -374,6 +375,10 @@ def discover_npy_tiles(base_dir: Path) -> List[Tile]:
                 tiles.append(tile)
             else:
                 logging.warning(f"Skipping incomplete tile: {npy_file}")
+        except ValueError:
+            # Skip files that don't match expected filename pattern
+            # ValueError is raised by _parse_npy_filename when pattern doesn't match
+            continue
         except Exception as e:
             logging.warning(f"Failed to load tile {npy_file}: {e}")
 
@@ -402,6 +407,10 @@ def discover_geotiff_tiles(directory: Path) -> List[Tile]:
             try:
                 tile = Tile.from_geotiff(geotiff_file)
                 tiles.append(tile)
+            except ValueError:
+                # Skip files that don't match expected filename pattern
+                # ValueError is raised by _parse_geotiff_filename when pattern doesn't match
+                continue
             except Exception as e:
                 logging.warning(f"Failed to load tile {geotiff_file}: {e}")
 
@@ -427,6 +436,10 @@ def discover_zarr_tiles(directory: Path) -> List[Tile]:
             try:
                 tile = Tile.from_zarr(zarr_file)
                 tiles.append(tile)
+            except ValueError:
+                # Skip files that don't match expected filename pattern
+                # ValueError is raised by _parse_zarr_filename when pattern doesn't match
+                continue
             except Exception as e:
                 logging.warning(f"Failed to load tile {zarr_file}: {e}")
 
