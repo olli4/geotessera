@@ -428,17 +428,15 @@ Complete analysis workflow::
     selected_tiles = [r for r in results if r['mean_band_50'] > threshold]
     
     print(f"Exporting {len(selected_tiles)} tiles above threshold")
-    
-    files = []
-    for tile in selected_tiles:
-        file = gt.export_embedding_geotiffs(
-            bbox=(tile['lon']-0.05, tile['lat']-0.05, 
-                  tile['lon']+0.05, tile['lat']+0.05),
-            output_dir="./selected_tiles",
-            year=2024,
-            bands=[40, 50, 60]  # Bands around band 50
-        )
-        files.extend(file)
+
+    # Prepare tiles for export
+    tiles_to_export = [(2024, tile['lon'], tile['lat']) for tile in selected_tiles]
+
+    files = gt.export_embedding_geotiffs(
+        tiles_to_fetch=tiles_to_export,
+        output_dir="./selected_tiles",
+        bands=[40, 50, 60]  # Bands around band 50
+    )
     
     # Create PCA visualization from selected tiles
     # CLI: geotessera visualize ./selected_tiles pca_selected.tif
@@ -468,17 +466,16 @@ Use both numpy and GeoTIFF formats in the same workflow::
             selected_coords.append((lon, lat))
     
     print(f"Selected {len(selected_coords)} interesting tiles")
-    
-    # Step 2: Export selected tiles as GeoTIFF  
-    all_files = []
-    for lon, lat in selected_coords:
-        files = gt.export_embedding_geotiffs(
-            bbox=(lon-0.05, lat-0.05, lon+0.05, lat+0.05),
-            output_dir="./interesting_tiles",
-            year=2024,
-            bands=[60, 64, 68]  # Bands around interesting band 64
-        )
-        all_files.extend(files)
+
+    # Step 2: Export selected tiles as GeoTIFF
+    # Prepare tiles for export
+    tiles_to_export = [(2024, lon, lat) for lon, lat in selected_coords]
+
+    all_files = gt.export_embedding_geotiffs(
+        tiles_to_fetch=tiles_to_export,
+        output_dir="./interesting_tiles",
+        bands=[60, 64, 68]  # Bands around interesting band 64
+    )
     
     # Step 3: Create PCA visualization from selected tiles
     print("Creating PCA visualization...")

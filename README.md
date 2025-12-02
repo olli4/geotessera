@@ -236,10 +236,14 @@ for year, tile_lon, tile_lat, embedding_array, crs, transform in embeddings:
 
 ```python
 # Export embeddings for a region as individual GeoTIFF files
+# Step 1: Get the tiles for the region
+bbox = (-0.2, 51.4, 0.1, 51.6)
+tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
+
+# Step 2: Export those tiles as GeoTIFFs
 files = gt.export_embedding_geotiffs(
-    bbox=(-0.2, 51.4, 0.1, 51.6),
+    tiles_to_fetch=tiles_to_fetch,
     output_dir="./output",
-    year=2024,
     bands=None,  # Export all 128 bands (default)
     compress="lzw"  # Compression method
 )
@@ -248,9 +252,8 @@ print(f"Created {len(files)} GeoTIFF files")
 
 # Export specific bands only (e.g., first 3 for RGB visualization)
 files = gt.export_embedding_geotiffs(
-    bbox=(-0.2, 51.4, 0.1, 51.6),
+    tiles_to_fetch=tiles_to_fetch,
     output_dir="./rgb_output",
-    year=2024,
     bands=[0, 1, 2]  # Only export first 3 bands
 )
 ```

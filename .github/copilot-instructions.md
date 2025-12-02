@@ -197,7 +197,7 @@ tiles = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
 embeddings = gt.fetch_embeddings(tiles)
 
 # Export as GeoTIFF
-files = gt.export_embedding_geotiffs(bbox=bbox, output_dir="./output", year=2024)
+files = gt.export_embedding_geotiffs(tiles_to_fetch=tiles, output_dir="./output")
 ```
 
 ### Registry Operations
