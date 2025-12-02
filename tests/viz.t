@@ -26,7 +26,7 @@ Test: Download Tiles for Cambridge Region (Bbox)
 Download tiles covering a small area of Cambridge using a bounding box.
 This bbox covers just 4 tiles for faster testing:
 
-  $ uv run -m geotessera.cli download \
+  $ geotessera download \
   >   --bbox "0.086174,52.183432,0.151062,52.206318" \
   >   --year 2024 \
   >   --format tiff \
@@ -65,7 +65,7 @@ The visualize command should:
 2. Apply PCA to reduce 128 channels to RGB
 3. Create a mosaic in the target CRS (default EPSG:3857)
 
-  $ uv run -m geotessera.cli visualize \
+  $ geotessera visualize \
   >   "$TESTDIR/cb_tiles_tiff" \
   >   "$TESTDIR/cb_pca_mosaic.tif" 2>&1 | grep -A 1 -E 'Found|Created PCA mosaic' | sed 's/ *$//'
   Found 4 tiles (npy format)
@@ -89,7 +89,7 @@ Test: Visualize - Custom CRS and Balance Options
 
 Test creating a visualization with custom CRS and histogram balancing:
 
-  $ uv run -m geotessera.cli visualize \
+  $ geotessera visualize \
   >   "$TESTDIR/cb_tiles_tiff" \
   >   "$TESTDIR/cb_pca_4326.tif" \
   >   --crs EPSG:4326 \
@@ -110,7 +110,7 @@ Test: Visualize - NPY Format Input
 
 Download the same region in NPY format and create a visualization:
 
-  $ uv run -m geotessera.cli download \
+  $ geotessera download \
   >   --bbox "0.086174,52.183432,0.151062,52.206318" \
   >   --year 2024 \
   >   --format npy \
@@ -120,7 +120,7 @@ Download the same region in NPY format and create a visualization:
 
 Create visualization from NPY format:
 
-  $ uv run -m geotessera.cli visualize \
+  $ geotessera visualize \
   >   "$TESTDIR/cb_tiles_npy" \
   >   "$TESTDIR/cb_pca_from_npy.tif" 2>&1 | grep -A 1 -E 'Found|Created PCA mosaic' | sed 's/ *$//'
   Found 4 tiles (npy format)
@@ -143,7 +143,7 @@ This should:
 2. Generate XYZ web tiles at multiple zoom levels
 3. Create an HTML viewer with Leaflet
 
-  $ uv run -m geotessera.cli webmap \
+  $ geotessera webmap \
   >   "$TESTDIR/cb_pca_mosaic.tif" \
   >   --output "$TESTDIR/cb_webmap" \
   >   --min-zoom 10 \
@@ -176,7 +176,7 @@ Test: Webmap - Custom Output and Settings
 
 Test webmap with custom initial zoom and center:
 
-  $ uv run -m geotessera.cli webmap \
+  $ geotessera webmap \
   >   "$TESTDIR/cb_pca_4326.tif" \
   >   --output "$TESTDIR/cb_webmap_custom" \
   >   --min-zoom 10 \
@@ -195,7 +195,7 @@ Test: Info Command on Visualization Outputs
 
 Test that info command works on the created PCA mosaics:
 
-  $ uv run -m geotessera.cli info --tiles "$TESTDIR/cb_tiles_tiff" 2>&1 | grep -E 'Total tiles|Format|Years' | sed 's/ *$//'
+  $ geotessera info --tiles "$TESTDIR/cb_tiles_tiff" 2>&1 | grep -E 'Total tiles|Format|Years' | sed 's/ *$//'
    Total tiles: 4
    Format:      GEOTIFF, NPY, ZARR (USING NPY)
    Years:       2024
@@ -205,7 +205,7 @@ Test: Error Handling - Invalid Input
 
 Test that visualize fails gracefully with non-existent input:
 
-  $ uv run -m geotessera.cli visualize \
+  $ geotessera visualize \
   >   "$TESTDIR/nonexistent" \
   >   "$TESTDIR/output.tif" 2>&1 | grep -A 1 -E 'No tiles found|Error' | grep -v '^--$'
   No tiles found in
@@ -213,6 +213,6 @@ Test that visualize fails gracefully with non-existent input:
 
 Test that webmap fails gracefully with non-TIFF input:
 
-  $ uv run -m geotessera.cli webmap \
+  $ geotessera webmap \
   >   "$TESTDIR/cb_tiles_tiff" 2>&1 | grep -E 'Error.*must be.*tif'
   Error: Input must be a GeoTIFF file (.tif/.tiff)

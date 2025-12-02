@@ -25,7 +25,7 @@ Test: Zarr Format Validation
 
 Test that zarr format is recognized as a valid option:
 
-  $ uv run -m geotessera.cli download \
+  $ geotessera download \
   >   --bbox "-0.1,51.3,0.1,51.5" \
   >   --year 2024 \
   >   --format zarr \
@@ -38,7 +38,7 @@ Test: Invalid Format Rejected
 
 Test that invalid formats are properly rejected:
 
-  $ uv run -m geotessera.cli download \
+  $ geotessera download \
   >   --bbox "-0.1,51.3,0.1,51.5" \
   >   --year 2024 \
   >   --format invalid \
@@ -51,7 +51,7 @@ Test: Download Dry Run for UK Tile (Zarr format)
 
 Test dry-run with zarr format to verify it's processed correctly:
 
-  $ uv run -m geotessera.cli download \
+  $ geotessera download \
   >   --bbox "-0.1,51.3,0.1,51.5" \
   >   --year 2024 \
   >   --format zarr \
@@ -70,7 +70,7 @@ Test: Download Cambridge Tiles in Zarr Format
 
 Download a small region in zarr format (4 tiles for faster testing):
 
-  $ uv run -m geotessera.cli download \
+  $ geotessera download \
   >   --bbox "0.086174,52.183432,0.151062,52.206318" \
   >   --year 2024 \
   >   --format zarr \
@@ -93,7 +93,7 @@ Test: Info Command on Downloaded Zarr Tiles
 Test the info command on the downloaded zarr tiles.
 Note that the info command may detect NPY files that are created alongside zarr:
 
-  $ uv run -m geotessera.cli info --tiles "$TESTDIR/cb_tiles_zarr" 2>&1 | grep -E 'Total tiles|Format|Years' | sed 's/ *$//'
+  $ geotessera info --tiles "$TESTDIR/cb_tiles_zarr" 2>&1 | grep -E 'Total tiles|Format|Years' | sed 's/ *$//'
    Total tiles: 4
    Format:      NPY
    Years:       2024
@@ -123,7 +123,7 @@ Test: Band Selection with Zarr Format
 
 Download zarr tiles with specific band selection:
 
-  $ uv run -m geotessera.cli download \
+  $ geotessera download \
   >   --bbox "0.086174,52.183432,0.151062,52.206318" \
   >   --year 2024 \
   >   --format zarr \
@@ -148,7 +148,7 @@ Test: Visualization with Zarr Format
 Create a PCA visualization from the downloaded zarr tiles.
 Note that tiles may be detected as npy format since both formats coexist:
 
-  $ uv run -m geotessera.cli visualize "$TESTDIR/cb_tiles_zarr" "$TESTDIR/pca_zarr.tif" 2>&1 | grep -A 1 -E 'Found|Created PCA mosaic' | sed 's/ *$//'
+  $ geotessera visualize "$TESTDIR/cb_tiles_zarr" "$TESTDIR/pca_zarr.tif" 2>&1 | grep -A 1 -E 'Found|Created PCA mosaic' | sed 's/ *$//'
   Found 4 tiles (npy format)
   Combined data shape: (3317086, 128)
   --
@@ -165,5 +165,5 @@ Test: CLI Help Shows Zarr Format
 
 Verify that the CLI help text mentions zarr as a format option:
 
-  $ uv run -m geotessera.cli download --help | grep -i zarr | head -1
+  $ geotessera download --help | grep -i zarr | head -1
   *zarr* (glob)

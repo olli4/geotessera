@@ -134,7 +134,8 @@ console = Console()
 def emoji(text):
     """Return emoji text for smart terminals, empty string for dumb/piped output.
 
-    Uses Rich Console's built-in terminal detection.
+    Uses Rich Console's built-in terminal detection plus additional checks
+    for dumb terminals and Windows legacy console encoding issues.
 
     Args:
         text: Emoji character(s) to display
@@ -142,6 +143,22 @@ def emoji(text):
     Returns:
         The emoji text if capable terminal, empty string otherwise
     """
+    import os
+    import sys
+
+    # Check for dumb terminal
+    if os.environ.get("TERM", "").lower() == "dumb":
+        return ""
+
+    # Check for Windows legacy console with cp1252 encoding
+    if sys.platform == "win32":
+        try:
+            encoding = sys.stdout.encoding or ""
+            if encoding.lower() in ("cp1252", "ascii", ""):
+                return ""
+        except Exception:
+            return ""
+
     # Rich Console automatically detects terminal capabilities
     # is_terminal is True if stdout is a TTY and not disabled
     return text if console.is_terminal else ""
@@ -667,6 +684,7 @@ def coverage(
                 with tempfile.NamedTemporaryFile(
                     mode="w", suffix=".geojson", delete=False
                 ) as tmp:
+                    tmp.close()
                     country_gdf.to_file(tmp.name, driver="GeoJSON")
                     country_geojson_file = tmp.name
 
@@ -771,15 +789,15 @@ def coverage(
                 tile_count = len(
                     [(y, lon, lat) for y, lon, lat in available_embeddings if y == year]
                 )
-                rprint(f"[cyan]📊 Tiles shown: {tile_count:,} (year {year})[/cyan]")
+                rprint(f"[cyan]{emoji('📊 ')}Tiles shown: {tile_count:,} (year {year})[/cyan]")
             else:
                 unique_tiles = len(
                     set((lon, lat) for _, lon, lat in available_embeddings)
                 )
                 years = sorted(set(y for y, _, _ in available_embeddings))
-                rprint(f"[cyan]📊 Unique tile locations: {unique_tiles:,}[/cyan]")
+                rprint(f"[cyan]{emoji('📊 ')}Unique tile locations: {unique_tiles:,}[/cyan]")
                 if years:
-                    rprint(f"[cyan]📅 Years covered: {min(years)}-{max(years)}[/cyan]")
+                    rprint(f"[cyan]{emoji('📅 ')}Years covered: {min(years)}-{max(years)}[/cyan]")
 
         # Also generate JSON + HTML globe visualization
         rprint("\n[blue]Generating interactive globe visualization...[/blue]")
@@ -1138,7 +1156,7 @@ def download(
         )
 
         if not tiles_to_fetch:
-            rprint("[yellow]⚠️  No tiles found in the specified region.[/yellow]")
+            rprint(f"[yellow]{emoji('⚠️  ')}No tiles found in the specified region.[/yellow]")
             rprint("Try expanding your bounding box or checking data availability.")
             return
 
@@ -1488,7 +1506,7 @@ def download(
         )
 
     except Exception as e:
-        rprint(f"\n[red]❌ Error: {e}[/red]")
+        rprint(f"\n[red]{emoji('❌ ')}Error: {e}[/red]")
         if verbose:
             rprint("\n[dim]Full traceback:[/dim]")
             console.print_exception()

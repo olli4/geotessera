@@ -1,6 +1,6 @@
 [project]
 name = "geotessera"
-version = "0.7.1"
+version = "0.7.2"
 description = "Python library interface to the Tessera geofoundation model embeddings"
 readme = "README.md"
 license = {file = "LICENSE.md"}
@@ -14,6 +14,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: GIS",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Environment :: Console",

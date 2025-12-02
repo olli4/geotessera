@@ -1,0 +1,32 @@
+name: Build
+
+on: [push, pull_request]
+
+jobs:
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest]
+        python-version: [3.11, 3.12, 3.13]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+          activate-environment: true
+          environment-file: environment.yml
+          channels: conda-forge,anaconda,main
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Local Package
+        run: pip install -e .
+
+      - name: Run CLI Tests
+        shell: pwsh
+        env:
+          TERM: dumb
+        run: .\tests\cli.ps1 -Verbose

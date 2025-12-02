@@ -495,11 +495,12 @@ def _parse_npy_filename(path: Path) -> Tuple[float, float, int]:
     Raises:
         ValueError: If filename cannot be parsed
     """
-    # Extract year from path
-    year_match = re.search(r"/(\d{4})/", str(path))
-    if not year_match:
+    # Extract year from grandparent directory (platform-independent)
+    # Expected structure: .../embeddings/<year>/grid_<lon>_<lat>/grid_<lon>_<lat>.npy
+    grandparent_name = path.parent.parent.name
+    if not re.fullmatch(r"\d{4}", grandparent_name):
         raise ValueError(f"Cannot extract year from path: {path}")
-    year = int(year_match.group(1))
+    year = int(grandparent_name)
 
     # Extract coordinates from filename
     match = re.match(r"grid_(-?\d+\.\d+)_(-?\d+\.\d+)\.npy", path.name)
