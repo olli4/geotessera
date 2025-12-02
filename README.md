@@ -265,14 +265,14 @@ files = gt.export_embedding_geotiffs(
 tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=2024)
 embeddings = gt.fetch_embeddings(tiles_to_fetch)
 
-for lon, lat, embedding, crs, transform in embeddings:
+for year, tile_lon, tile_lat, embedding, crs, transform in embeddings:
     # Compute statistics
     mean_values = np.mean(embedding, axis=(0, 1))  # Mean per channel
     std_values = np.std(embedding, axis=(0, 1))    # Std per channel
-    
+
     # Extract specific pixels
     center_pixel = embedding[embedding.shape[0]//2, embedding.shape[1]//2, :]
-    
+
     # Apply custom processing
     processed = your_analysis_function(embedding)
 ```

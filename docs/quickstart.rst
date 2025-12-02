@@ -403,14 +403,14 @@ Complete analysis workflow::
     
     # Analyze each tile
     results = []
-    for lon, lat, embedding, crs, transform in embeddings:
+    for year, tile_lon, tile_lat, embedding, crs, transform in embeddings:
         # Compute statistics
         mean_per_band = np.mean(embedding, axis=(0, 1))
         std_per_band = np.std(embedding, axis=(0, 1))
-        
+
         results.append({
-            'lat': lat,
-            'lon': lon,
+            'lat': tile_lat,
+            'lon': tile_lon,
             'mean_band_50': mean_per_band[50],
             'std_band_50': std_per_band[50],
             'total_variance': np.var(embedding),
@@ -458,18 +458,17 @@ Use both numpy and GeoTIFF formats in the same workflow::
     tiles = gt.fetch_embeddings(tiles_to_fetch)
     
     # Custom analysis to select interesting tiles
-    selected_coords = []
-    for lon, lat, embedding, crs, transform in tiles:
+    selected_tiles = []
+    for year, tile_lon, tile_lat, embedding, crs, transform in tiles:
         # Example: select tiles with high variance in band 64
         band_64_var = np.var(embedding[:, :, 64])
         if band_64_var > 0.5:  # Threshold
-            selected_coords.append((lon, lat))
-    
-    print(f"Selected {len(selected_coords)} interesting tiles")
+            selected_tiles.append((year, tile_lon, tile_lat))
+
+    print(f"Selected {len(selected_tiles)} interesting tiles")
 
     # Step 2: Export selected tiles as GeoTIFF
-    # Prepare tiles for export
-    tiles_to_export = [(2024, lon, lat) for lon, lat in selected_coords]
+    tiles_to_export = selected_tiles
 
     all_files = gt.export_embedding_geotiffs(
         tiles_to_fetch=tiles_to_export,
