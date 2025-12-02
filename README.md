@@ -589,6 +589,7 @@ If you use Tessera in your research, please cite the [arXiv paper](https://arxiv
 
 - [Tessera Foundation Model](https://github.com/ucam-eo/tessera)
 - [Tessera Interactive Notebook](https://github.com/ucam-eo/tessera-interactive-map)
+- [Tessera Examples](https://github.com/ucam-eo/geotessera-examples)
 - [Documentation](https://geotessera.readthedocs.io/)
 - [PyPI Package](https://pypi.org/project/geotessera/)
 - [Issue Tracker](https://github.com/ucam-eo/geotessera/issues)
