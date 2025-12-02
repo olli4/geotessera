@@ -377,12 +377,33 @@ try {
     $htmlCreated = Test-Path $globeHtml
     Write-TestResult -TestName "Coverage globe.html created" -Passed $htmlCreated
 
+    # Verify globe.html content is valid UTF-8 and contains expected elements
+    if ($htmlCreated) {
+        try {
+            $globeContent = Get-Content -Path $globeHtml -Raw -Encoding UTF8
+            $hasUtf8Charset = $globeContent -match '<meta charset="UTF-8">'
+            Write-TestResult -TestName "globe.html has UTF-8 charset" -Passed $hasUtf8Charset
+
+            $hasGlobeTitle = $globeContent -match "GeoTessera Globe Visualization"
+            Write-TestResult -TestName "globe.html has correct title" -Passed $hasGlobeTitle
+
+            $hasLegend = $globeContent -match "Legend:"
+            Write-TestResult -TestName "globe.html has legend" -Passed $hasLegend
+        } catch {
+            Write-TestResult -TestName "globe.html is readable as UTF-8" -Passed $false -Details $_.Exception.Message
+        }
+    }
+
     if ($Verbose) {
         Write-Host "Output:"
         Write-Host $coverageString
         if ($pngCreated) {
             $pngSize = (Get-Item $coveragePng).Length
             Write-Host "PNG size: $pngSize bytes"
+        }
+        if ($htmlCreated) {
+            $htmlSize = (Get-Item $globeHtml).Length
+            Write-Host "globe.html size: $htmlSize bytes"
         }
     }
 

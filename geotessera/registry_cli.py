@@ -944,7 +944,7 @@ def process_grid_checksum(args):
             )
 
             # Write output to SHA256 file
-            with open(sha256_file, "w") as f:
+            with open(sha256_file, "w", encoding="utf-8") as f:
                 f.write(result.stdout)
 
             return (grid_name, len(npy_files), True, None, None)
@@ -1157,7 +1157,7 @@ def process_tiff_chunk(args):
         )
 
         # Write to temporary file
-        with open(temp_file, "w") as f:
+        with open(temp_file, "w", encoding="utf-8") as f:
             f.write(result.stdout)
 
         return (chunk_num, len(chunk), True, None, temp_file)
@@ -1290,10 +1290,10 @@ def generate_tiff_checksums(base_dir, force=False):
 
         # Concatenate all temporary files into final SHA256SUM
         logger.info("Concatenating results...")
-        with open(sha256sum_file, "w") as outfile:
+        with open(sha256sum_file, "w", encoding="utf-8") as outfile:
             for temp_file in temp_files:
                 if os.path.exists(temp_file):
-                    with open(temp_file, "r") as infile:
+                    with open(temp_file, "r", encoding="utf-8") as infile:
                         outfile.write(infile.read())
 
         # Clean up temporary files

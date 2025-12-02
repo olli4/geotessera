@@ -822,7 +822,7 @@ def coverage(
             gt.generate_coverage_texture(coverage_data, output_file=str(texture_path))
 
             # Generate globe.html
-            with open(globe_html_path, "w") as f:
+            with open(globe_html_path, "w", encoding="utf-8") as f:
                 f.write(_get_globe_html_template())
 
             rprint(
