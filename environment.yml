@@ -1,0 +1,23 @@
+name: base
+channels:
+  - defaults
+  - conda-forge
+  - main
+dependencies:
+  - cram>=0.7
+  - dask
+  - geodatasets>=2024.8.0
+  - geopandas
+  - matplotlib
+  - numpy>=1.24.0
+  - pandas
+  - pyarrow>=17.0.0
+  - rasterio
+  - rich
+  - rioxarray
+  - scikit-image>=0.25.2
+  - scikit-learn>=1.7.1
+  - sphinx>=8.2.3
+  - typer
+  - xarray
+  - zarr

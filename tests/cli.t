@@ -25,8 +25,8 @@ Test: Version Command
 
 The version command should print the version number.
 
-  $ uv run -m geotessera.cli version
-  0.7.1
+  $ geotessera version
+  0.7.2
 
 Test: Info Command (Library Info)
 ----------------------------------
@@ -34,7 +34,7 @@ Test: Info Command (Library Info)
 Test the info command without arguments to see library information.
 We just verify key information is present, ignoring formatting:
 
-  $ uv run -m geotessera.cli info --dataset-version v1 | grep -E 'Available years'
+  $ geotessera info --dataset-version v1 | grep -E 'Available years'
   Downloading registry from https://dl2.geotessera.org/v1/registry.parquet
   Registry downloaded successfully
   Loaded GeoParquet with * tiles (glob)
@@ -48,7 +48,7 @@ Test: Download Dry Run for UK Tile
 Test downloading a single tile covering London, UK using --dry-run to avoid actual downloads.
 Verify key information is present:
 
-  $ uv run -m geotessera.cli download \
+  $ geotessera download \
   >   --bbox "-0.1,51.3,0.1,51.5" \
   >   --year 2024 \
   >   --format tiff \
@@ -70,7 +70,7 @@ Test: Download Single UK Tile (TIFF format)
 
 Download a single tile in TIFF format to a temporary directory:
 
-  $ uv run -m geotessera.cli download \
+  $ geotessera download \
   >   --bbox "-0.1,51.3,0.1,51.5" \
   >   --year 2024 \
   >   --format tiff \
@@ -91,7 +91,7 @@ Test: Download Single UK Tile (NPY format)
 
 Download the same tile in NPY format (quantized arrays with scales):
 
-  $ uv run -m geotessera.cli download \
+  $ geotessera download \
   >   --bbox "-0.1,51.3,0.1,51.5" \
   >   --year 2024 \
   >   --format npy \
@@ -127,7 +127,7 @@ Test: Info Command on Downloaded TIFF Tiles
 Test the info command on the downloaded TIFF tiles.
 Both TIFF and NPY formats should be present (NPY files are retained for efficient reprocessing):
 
-  $ uv run -m geotessera.cli info --tiles "$TESTDIR/uk_tiles_tiff"
+  $ geotessera info --tiles "$TESTDIR/uk_tiles_tiff"
    Total tiles: 16                             
    Format:      GEOTIFF, NPY, ZARR (USING NPY) 
    Years:       2024                           
@@ -137,7 +137,7 @@ Both TIFF and NPY formats should be present (NPY files are retained for efficien
    Band Count Files 
    128 bands     16 
 
-  $ uv run -m geotessera.cli info --tiles "$TESTDIR/uk_tiles_tiff"
+  $ geotessera info --tiles "$TESTDIR/uk_tiles_tiff"
    Total tiles: 16                             
    Format:      GEOTIFF, NPY, ZARR (USING NPY) 
    Years:       2024                           
@@ -152,7 +152,7 @@ Test: Info Command on Downloaded NPY Tiles
 
 Test the info command on the downloaded NPY tiles:
 
-  $ uv run -m geotessera.cli info --tiles "$TESTDIR/uk_tiles_npy"
+  $ geotessera info --tiles "$TESTDIR/uk_tiles_npy"
    Total tiles: 16                     
    Format:      NPY                    
    Years:       2024                   
@@ -162,7 +162,7 @@ Test the info command on the downloaded NPY tiles:
    Band Count Files 
    128 bands     16 
 
-  $ uv run -m geotessera.cli info --tiles "$TESTDIR/uk_tiles_npy"
+  $ geotessera info --tiles "$TESTDIR/uk_tiles_npy"
    Total tiles: 16                     
    Format:      NPY                    
    Years:       2024                   
@@ -177,7 +177,7 @@ Test: Resume Capability for NPY Downloads
 
 Test that re-running the NPY download skips existing files:
 
-  $ uv run -m geotessera.cli download \
+  $ geotessera download \
   >   --bbox "-0.1,51.3,0.1,51.5" \
   >   --year 2024 \
   >   --format npy \
