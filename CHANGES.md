@@ -1,3 +1,37 @@
+## v0.7.2 (2025-12-02)
+
+This release adds Windows platform support, more robust tolerance to
+interrupted scripts leaving temporary files around, and documentation fixes for
+coordinate printing and tile discovery.
+
+### Windows Support
+
+Added Windows testing infrastructure in CI and applied code fixes (@avsm):
+- New conda-based CI workflow for Windows runners
+- PowerShell test suite (`tests/cli.ps1`) for Windows compatibility
+- Cross-platform path handling improvements throughout the codebase
+
+### Bug Fixes
+
+- Fixed lon/lat printing order into a standardized coordinate order to lon/lat
+  throughout CLI output. (Reported @GieziJo fix by @avsm).
+ 
+- Fixed tile discovery false negatives arising from temporary files by removing
+  pattern pre-filtering in `discover_tiles()` (Report from @sadiqj, fix @avsm)
+
+- Fixed Windows file handling by closing temporary files before overwriting.
+  (Fix from @dra27)
+
+### Documentation
+
+- **Fixed quickstart documentation**: Corrected `export_embedding_geotiffs` examples
+  - Updated for year/lon/lat parameter order changes from v0.7.1
+  - Fixed function signatures and usage examples (docs/quickstart.rst)
+
+- **Updated README**:
+  - Fixed coverage map image links
+  - Corrected Windows path format examples
+
 ## v0.7.1 (2025-11-19)
 
 This release adds Zarr format support for efficient cloud-native data
