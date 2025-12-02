@@ -445,7 +445,7 @@ class GeoTessera:
 
             except Exception as e:
                 self.logger.warning(
-                    f"Failed to download tile ({tile_lat:.2f}, {tile_lon:.2f}): {e}"
+                    f"Failed to download tile ({tile_lon:.2f}, {tile_lat:.2f}): {e}"
                 )
                 if progress_callback:
                     progress_callback(
@@ -697,11 +697,11 @@ class GeoTessera:
             tile = local_tile_map.get((tile_lon, tile_lat))
             if tile is None or not tile.is_available():
                 self.logger.warning(
-                    f"Tile ({tile_lat:.2f}, {tile_lon:.2f}) not available after download, skipping"
+                    f"Tile ({tile_lon:.2f}, {tile_lat:.2f}) not available after download, skipping"
                 )
                 continue
 
-            update_progress(f"Loading tile ({tile_lat:.2f}, {tile_lon:.2f})")
+            update_progress(f"Loading tile ({tile_lon:.2f}, {tile_lat:.2f})")
 
             try:
                 # Load embedding from Tile (handles both NPY and GeoTIFF formats)
@@ -721,7 +721,7 @@ class GeoTessera:
                 # Ensure dimensions are valid integers
                 if dst_width is None or dst_height is None:
                     raise ValueError(
-                        f"Failed to calculate dimensions for tile ({tile_lat}, {tile_lon})"
+                        f"Failed to calculate dimensions for tile ({tile_lon}, {tile_lat})"
                     )
                 dst_width = int(dst_width)
                 dst_height = int(dst_height)
@@ -758,11 +758,11 @@ class GeoTessera:
                     dataset.write(reprojected_embedding)
 
                 reprojected_memfiles.append(memfile)
-                update_progress(f"Reprojected tile ({tile_lat:.2f}, {tile_lon:.2f})")
+                update_progress(f"Reprojected tile ({tile_lon:.2f}, {tile_lat:.2f})")
 
             except Exception as e:
                 self.logger.warning(
-                    f"Failed to process tile ({tile_lat:.2f}, {tile_lon:.2f}): {e}"
+                    f"Failed to process tile ({tile_lon:.2f}, {tile_lat:.2f}): {e}"
                 )
                 continue
 
@@ -918,7 +918,7 @@ class GeoTessera:
                 progress_callback(
                     tile_idx,
                     total_tiles,
-                    f"Processing tile {tile_idx + 1}/{total_tiles}: ({tile_lat:.2f}, {tile_lon:.2f})",
+                    f"Processing tile {tile_idx + 1}/{total_tiles}: ({tile_lon:.2f}, {tile_lat:.2f})",
                 )
 
             try:
@@ -985,7 +985,7 @@ class GeoTessera:
             except Exception as e:
                 # If tile fetch/load fails, leave those points as NaN
                 self.logger.warning(
-                    f"Failed to process tile ({tile_lat:.2f}, {tile_lon:.2f}): {e}"
+                    f"Failed to process tile ({tile_lon:.2f}, {tile_lat:.2f}): {e}"
                 )
                 if include_metadata:
                     for original_idx in point_indices:
@@ -1208,7 +1208,7 @@ class GeoTessera:
             return True
 
         except Exception as e:
-            self.logger.error(f"Failed to download tile ({lat:.2f}, {lon:.2f}): {e}")
+            self.logger.error(f"Failed to download tile ({lon:.2f}, {lat:.2f}): {e}")
             return False
 
     def download_tiles_for_points(
@@ -2157,7 +2157,7 @@ class GeoTessera:
                 progress_callback(
                     i,
                     total_tiles,
-                    f"Processing tile {i + 1}/{total_tiles}: ({tile_lat:.2f}, {tile_lon:.2f})",
+                    f"Processing tile {i + 1}/{total_tiles}: ({tile_lon:.2f}, {tile_lat:.2f})",
                 )
 
             # Reshape for PCA: (height, width, channels) -> (pixels, channels)

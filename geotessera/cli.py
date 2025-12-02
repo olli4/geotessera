@@ -459,7 +459,7 @@ def info(
             for tile in coverage["tiles"][:10]:
                 tiles_table.add_row(
                     Path(tile["path"]).name,
-                    f"({tile['tile_lat']}, {tile['tile_lon']})",
+                    f"({tile['tile_lon']}, {tile['tile_lat']})",
                     str(tile["bands"]),
                 )
 
