@@ -37,7 +37,7 @@ We just verify key information is present, ignoring formatting:
   $ geotessera info --dataset-version v1 | grep -E 'Available years'
   Downloading registry from https://dl2.geotessera.org/v1/registry.parquet
   Registry downloaded successfully
-  Loaded GeoParquet with * tiles (glob)
+  Loaded GeoParquet with 1,390,843 tiles
   Downloading landmasks registry from https://dl2.geotessera.org/v1/landmasks.parquet
   Landmasks registry downloaded successfully
    Available years: 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024 
@@ -199,5 +199,5 @@ Verify that the info command still works correctly and doesn't show warnings abo
 The tile count should remain 16 (unchanged) and no warnings should appear in stderr:
 
   $ uv run -m geotessera.cli info --tiles "$TESTDIR/uk_tiles_npy" 2>&1 | grep -E '(Total tiles|WARNING|Failed to load|Cannot parse)'
-   Total tiles: 16
+   Total tiles: 16                     
 
