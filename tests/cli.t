@@ -185,3 +185,19 @@ Test that re-running the NPY download skips existing files:
   >   --dataset-version v1 2>&1 | grep -E '(Skipped|existing files)'
      Skipped 48 existing files (resume capability)
 
+Test: Tile Discovery Ignores Temporary Files
+---------------------------------------------
+
+Test that temporary files left from interrupted downloads are silently ignored.
+Create temporary files manually in the NPY tiles directory to simulate interrupted downloads:
+
+  $ touch "$TESTDIR/uk_tiles_npy/global_0.1_degree_representation/2024/.grid_0.05_51.25.npy_tmp_abc123"
+  $ touch "$TESTDIR/uk_tiles_npy/global_0.1_degree_representation/2024/.grid_0.05_51.35_tmp_xyz789.npy"
+  $ touch "$TESTDIR/uk_tiles_npy/global_0.1_degree_representation/2024/invalid_file.npy"
+
+Verify that the info command still works correctly and doesn't show warnings about temp files.
+The tile count should remain 16 (unchanged) and no warnings should appear in stderr:
+
+  $ uv run -m geotessera.cli info --tiles "$TESTDIR/uk_tiles_npy" 2>&1 | grep -E '(Total tiles|WARNING|Failed to load|Cannot parse)'
+   Total tiles: 16
+
