@@ -385,7 +385,7 @@ def create_simple_web_viewer(
 </body>
 </html>"""
 
-    with open(output_html, "w") as f:
+    with open(output_html, "w", encoding="utf-8") as f:
         f.write(html_content)
 
     return output_html
@@ -521,7 +521,7 @@ def create_coverage_summary_map(
 </body>
 </html>"""
 
-    with open(output_html, "w") as f:
+    with open(output_html, "w", encoding="utf-8") as f:
         f.write(html_content)
 
     return output_html
